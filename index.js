@@ -7,8 +7,8 @@ const sql = require('mssql');
 const path = require('path');
 const nodemailer = require('nodemailer');
 
-// Import dashboard components
-const dashboard = require('./dashboard-api');
+// Import dashboard components with correct path
+const dashboard = require('./dashboard/dashboard-api');
 
 // Initialize Express app
 const app = express();
