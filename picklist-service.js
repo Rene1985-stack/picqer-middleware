@@ -4,7 +4,7 @@
  */
 const axios = require('axios');
 const sql = require('mssql');
-const picklistsSchema = require('./picklists_schema');
+const picklistsSchema = require('./updated_picklists_schema');
 
 class PicklistService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -90,11 +90,32 @@ class PicklistService {
         const entityExists = entityResult.recordset[0].entityExists > 0;
         
         if (!entityExists) {
-          // Add picklists entity to SyncStatus
-          await pool.request().query(`
-            INSERT INTO SyncStatus (entity_name, last_sync_date)
-            VALUES ('picklists', '2025-01-01T00:00:00.000Z');
+          // Check if entity_type column exists and is required
+          const columnResult = await pool.request().query(`
+            SELECT 
+              COLUMN_NAME, 
+              IS_NULLABLE 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE 
+              TABLE_NAME = 'SyncStatus' AND 
+              COLUMN_NAME = 'entity_type'
           `);
+          
+          const hasEntityTypeColumn = columnResult.recordset.length > 0;
+          const isEntityTypeRequired = hasEntityTypeColumn && columnResult.recordset[0].IS_NULLABLE === 'NO';
+          
+          // Add picklists entity to SyncStatus with appropriate columns
+          if (hasEntityTypeColumn) {
+            await pool.request().query(`
+              INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
+              VALUES ('picklists', 'picklists', '2025-01-01T00:00:00.000Z');
+            `);
+          } else {
+            await pool.request().query(`
+              INSERT INTO SyncStatus (entity_name, last_sync_date)
+              VALUES ('picklists', '2025-01-01T00:00:00.000Z');
+            `);
+          }
         }
       }
       
@@ -231,6 +252,18 @@ class PicklistService {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
+      // Check if entity_type column exists in SyncStatus
+      const columnResult = await pool.request().query(`
+        SELECT 
+          COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE 
+          TABLE_NAME = 'SyncStatus' AND 
+          COLUMN_NAME = 'entity_type'
+      `);
+      
+      const hasEntityTypeColumn = columnResult.recordset.length > 0;
+      
       // Check if picklists entity exists in SyncStatus
       const result = await pool.request()
         .input('entityName', sql.NVarChar, 'picklists')
@@ -251,16 +284,29 @@ class PicklistService {
             WHERE entity_name = @entityName
           `);
       } else {
-        // Insert new record
-        await pool.request()
-          .input('entityName', sql.NVarChar, 'picklists')
-          .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
-          .input('totalCount', sql.Int, totalCount)
-          .input('lastSyncCount', sql.Int, lastSyncCount)
-          .query(`
-            INSERT INTO SyncStatus (entity_name, last_sync_date, total_count, last_sync_count)
-            VALUES (@entityName, @lastSyncDate, @totalCount, @lastSyncCount);
-          `);
+        // Insert new record with or without entity_type based on schema
+        if (hasEntityTypeColumn) {
+          await pool.request()
+            .input('entityName', sql.NVarChar, 'picklists')
+            .input('entityType', sql.NVarChar, 'picklists')
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, total_count, last_sync_count)
+              VALUES (@entityName, @entityType, @lastSyncDate, @totalCount, @lastSyncCount);
+            `);
+        } else {
+          await pool.request()
+            .input('entityName', sql.NVarChar, 'picklists')
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              INSERT INTO SyncStatus (entity_name, last_sync_date, total_count, last_sync_count)
+              VALUES (@entityName, @lastSyncDate, @totalCount, @lastSyncCount);
+            `);
+        }
       }
       
       return true;
