@@ -3,6 +3,7 @@ const sql = require('mssql');
 
 /**
  * Enhanced service for interacting with the Picqer API and syncing all product attributes to Azure SQL
+ * With improved pagination and duplicate prevention
  */
 class PicqerService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -163,27 +164,30 @@ class PicqerService {
   }
 
   /**
-   * Get all products from Picqer with pagination
+   * Get all products from Picqer with improved pagination and duplicate prevention
    * @param {Date} updatedSince - Only get products updated since this date
-   * @returns {Promise<Array>} - Array of products
+   * @returns {Promise<Array>} - Array of unique products
    */
   async getAllProducts(updatedSince = null) {
     console.log('Fetching all products from Picqer...');
     
     let allProducts = [];
     let offset = 0;
+    const limit = 100; // Picqer's default page size
     let hasMoreProducts = true;
+    
+    // Track unique product IDs to prevent duplicates
+    const seenProductIds = new Set();
     
     try {
       while (hasMoreProducts) {
         console.log(`Fetching products with offset ${offset}...`);
         
-        // Build query parameters
-        const params = { offset };
+        // Build query parameters - use offset and limit
+        const params = { offset, limit };
         
         // Add updated_since parameter if provided
         if (updatedSince) {
-          // Format date as YYYY-MM-DD HH:MM:SS
           const formattedDate = updatedSince.toISOString().replace('T', ' ').substring(0, 19);
           params.updated_since = formattedDate;
         }
@@ -193,14 +197,23 @@ class PicqerService {
         
         // Check if we have data
         if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-          // Add products to our collection
-          allProducts = [...allProducts, ...response.data];
+          // Filter out duplicates before adding to our collection
+          const newProducts = response.data.filter(product => {
+            if (seenProductIds.has(product.idproduct)) {
+              return false; // Skip duplicate
+            }
+            seenProductIds.add(product.idproduct);
+            return true;
+          });
           
-          // Check if we have more products (Picqer returns 100 items per page)
-          hasMoreProducts = response.data.length === 100;
+          allProducts = [...allProducts, ...newProducts];
+          console.log(`Retrieved ${newProducts.length} new products (total unique: ${allProducts.length})`);
+          
+          // Check if we have more products
+          hasMoreProducts = response.data.length === limit;
           
           // Increment offset for next page
-          offset += 100;
+          offset += limit;
           
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 500));
@@ -209,7 +222,7 @@ class PicqerService {
         }
       }
       
-      console.log(`Fetched ${allProducts.length} products in total.`);
+      console.log(`✅ Retrieved ${allProducts.length} unique products from Picqer`);
       return allProducts;
     } catch (error) {
       console.error('Error fetching products from Picqer:', error.message);
@@ -504,7 +517,7 @@ class PicqerService {
       const products = await this.getAllProducts();
       const totalProducts = products.length;
       
-      console.log(`Retrieved ${totalProducts} products from Picqer`);
+      console.log(`Retrieved ${totalProducts} unique products from Picqer`);
       
       // Save products to database
       const savedCount = await this.saveProductsToDatabase(products);
