@@ -14,8 +14,12 @@ app.get('/', (req, res) => {
 app.get('/apikeys', async (req, res) => {
   try {
     const response = await axios.get(`${process.env.PICQER_BASE_URL}/apikeys`, {
+      auth: {
+        username: process.env.PICQER_API_KEY,
+        password: ''
+      },
       headers: {
-        Authorization: `Bearer ${process.env.PICQER_API_KEY}`
+        'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
       }
     });
     res.json(response.data);
@@ -32,8 +36,12 @@ app.get('/apikeys', async (req, res) => {
 app.get('/picklists', async (req, res) => {
   try {
     const response = await axios.get(`${process.env.PICQER_BASE_URL}/picklists`, {
+      auth: {
+        username: process.env.PICQER_API_KEY,
+        password: ''
+      },
       headers: {
-        Authorization: `Bearer ${process.env.PICQER_API_KEY}`
+        'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
       }
     });
     res.json(response.data);
@@ -51,8 +59,12 @@ app.get('/products', async (req, res) => {
   try {
     const from = req.query.from || '2025-01-01';
     const response = await axios.get(`${process.env.PICQER_BASE_URL}/products?updated_since=${from}`, {
+      auth: {
+        username: process.env.PICQER_API_KEY,
+        password: ''
+      },
       headers: {
-        Authorization: `Bearer ${process.env.PICQER_API_KEY}`
+        'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
       }
     });
     res.json(response.data);
