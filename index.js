@@ -108,9 +108,23 @@ async function getProductsFromPicqer(from = null) {
             }
         });
         
-        console.log(`✅ Retrieved ${response.data.data.length} products from Picqer`);
-        dashboard.addLog('success', `Retrieved ${response.data.data.length} products from Picqer`);
-        return response.data.data;
+        // Check the structure of the response
+        let products = [];
+        if (response.data && response.data.data && Array.isArray(response.data.data)) {
+            // Response has nested data property
+            products = response.data.data;
+        } else if (response.data && Array.isArray(response.data)) {
+            // Response data is directly an array
+            products = response.data;
+        } else {
+            console.log('Unexpected response format:', JSON.stringify(response.data).substring(0, 200) + '...');
+            dashboard.addLog('warning', 'Unexpected response format from Picqer API');
+            products = [];
+        }
+        
+        console.log(`✅ Retrieved ${products.length} products from Picqer`);
+        dashboard.addLog('success', `Retrieved ${products.length} products from Picqer`);
+        return products;
     } catch (error) {
         console.error('❌ Error fetching from Picqer:', error.message);
         dashboard.addLog('error', `Error fetching from Picqer: ${error.message}`);
