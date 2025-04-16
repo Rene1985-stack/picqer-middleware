@@ -11,63 +11,49 @@ app.get('/', (req, res) => {
   res.send('✅ Middleware API draait. Gebruik /products, /picklists of /apikeys voor Picqer-data.');
 });
 
-app.get('/apikeys', async (req, res) => {
-  try {
-    const response = await axios.get(`${process.env.PICQER_BASE_URL}/apikeys`, {
-      auth: {
-        username: process.env.PICQER_API_KEY,
-        password: ''
-      },
-      headers: {
-        'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
-      }
-    });
-    res.json(response.data);
-  } catch (err) {
-    console.error('❌ Fout bij ophalen apikeys:', err.message, err.response?.data);
-    res.status(500).json({
-      error: 'Fout bij ophalen data uit Picqer (/apikeys)',
-      details: err.message,
-      response: err.response?.data || null
-    });
-  }
-});
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-app.get('/picklists', async (req, res) => {
-  try {
-    const response = await axios.get(`${process.env.PICQER_BASE_URL}/picklists`, {
-      auth: {
-        username: process.env.PICQER_API_KEY,
-        password: ''
-      },
-      headers: {
-        'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
+const getAllPages = async (endpoint, from) => {
+  let page = 1;
+  const allData = [];
+
+  while (true) {
+    const url = `${process.env.PICQER_BASE_URL}${endpoint}?updated_since=${from}&page=${page}`;
+
+    try {
+      const response = await axios.get(url, {
+        auth: {
+          username: process.env.PICQER_API_KEY,
+          password: ''
+        },
+        headers: {
+          'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
+        }
+      });
+
+      if (response.data.length === 0) break;
+
+      allData.push(...response.data);
+      page++;
+    } catch (err) {
+      if (err.response?.status === 429) {
+        const retryAfter = parseInt(err.response.headers['retry-after'] || '5', 10);
+        console.warn(`⏳ Ratelimit bereikt. Wachten ${retryAfter} seconden...`);
+        await delay(retryAfter * 1000);
+      } else {
+        throw err;
       }
-    });
-    res.json(response.data);
-  } catch (err) {
-    console.error('❌ Fout bij ophalen picklists:', err.message, err.response?.data);
-    res.status(500).json({
-      error: 'Fout bij ophalen data uit Picqer (/picklists)',
-      details: err.message,
-      response: err.response?.data || null
-    });
+    }
   }
-});
+
+  return allData;
+};
 
 app.get('/products', async (req, res) => {
   try {
     const from = req.query.from || '2025-01-01';
-    const response = await axios.get(`${process.env.PICQER_BASE_URL}/products?updated_since=${from}`, {
-      auth: {
-        username: process.env.PICQER_API_KEY,
-        password: ''
-      },
-      headers: {
-        'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
-      }
-    });
-    res.json(response.data);
+    const data = await getAllPages('/products', from);
+    res.json(data);
   } catch (err) {
     console.error('❌ Fout bij ophalen products:', err.message, err.response?.data);
     res.status(500).json({
