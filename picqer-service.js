@@ -4,6 +4,7 @@ const sql = require('mssql');
 /**
  * Enhanced service for interacting with the Picqer API and syncing all product attributes to Azure SQL
  * With improved pagination and duplicate prevention
+ * Modified to work with existing database structure
  */
 class PicqerService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -32,7 +33,6 @@ class PicqerService {
     // Add request interceptor for debugging
     this.client.interceptors.request.use(request => {
       console.log('Making request to:', request.baseURL + request.url);
-      console.log('Request headers:', JSON.stringify(request.headers));
       return request;
     });
     
@@ -46,9 +46,8 @@ class PicqerService {
         console.error('Request failed:');
         if (error.response) {
           console.error('Response status:', error.response.status);
-          console.error('Response data:', JSON.stringify(error.response.data));
         } else if (error.request) {
-          console.error('No response received:', error.request);
+          console.error('No response received');
         } else {
           console.error('Error message:', error.message);
         }
@@ -59,6 +58,7 @@ class PicqerService {
 
   /**
    * Initialize the database with expanded product schema
+   * Modified to work with existing database structure
    * @returns {Promise<boolean>} - Success status
    */
   async initializeDatabase() {
@@ -66,11 +66,11 @@ class PicqerService {
       console.log('Initializing database with expanded product schema...');
       const pool = await sql.connect(this.sqlConfig);
       
-      // Create expanded Products table with all Picqer attributes
+      // Create expanded Products table with all Picqer attributes if it doesn't exist
       await pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'products')
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Products')
         BEGIN
-          CREATE TABLE products (
+          CREATE TABLE Products (
             id INT IDENTITY(1,1) PRIMARY KEY,
             idproduct INT NOT NULL,
             idvatgroup INT NULL,
@@ -108,17 +108,26 @@ class PicqerService {
           );
           
           -- Create indexes for better performance
-          CREATE INDEX IX_Products_idproduct ON products(idproduct);
-          CREATE INDEX IX_Products_productcode ON products(productcode);
-          CREATE INDEX IX_Products_updated ON products(updated);
-          CREATE INDEX IX_Products_barcode ON products(barcode);
+          CREATE INDEX IX_Products_idproduct ON Products(idproduct);
+          CREATE INDEX IX_Products_productcode ON Products(productcode);
+          CREATE INDEX IX_Products_updated ON Products(updated);
+          CREATE INDEX IX_Products_barcode ON Products(barcode);
         END
       `);
       
-      // Create SyncStatus table if it doesn't exist
-      await pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncStatus')
-        BEGIN
+      // Check if SyncStatus table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
+      
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (!syncTableExists) {
+        // Create SyncStatus table if it doesn't exist
+        console.log('Creating SyncStatus table...');
+        await pool.request().query(`
           CREATE TABLE SyncStatus (
             id INT IDENTITY(1,1) PRIMARY KEY,
             entity_name NVARCHAR(50) NOT NULL,
@@ -131,8 +140,32 @@ class PicqerService {
           -- Insert initial record for products
           INSERT INTO SyncStatus (entity_name, last_sync_date)
           VALUES ('products', '2025-01-01T00:00:00.000Z');
-        END
-      `);
+        `);
+      } else {
+        // Check if entity_name column exists in SyncStatus table
+        try {
+          const columnResult = await pool.request().query(`
+            SELECT COUNT(*) AS columnExists 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_name'
+          `);
+          
+          const entityNameColumnExists = columnResult.recordset[0].columnExists > 0;
+          
+          if (!entityNameColumnExists) {
+            // Add entity_name column if it doesn't exist
+            console.log('Adding entity_name column to SyncStatus table...');
+            await pool.request().query(`
+              ALTER TABLE SyncStatus 
+              ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products',
+              CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
+            `);
+          }
+        } catch (columnError) {
+          console.warn('Error checking for entity_name column:', columnError.message);
+          // Continue initialization even if column check fails
+        }
+      }
       
       console.log('✅ Database initialized successfully with expanded schema');
       return true;
@@ -231,7 +264,7 @@ class PicqerService {
       if (error.response && error.response.status === 429) {
         console.log('Rate limit hit, waiting before retrying...');
         
-        // Wait for 20 seconds before retrying (same as Power BI query)
+        // Wait for 20 seconds before retrying
         await new Promise(resolve => setTimeout(resolve, 20000));
         
         // Retry the request
@@ -275,6 +308,7 @@ class PicqerService {
 
   /**
    * Get the last sync date for a specific entity
+   * Modified to work with existing database structure
    * @param {string} entityName - The entity name (e.g., 'products')
    * @returns {Promise<Date|null>} - Last sync date or null if not found
    */
@@ -282,15 +316,46 @@ class PicqerService {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      const result = await pool.request()
-        .input('entityName', sql.NVarChar, entityName)
-        .query('SELECT last_sync_date FROM SyncStatus WHERE entity_name = @entityName');
+      // Check if SyncStatus table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
       
-      if (result.recordset.length > 0) {
-        return new Date(result.recordset[0].last_sync_date);
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (syncTableExists) {
+        // Check if entity_name column exists
+        const columnResult = await pool.request().query(`
+          SELECT COUNT(*) AS columnExists 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_name'
+        `);
+        
+        const entityNameColumnExists = columnResult.recordset[0].columnExists > 0;
+        
+        if (entityNameColumnExists) {
+          // Use entity_name column if it exists
+          const result = await pool.request()
+            .input('entityName', sql.NVarChar, entityName)
+            .query('SELECT last_sync_date FROM SyncStatus WHERE entity_name = @entityName');
+          
+          if (result.recordset.length > 0) {
+            return new Date(result.recordset[0].last_sync_date);
+          }
+        } else {
+          // Fall back to just getting the first record if entity_name column doesn't exist
+          const result = await pool.request()
+            .query('SELECT TOP 1 last_sync_date FROM SyncStatus');
+          
+          if (result.recordset.length > 0) {
+            return new Date(result.recordset[0].last_sync_date);
+          }
+        }
       }
       
-      // If no record found, return January 1, 2025 as default start date
+      // If no record found or table doesn't exist, return January 1, 2025 as default start date
       return new Date('2025-01-01T00:00:00.000Z');
     } catch (error) {
       console.error(`Error getting last sync date for ${entityName}:`, error.message);
@@ -301,6 +366,7 @@ class PicqerService {
 
   /**
    * Update the sync status for a specific entity
+   * Modified to work with existing database structure
    * @param {string} entityName - The entity name (e.g., 'products')
    * @param {string} lastSyncDate - ISO string of the last sync date
    * @param {number} totalCount - Total count of entities in database
@@ -311,28 +377,137 @@ class PicqerService {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      await pool.request()
-        .input('entityName', sql.NVarChar, entityName)
-        .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
-        .input('totalCount', sql.Int, totalCount)
-        .input('lastSyncCount', sql.Int, lastSyncCount)
-        .query(`
-          MERGE SyncStatus AS target
-          USING (SELECT @entityName AS entity_name) AS source
-          ON target.entity_name = source.entity_name
-          WHEN MATCHED THEN
-            UPDATE SET 
-              last_sync_date = @lastSyncDate,
-              total_count = @totalCount,
-              last_sync_count = @lastSyncCount
-          WHEN NOT MATCHED THEN
-            INSERT (entity_name, last_sync_date, total_count, last_sync_count)
-            VALUES (@entityName, @lastSyncDate, @totalCount, @lastSyncCount);
+      // Check if SyncStatus table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
+      
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (!syncTableExists) {
+        // Create SyncStatus table if it doesn't exist
+        await pool.request().query(`
+          CREATE TABLE SyncStatus (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            entity_name NVARCHAR(50) NOT NULL,
+            last_sync_date DATETIME NOT NULL,
+            total_count INT NULL,
+            last_sync_count INT NULL,
+            CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
+          );
         `);
+        
+        // Insert new record
+        await pool.request()
+          .input('entityName', sql.NVarChar, entityName)
+          .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+          .input('totalCount', sql.Int, totalCount)
+          .input('lastSyncCount', sql.Int, lastSyncCount)
+          .query(`
+            INSERT INTO SyncStatus (entity_name, last_sync_date, total_count, last_sync_count)
+            VALUES (@entityName, @lastSyncDate, @totalCount, @lastSyncCount);
+          `);
+        
+        return true;
+      }
+      
+      // Check if entity_name column exists
+      const columnResult = await pool.request().query(`
+        SELECT COUNT(*) AS columnExists 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_name'
+      `);
+      
+      const entityNameColumnExists = columnResult.recordset[0].columnExists > 0;
+      
+      if (entityNameColumnExists) {
+        // Use entity_name column if it exists
+        const result = await pool.request()
+          .input('entityName', sql.NVarChar, entityName)
+          .query('SELECT COUNT(*) AS count FROM SyncStatus WHERE entity_name = @entityName');
+        
+        if (result.recordset[0].count > 0) {
+          // Update existing record
+          await pool.request()
+            .input('entityName', sql.NVarChar, entityName)
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              UPDATE SyncStatus SET
+                last_sync_date = @lastSyncDate,
+                total_count = @totalCount,
+                last_sync_count = @lastSyncCount
+              WHERE entity_name = @entityName
+            `);
+        } else {
+          // Insert new record
+          await pool.request()
+            .input('entityName', sql.NVarChar, entityName)
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              INSERT INTO SyncStatus (entity_name, last_sync_date, total_count, last_sync_count)
+              VALUES (@entityName, @lastSyncDate, @totalCount, @lastSyncCount);
+            `);
+        }
+      } else {
+        // Just update the first record if entity_name column doesn't exist
+        const countResult = await pool.request()
+          .query('SELECT COUNT(*) AS count FROM SyncStatus');
+        
+        if (countResult.recordset[0].count > 0) {
+          // Update first record
+          await pool.request()
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .query(`
+              UPDATE TOP(1) SyncStatus SET
+                last_sync_date = @lastSyncDate
+            `);
+        } else {
+          // Try to insert without entity_name
+          try {
+            await pool.request()
+              .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+              .query(`
+                INSERT INTO SyncStatus (last_sync_date)
+                VALUES (@lastSyncDate);
+              `);
+          } catch (insertError) {
+            console.warn('Error inserting sync status without entity_name:', insertError.message);
+            // If insert fails, try to alter table to add entity_name column
+            try {
+              await pool.request().query(`
+                ALTER TABLE SyncStatus 
+                ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products',
+                CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
+              `);
+              
+              // Try insert again with entity_name
+              await pool.request()
+                .input('entityName', sql.NVarChar, entityName)
+                .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+                .input('totalCount', sql.Int, totalCount)
+                .input('lastSyncCount', sql.Int, lastSyncCount)
+                .query(`
+                  INSERT INTO SyncStatus (entity_name, last_sync_date, total_count, last_sync_count)
+                  VALUES (@entityName, @lastSyncDate, @totalCount, @lastSyncCount);
+                `);
+            } catch (alterError) {
+              console.error('Error altering SyncStatus table:', alterError.message);
+              // Continue even if this fails
+            }
+          }
+        }
+      }
       
       return true;
     } catch (error) {
       console.error(`Error updating sync status for ${entityName}:`, error.message);
+      // Continue even if update fails
       return false;
     }
   }
@@ -346,7 +521,7 @@ class PicqerService {
       const pool = await sql.connect(this.sqlConfig);
       
       const result = await pool.request()
-        .query('SELECT COUNT(*) AS count FROM products');
+        .query('SELECT COUNT(*) AS count FROM Products');
       
       return result.recordset[0].count;
     } catch (error) {
@@ -384,7 +559,7 @@ class PicqerService {
             // Check if product already exists
             const checkResult = await pool.request()
               .input('idproduct', sql.Int, product.idproduct)
-              .query('SELECT COUNT(*) AS count FROM products WHERE idproduct = @idproduct');
+              .query('SELECT COUNT(*) AS count FROM Products WHERE idproduct = @idproduct');
             
             const exists = checkResult.recordset[0].count > 0;
             
@@ -427,7 +602,7 @@ class PicqerService {
             if (exists) {
               // Update existing product
               await request.query(`
-                UPDATE products SET
+                UPDATE Products SET
                   idvatgroup = @idvatgroup,
                   name = @name,
                   price = @price,
@@ -465,7 +640,7 @@ class PicqerService {
             } else {
               // Insert new product
               await request.query(`
-                INSERT INTO products (
+                INSERT INTO Products (
                   idproduct, idvatgroup, name, price, fixedstockprice, idsupplier,
                   productcode, productcode_supplier, deliverytime, description, barcode,
                   type, unlimitedstock, weight, length, width, height,
