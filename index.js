@@ -1,315 +1,365 @@
+// Picqer to Azure SQL Middleware with Dashboard
 require('dotenv').config();
-const sql = require('mssql');
-const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
+const sql = require('mssql');
+const path = require('path');
+const nodemailer = require('nodemailer');
 
+// Import dashboard components
+const dashboard = require('./dashboard-api');
+
+// Initialize Express app
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Serve static files from the dashboard directory
+app.use('/dashboard/static', express.static(path.join(__dirname, 'dashboard')));
+
+// Mount dashboard routes
+app.use('/dashboard', dashboard.router);
+
+// SQL Configuration
 const sqlConfig = {
-  user: process.env.SQL_USER,
-  password: process.env.SQL_PASSWORD,
-  server: process.env.SQL_SERVER,
-  database: process.env.SQL_DATABASE,
-  options: {
-    encrypt: true
-  }
+    user: process.env.SQL_USER,
+    password: process.env.SQL_PASSWORD,
+    database: process.env.SQL_DATABASE,
+    server: process.env.SQL_SERVER,
+    options: {
+        encrypt: true
+    }
 };
 
-// Create Base64 encoded credentials for Picqer API
-const credentials = `${process.env.PICQER_API_KEY}:`;
-const encodedCredentials = Buffer.from(credentials).toString('base64');
+// Global variables
+let syncInProgress = false;
+let lastSyncTime = null;
+let nextSyncTime = null;
 
-async function fetchPicqerProducts(updatedSince = null) {
-  try {
-    const products = [];
-    let page = 1;
-    const pageSize = 100;
+// Schedule next sync
+function scheduleNextSync() {
+    const now = new Date();
+    const nextHour = new Date(now);
+    nextHour.setHours(nextHour.getHours() + 1);
+    nextHour.setMinutes(0);
+    nextHour.setSeconds(0);
+    nextHour.setMilliseconds(0);
     
-    console.log('Fetching products from Picqer API...');
-    console.log('Base URL:', process.env.PICQER_BASE_URL);
-    console.log('API Key (first 5 chars):', process.env.PICQER_API_KEY.substring(0, 5) + '...');
-
-    while (true) {
-      const params = { page, limit: pageSize };
-      
-      // Add updated_since parameter if provided
-      if (updatedSince) {
-        params.updated_since = updatedSince;
-      }
-      
-      console.log(`Fetching page ${page}...`);
-      
-      const response = await axios.get(`${process.env.PICQER_BASE_URL}/products`, {
-        params: params,
-        auth: {
-          username: process.env.PICQER_API_KEY,
-          password: ''
-        },
-        headers: {
-          'User-Agent': 'Skapa Middleware (info@skapa.nl)'
-        }
-      });
-
-      if (!response.data || response.data.length === 0) break;
-
-      products.push(...response.data);
-      console.log(`Fetched ${response.data.length} products from page ${page}`);
-      
-      // Check if we have more pages
-      if (response.data.length < pageSize) break;
-      
-      page++;
-      await new Promise(r => setTimeout(r, 1000)); // respect rate limit
-    }
-
-    console.log(`🔄 Total ${products.length} products fetched`);
-    return products;
-
-  } catch (err) {
-    console.error('❌ Error fetching from Picqer:', err.message);
-    if (err.response) {
-      console.error('Response status:', err.response.status);
-      console.error('Response data:', JSON.stringify(err.response.data));
-    }
-    return [];
-  }
+    const timeUntilNextSync = nextHour.getTime() - now.getTime();
+    nextSyncTime = nextHour;
+    
+    console.log(`Next sync scheduled at: ${nextHour.toLocaleTimeString()}`);
+    dashboard.addLog('info', `Next sync scheduled at: ${nextHour.toLocaleTimeString()}`);
+    
+    setTimeout(() => {
+        syncProducts();
+        scheduleNextSync();
+    }, timeUntilNextSync);
 }
 
-async function saveProductsToSQL(products) {
-  if (!process.env.SQL_SERVER || !process.env.SQL_DATABASE) {
-    console.log('⚠️ SQL configuration not found, skipping database save');
-    return;
-  }
-  
-  try {
-    const pool = await sql.connect(sqlConfig);
-
-    await pool.request().query(`
-      IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'products')
-      CREATE TABLE products (
-        idproduct INT PRIMARY KEY,
-        name NVARCHAR(MAX),
-        productcode NVARCHAR(255),
-        price FLOAT,
-        fixedstockprice FLOAT,
-        deliverytime INT,
-        idvatgroup INT,
-        idsupplier INT,
-        productcode_supplier NVARCHAR(255),
-        description NVARCHAR(MAX),
-        barcode NVARCHAR(255),
-        updated DATETIME,
-        created DATETIME,
-        last_sync DATETIME DEFAULT GETDATE()
-      )
-    `);
-
-    for (const product of products) {
-      // Check if product already exists
-      const checkResult = await pool.request()
-        .input('idproduct', sql.Int, product.idproduct)
-        .query('SELECT idproduct FROM products WHERE idproduct = @idproduct');
-      
-      if (checkResult.recordset.length > 0) {
-        // Update existing product
-        await pool.request()
-          .input('idproduct', sql.Int, product.idproduct)
-          .input('name', sql.NVarChar, product.name)
-          .input('productcode', sql.NVarChar, product.productcode)
-          .input('price', sql.Float, product.price || 0)
-          .input('fixedstockprice', sql.Float, product.fixedstockprice || 0)
-          .input('deliverytime', sql.Int, product.deliverytime || 0)
-          .input('idvatgroup', sql.Int, product.idvatgroup)
-          .input('idsupplier', sql.Int, product.idsupplier)
-          .input('productcode_supplier', sql.NVarChar, product.productcode_supplier)
-          .input('description', sql.NVarChar, product.description)
-          .input('barcode', sql.NVarChar, product.barcode)
-          .input('updated', sql.DateTime, new Date(product.updated))
-          .input('created', sql.DateTime, new Date(product.created))
-          .query(`
-            UPDATE products SET
-              name = @name,
-              productcode = @productcode,
-              price = @price,
-              fixedstockprice = @fixedstockprice,
-              deliverytime = @deliverytime,
-              idvatgroup = @idvatgroup,
-              idsupplier = @idsupplier,
-              productcode_supplier = @productcode_supplier,
-              description = @description,
-              barcode = @barcode,
-              updated = @updated,
-              created = @created,
-              last_sync = GETDATE()
-            WHERE idproduct = @idproduct
-          `);
-      } else {
-        // Insert new product
-        await pool.request()
-          .input('idproduct', sql.Int, product.idproduct)
-          .input('name', sql.NVarChar, product.name)
-          .input('productcode', sql.NVarChar, product.productcode)
-          .input('price', sql.Float, product.price || 0)
-          .input('fixedstockprice', sql.Float, product.fixedstockprice || 0)
-          .input('deliverytime', sql.Int, product.deliverytime || 0)
-          .input('idvatgroup', sql.Int, product.idvatgroup)
-          .input('idsupplier', sql.Int, product.idsupplier)
-          .input('productcode_supplier', sql.NVarChar, product.productcode_supplier)
-          .input('description', sql.NVarChar, product.description)
-          .input('barcode', sql.NVarChar, product.barcode)
-          .input('updated', sql.DateTime, new Date(product.updated))
-          .input('created', sql.DateTime, new Date(product.created))
-          .query(`
-            INSERT INTO products (
-              idproduct, name, productcode, price, fixedstockprice, deliverytime,
-              idvatgroup, idsupplier, productcode_supplier, description, barcode,
-              updated, created, last_sync
-            ) VALUES (
-              @idproduct, @name, @productcode, @price, @fixedstockprice, @deliverytime,
-              @idvatgroup, @idsupplier, @productcode_supplier, @description, @barcode,
-              @updated, @created, GETDATE()
-            )
-          `);
-      }
+// Initialize database
+async function initializeDatabase() {
+    try {
+        const pool = await sql.connect(sqlConfig);
+        
+        // Check if Products table exists, create if not
+        const result = await pool.request().query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Products')
+            BEGIN
+                CREATE TABLE Products (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    idproduct INT NOT NULL,
+                    name NVARCHAR(255) NOT NULL,
+                    productcode NVARCHAR(100) NOT NULL,
+                    price DECIMAL(18,2),
+                    stock INT,
+                    created DATETIME,
+                    updated DATETIME,
+                    last_sync_date DATETIME NOT NULL
+                )
+            END
+        `);
+        
+        console.log('✅ Database initialized');
+        dashboard.addLog('success', 'Database initialized successfully');
+        return true;
+    } catch (error) {
+        console.error('❌ Error initializing database:', error.message);
+        dashboard.addLog('error', `Error initializing database: ${error.message}`);
+        return false;
     }
+}
 
-    console.log(`✅ ${products.length} products saved to SQL`);
-    await pool.close();
-  } catch (err) {
-    console.error('❌ Error saving to SQL:', err.message);
-  }
+// Get products from Picqer
+async function getProductsFromPicqer(from = null) {
+    try {
+        const fromParam = from ? `?updated_since=${from}` : '';
+        console.log(`Fetching products from Picqer${from ? ` updated since ${from}` : ''}`);
+        dashboard.addLog('info', `Fetching products from Picqer${from ? ` updated since ${from}` : ''}`);
+        
+        const response = await axios.get(`${process.env.PICQER_BASE_URL}/products${fromParam}`, {
+            auth: {
+                username: process.env.PICQER_API_KEY,
+                password: ''
+            },
+            headers: {
+                'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
+            }
+        });
+        
+        console.log(`✅ Retrieved ${response.data.data.length} products from Picqer`);
+        dashboard.addLog('success', `Retrieved ${response.data.data.length} products from Picqer`);
+        return response.data.data;
+    } catch (error) {
+        console.error('❌ Error fetching from Picqer:', error.message);
+        dashboard.addLog('error', `Error fetching from Picqer: ${error.message}`);
+        throw error;
+    }
+}
+
+// Save products to database
+async function saveProductsToDatabase(products) {
+    if (!products || products.length === 0) {
+        console.log('No products to save');
+        dashboard.addLog('info', 'No products to save');
+        return 0;
+    }
+    
+    try {
+        const pool = await sql.connect(sqlConfig);
+        let savedCount = 0;
+        
+        for (const product of products) {
+            // Check if product exists
+            const checkResult = await pool.request()
+                .input('idproduct', sql.Int, product.idproduct)
+                .query('SELECT id FROM Products WHERE idproduct = @idproduct');
+            
+            const now = new Date().toISOString();
+            
+            if (checkResult.recordset.length > 0) {
+                // Update existing product
+                await pool.request()
+                    .input('idproduct', sql.Int, product.idproduct)
+                    .input('name', sql.NVarChar, product.name)
+                    .input('productcode', sql.NVarChar, product.productcode)
+                    .input('price', sql.Decimal, product.price)
+                    .input('stock', sql.Int, product.stock || 0)
+                    .input('created', sql.DateTime, new Date(product.created))
+                    .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null)
+                    .input('last_sync_date', sql.DateTime, new Date())
+                    .query(`
+                        UPDATE Products 
+                        SET name = @name, 
+                            productcode = @productcode, 
+                            price = @price, 
+                            stock = @stock, 
+                            created = @created, 
+                            updated = @updated, 
+                            last_sync_date = @last_sync_date 
+                        WHERE idproduct = @idproduct
+                    `);
+            } else {
+                // Insert new product
+                await pool.request()
+                    .input('idproduct', sql.Int, product.idproduct)
+                    .input('name', sql.NVarChar, product.name)
+                    .input('productcode', sql.NVarChar, product.productcode)
+                    .input('price', sql.Decimal, product.price)
+                    .input('stock', sql.Int, product.stock || 0)
+                    .input('created', sql.DateTime, new Date(product.created))
+                    .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null)
+                    .input('last_sync_date', sql.DateTime, new Date())
+                    .query(`
+                        INSERT INTO Products (idproduct, name, productcode, price, stock, created, updated, last_sync_date)
+                        VALUES (@idproduct, @name, @productcode, @price, @stock, @created, @updated, @last_sync_date)
+                    `);
+            }
+            
+            savedCount++;
+        }
+        
+        console.log(`✅ Saved ${savedCount} products to database`);
+        dashboard.addLog('success', `Saved ${savedCount} products to database`);
+        return savedCount;
+    } catch (error) {
+        console.error('❌ Error saving to database:', error.message);
+        dashboard.addLog('error', `Error saving to database: ${error.message}`);
+        throw error;
+    }
+}
+
+// Get total product count from database
+async function getTotalProductCount() {
+    try {
+        const pool = await sql.connect(sqlConfig);
+        const result = await pool.request().query('SELECT COUNT(*) as count FROM Products');
+        return result.recordset[0].count;
+    } catch (error) {
+        console.error('Error getting product count:', error.message);
+        dashboard.addLog('error', `Error getting product count: ${error.message}`);
+        return 0;
+    }
+}
+
+// Sync products from Picqer to database
+async function syncProducts(full = false) {
+    if (syncInProgress) {
+        console.log('Sync already in progress, skipping');
+        dashboard.addLog('warning', 'Sync already in progress, skipping');
+        return { success: false, message: 'Sync already in progress' };
+    }
+    
+    syncInProgress = true;
+    
+    try {
+        // Initialize database if needed
+        await initializeDatabase();
+        
+        // Get products from Picqer
+        let from = null;
+        if (!full) {
+            // If not a full sync, get products updated since last sync or Jan 1, 2025
+            from = lastSyncTime ? new Date(lastSyncTime).toISOString().split('T')[0] : '2025-01-01';
+        }
+        
+        const products = await getProductsFromPicqer(from);
+        
+        // Save products to database
+        const savedCount = await saveProductsToDatabase(products);
+        
+        // Update last sync time
+        lastSyncTime = new Date().toISOString();
+        
+        console.log(`✅ Sync completed: ${savedCount} products synchronized`);
+        dashboard.addLog('success', `Sync completed: ${savedCount} products synchronized`);
+        
+        // Add sync record to history
+        dashboard.addSyncRecord(true, savedCount);
+        
+        syncInProgress = false;
+        return { 
+            success: true, 
+            message: `Sync completed: ${savedCount} products synchronized`,
+            count: savedCount
+        };
+    } catch (error) {
+        console.error('❌ Sync failed:', error.message);
+        dashboard.addLog('error', `Sync failed: ${error.message}`);
+        
+        // Add sync record to history
+        dashboard.addSyncRecord(false, null, error.message);
+        
+        syncInProgress = false;
+        return { 
+            success: false, 
+            message: `Sync failed: ${error.message}`
+        };
+    }
 }
 
 // API Routes
-app.get('/', (req, res) => {
-  res.send('✅ Picqer Middleware API is running. Use /products, /sync, or /test endpoints.');
-});
 
-// Test connection to Picqer API
+// Test connection to Picqer
 app.get('/test', async (req, res) => {
-  try {
-    const response = await axios.get(`${process.env.PICQER_BASE_URL}/products`, {
-      params: { limit: 1 },
-      auth: {
-        username: process.env.PICQER_API_KEY,
-        password: ''
-      },
-      headers: {
-        'User-Agent': 'Skapa Middleware (info@skapa.nl)'
-      }
-    });
-    
-    res.json({
-      status: 'success',
-      message: 'Connection to Picqer API successful',
-      data: response.data
-    });
-  } catch (err) {
-    console.error('❌ Error testing Picqer API:', err.message);
-    res.status(500).json({
-      status: 'error',
-      message: 'Connection to Picqer API failed',
-      error: err.message,
-      details: err.response ? err.response.data : null
-    });
-  }
+    try {
+        const response = await axios.get(`${process.env.PICQER_BASE_URL}/products?limit=1`, {
+            auth: {
+                username: process.env.PICQER_API_KEY,
+                password: ''
+            },
+            headers: {
+                'User-Agent': 'Skapa-Picqer-Middleware (info@skapa.nl)'
+            }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Connection to Picqer API successful',
+            data: response.data
+        });
+    } catch (error) {
+        console.error('❌ Test connection failed:', error.message);
+        dashboard.addLog('error', `Test connection failed: ${error.message}`);
+        
+        res.status(500).json({
+            success: false,
+            message: `Connection to Picqer API failed: ${error.message}`
+        });
+    }
 });
 
 // Get products from Picqer
 app.get('/products', async (req, res) => {
-  try {
-    const updatedSince = req.query.from || '2025-01-01';
-    const products = await fetchPicqerProducts(updatedSince);
-    res.json(products);
-  } catch (err) {
-    console.error('❌ Error fetching products:', err.message);
-    res.status(500).json({
-      error: 'Error fetching products from Picqer',
-      details: err.message
-    });
-  }
-});
-
-// Sync products from Picqer to SQL
-app.get('/sync', async (req, res) => {
-  try {
-    const updatedSince = req.query.from || '2025-01-01';
-    const fullSync = req.query.full === 'true';
-    
-    console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync from ${updatedSince}`);
-    
-    const products = await fetchPicqerProducts(fullSync ? null : updatedSince);
-    
-    if (products.length > 0) {
-      await saveProductsToSQL(products);
-      res.json({
-        status: 'success',
-        message: `Synced ${products.length} products to SQL database`,
-        syncType: fullSync ? 'full' : 'incremental',
-        updatedSince: updatedSince
-      });
-    } else {
-      res.json({
-        status: 'success',
-        message: 'No products to sync',
-        syncType: fullSync ? 'full' : 'incremental',
-        updatedSince: updatedSince
-      });
+    try {
+        const from = req.query.from || null;
+        const products = await getProductsFromPicqer(from);
+        
+        res.json({
+            success: true,
+            count: products.length,
+            data: products
+        });
+    } catch (error) {
+        console.error('❌ Error fetching products:', error.message);
+        dashboard.addLog('error', `Error fetching products: ${error.message}`);
+        
+        res.status(500).json({
+            success: false,
+            message: `Error fetching products: ${error.message}`
+        });
     }
-  } catch (err) {
-    console.error('❌ Error during sync:', err.message);
-    res.status(500).json({
-      status: 'error',
-      message: 'Error during sync process',
-      error: err.message
-    });
-  }
 });
 
-// Schedule hourly sync
-function scheduleHourlySync() {
-  const now = new Date();
-  const nextHour = new Date(now);
-  nextHour.setHours(nextHour.getHours() + 1);
-  nextHour.setMinutes(0);
-  nextHour.setSeconds(0);
-  nextHour.setMilliseconds(0);
-  
-  const timeUntilNextHour = nextHour - now;
-  
-  setTimeout(async () => {
-    console.log('Running scheduled hourly sync...');
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const formattedDate = yesterday.toISOString().split('T')[0];
+// Sync products from Picqer to database
+app.get('/sync', async (req, res) => {
+    const full = req.query.full === 'true';
+    const from = req.query.from || null;
     
     try {
-      const products = await fetchPicqerProducts(formattedDate);
-      if (products.length > 0) {
-        await saveProductsToSQL(products);
-        console.log(`✅ Scheduled sync completed: ${products.length} products updated`);
-      } else {
-        console.log('✅ Scheduled sync completed: No products to update');
-      }
-    } catch (err) {
-      console.error('❌ Error during scheduled sync:', err.message);
+        const result = await syncProducts(full);
+        res.json(result);
+    } catch (error) {
+        console.error('❌ Sync failed:', error.message);
+        dashboard.addLog('error', `Sync failed: ${error.message}`);
+        
+        res.status(500).json({
+            success: false,
+            message: `Sync failed: ${error.message}`
+        });
     }
-    
-    // Schedule next sync
-    scheduleHourlySync();
-  }, timeUntilNextHour);
-  
-  console.log(`Next sync scheduled at: ${nextHour.toLocaleTimeString()}`);
-}
+});
 
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  
-  // Schedule first sync
-  scheduleHourlySync();
+// Override dashboard stats endpoint to provide real data
+app.get('/dashboard/stats', async (req, res) => {
+    try {
+        const totalProducts = await getTotalProductCount();
+        
+        res.json({
+            totalProducts,
+            lastSync: lastSyncTime,
+            nextSync: nextSyncTime ? nextSyncTime.toISOString() : null,
+            syncStatus: syncInProgress ? 'Running' : 'Ready'
+        });
+    } catch (error) {
+        console.error('Error getting stats:', error.message);
+        res.status(500).json({
+            error: 'Failed to get stats',
+            message: error.message
+        });
+    }
+});
+
+// Start server
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+    console.log(`✅ Server running on port ${PORT}`);
+    dashboard.addLog('info', `Server started on port ${PORT}`);
+    
+    // Initialize database
+    await initializeDatabase();
+    
+    // Schedule first sync
+    scheduleNextSync();
 });
