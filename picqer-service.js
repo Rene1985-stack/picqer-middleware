@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 /**
- * Service for interacting with the Picqer API using Basic Authentication
+ * Service for interacting with the Picqer API using the same authentication method as Power BI
  */
 class PicqerService {
   constructor(apiKey, baseUrl) {
@@ -12,18 +12,17 @@ class PicqerService {
     console.log('API Key (first 5 chars):', this.apiKey.substring(0, 5) + '...');
     console.log('Base URL:', this.baseUrl);
     
-    // Create Basic Authentication header
-    // Picqer uses the API key as the username and an empty password
-    const auth = {
-      username: this.apiKey,
-      password: ''
-    };
+    // Create Base64 encoded credentials (apiKey + ":")
+    const credentials = `${this.apiKey}:`;
+    const encodedCredentials = Buffer.from(credentials).toString('base64');
     
+    // Create client with Basic Authentication header
     this.client = axios.create({
       baseURL: baseUrl,
-      auth: auth,
       headers: {
-        'Content-Type': 'application/json'
+        'Authorization': `Basic ${encodedCredentials}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'PicqerMiddleware (middleware@skapa-global.com)'
       }
     });
     
@@ -43,15 +42,11 @@ class PicqerService {
       error => {
         console.error('Request failed:');
         if (error.response) {
-          // The request was made and the server responded with a status code
-          // that falls out of the range of 2xx
           console.error('Response status:', error.response.status);
           console.error('Response data:', JSON.stringify(error.response.data));
         } else if (error.request) {
-          // The request was made but no response was received
           console.error('No response received:', error.request);
         } else {
-          // Something happened in setting up the request that triggered an Error
           console.error('Error message:', error.message);
         }
         return Promise.reject(error);
@@ -67,7 +62,11 @@ class PicqerService {
     try {
       console.log('Testing connection to Picqer API...');
       // Try to get a single product to test the connection
-      const response = await this.client.get('/products', { params: { limit: 1 } });
+      const response = await this.client.get('/products', { 
+        params: { 
+          limit: 1 
+        } 
+      });
       console.log('Connection test successful!');
       return response.data;
     } catch (error) {
@@ -85,15 +84,15 @@ class PicqerService {
     console.log('Fetching all products from Picqer...');
     
     let allProducts = [];
-    let page = 1;
-    let hasMorePages = true;
+    let offset = 0;
+    let hasMoreProducts = true;
     
     try {
-      while (hasMorePages) {
-        console.log(`Fetching page ${page}...`);
+      while (hasMoreProducts) {
+        console.log(`Fetching products with offset ${offset}...`);
         
         // Build query parameters
-        const params = { page };
+        const params = { offset };
         
         // Add updated_since parameter if provided
         if (updatedSince) {
@@ -106,20 +105,20 @@ class PicqerService {
         const response = await this.client.get('/products', { params });
         
         // Check if we have data
-        if (response.data && Array.isArray(response.data)) {
+        if (response.data && Array.isArray(response.data) && response.data.length > 0) {
           // Add products to our collection
           allProducts = [...allProducts, ...response.data];
           
-          // Check if we have more pages (Picqer returns 100 items per page)
-          hasMorePages = response.data.length === 100;
+          // Check if we have more products (Picqer returns 100 items per page)
+          hasMoreProducts = response.data.length === 100;
           
-          // Increment page counter
-          page++;
+          // Increment offset for next page
+          offset += 100;
           
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 500));
         } else {
-          hasMorePages = false;
+          hasMoreProducts = false;
         }
       }
       
@@ -132,8 +131,8 @@ class PicqerService {
       if (error.response && error.response.status === 429) {
         console.log('Rate limit hit, waiting before retrying...');
         
-        // Wait for 60 seconds before retrying
-        await new Promise(resolve => setTimeout(resolve, 60000));
+        // Wait for 20 seconds before retrying (same as Power BI query)
+        await new Promise(resolve => setTimeout(resolve, 20000));
         
         // Retry the request
         return this.getAllProducts(updatedSince);
