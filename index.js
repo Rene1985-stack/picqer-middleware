@@ -152,16 +152,22 @@ async function saveProductsToDatabase(products) {
             
             const now = new Date().toISOString();
             
+            // Ensure stock is a valid number
+            const stockValue = product.stock ? parseInt(product.stock, 10) || 0 : 0;
+            
+            // Ensure price is a valid decimal
+            const priceValue = product.price ? parseFloat(product.price) || 0 : 0;
+            
             if (checkResult.recordset.length > 0) {
                 // Update existing product
                 await pool.request()
                     .input('idproduct', sql.Int, product.idproduct)
-                    .input('name', sql.NVarChar, product.name)
-                    .input('productcode', sql.NVarChar, product.productcode)
-                    .input('price', sql.Decimal, product.price)
-                    .input('stock', sql.Int, product.stock || 0)
-                    .input('created', sql.DateTime, new Date(product.created))
-                    .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null)
+                    .input('name', sql.NVarChar, product.name || '')
+                    .input('productcode', sql.NVarChar, product.productcode || '')
+                    .input('price', sql.Decimal(18, 2), priceValue)
+                    .input('stock', sql.Int, stockValue)
+                    .input('created', sql.DateTime, product.created ? new Date(product.created) : new Date())
+                    .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : new Date())
                     .input('last_sync_date', sql.DateTime, new Date())
                     .query(`
                         UPDATE Products 
@@ -178,12 +184,12 @@ async function saveProductsToDatabase(products) {
                 // Insert new product
                 await pool.request()
                     .input('idproduct', sql.Int, product.idproduct)
-                    .input('name', sql.NVarChar, product.name)
-                    .input('productcode', sql.NVarChar, product.productcode)
-                    .input('price', sql.Decimal, product.price)
-                    .input('stock', sql.Int, product.stock || 0)
-                    .input('created', sql.DateTime, new Date(product.created))
-                    .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null)
+                    .input('name', sql.NVarChar, product.name || '')
+                    .input('productcode', sql.NVarChar, product.productcode || '')
+                    .input('price', sql.Decimal(18, 2), priceValue)
+                    .input('stock', sql.Int, stockValue)
+                    .input('created', sql.DateTime, product.created ? new Date(product.created) : new Date())
+                    .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : new Date())
                     .input('last_sync_date', sql.DateTime, new Date())
                     .query(`
                         INSERT INTO Products (idproduct, name, productcode, price, stock, created, updated, last_sync_date)
