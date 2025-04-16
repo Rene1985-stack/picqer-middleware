@@ -305,6 +305,30 @@
             color: var(--gray);
             font-size: 14px;
         }
+        
+        /* Progress bar styles */
+        .progress-container {
+            width: 100%;
+            background-color: var(--light-gray);
+            border-radius: 4px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background-color: var(--primary);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .sync-detail {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: var(--gray);
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
@@ -333,7 +357,11 @@
                     <div class="stats-grid">
                         <div class="stat-card">
                             <div class="stat-value" id="total-products">--</div>
-                            <div class="stat-label">Total Products</div>
+                            <div class="stat-label">Products in Database</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="total-available">--</div>
+                            <div class="stat-label">Total Available Products</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-value" id="last-sync">--</div>
@@ -343,9 +371,21 @@
                             <div class="stat-value" id="next-sync">--</div>
                             <div class="stat-label">Next Sync</div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="sync-status">--</div>
-                            <div class="stat-label">Status</div>
+                    </div>
+                    
+                    <!-- Sync Progress -->
+                    <div style="margin-top: 20px;">
+                        <h3 style="font-size: 16px; margin-bottom: 10px;">Sync Progress</h3>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="sync-progress-bar"></div>
+                        </div>
+                        <div class="sync-detail">
+                            <span id="sync-percentage">0%</span>
+                            <span id="sync-count">0 of 0 products</span>
+                        </div>
+                        <div class="sync-detail">
+                            <span id="sync-status">Ready</span>
+                            <span id="last-sync-count"></span>
                         </div>
                     </div>
                 </div>
@@ -415,98 +455,130 @@
             const clearLogsBtn = document.getElementById('clear-logs-btn');
             const logContainer = document.getElementById('log-container');
             const totalProducts = document.getElementById('total-products');
+            const totalAvailable = document.getElementById('total-available');
             const lastSync = document.getElementById('last-sync');
             const nextSync = document.getElementById('next-sync');
             const syncStatus = document.getElementById('sync-status');
             const syncHistory = document.getElementById('sync-history');
             const emailForm = document.getElementById('email-form');
+            const syncProgressBar = document.getElementById('sync-progress-bar');
+            const syncPercentage = document.getElementById('sync-percentage');
+            const syncCount = document.getElementById('sync-count');
+            const lastSyncCount = document.getElementById('last-sync-count');
             
             // API endpoints
             const API_BASE = window.location.origin;
             const ENDPOINTS = {
                 status: `${API_BASE}/dashboard/status`,
                 logs: `${API_BASE}/dashboard/logs`,
-                sync: `${API_BASE}/sync`,
-                fullSync: `${API_BASE}/sync?full=true`,
+                clearLogs: `${API_BASE}/dashboard/logs/clear`,
                 stats: `${API_BASE}/dashboard/stats`,
                 history: `${API_BASE}/dashboard/history`,
-                email: `${API_BASE}/dashboard/email`
+                email: `${API_BASE}/dashboard/email`,
+                sync: `${API_BASE}/sync`,
+                fullSync: `${API_BASE}/sync?full=true`
             };
             
-            // Initialize
-            fetchStatus();
-            fetchLogs();
-            fetchStats();
-            fetchHistory();
-            loadEmailSettings();
-            
-            // Set up polling
-            setInterval(fetchStatus, 30000);
-            setInterval(fetchLogs, 10000);
-            setInterval(fetchStats, 30000);
-            setInterval(fetchHistory, 30000);
-            
-            // Event listeners
-            syncBtn.addEventListener('click', triggerSync);
-            fullSyncBtn.addEventListener('click', triggerFullSync);
-            clearLogsBtn.addEventListener('click', clearLogs);
-            emailForm.addEventListener('submit', saveEmailSettings);
-            
-            // Functions
+            // Fetch middleware status
             function fetchStatus() {
                 fetch(ENDPOINTS.status)
                     .then(response => response.json())
                     .then(data => {
                         if (data.online) {
-                            statusIndicator.className = 'status-indicator status-online';
+                            statusIndicator.classList.add('status-online');
+                            statusIndicator.classList.remove('status-offline');
                             statusText.textContent = 'Online';
                         } else {
-                            statusIndicator.className = 'status-indicator status-offline';
+                            statusIndicator.classList.add('status-offline');
+                            statusIndicator.classList.remove('status-online');
                             statusText.textContent = 'Offline';
                         }
                     })
                     .catch(error => {
                         console.error('Error fetching status:', error);
-                        statusIndicator.className = 'status-indicator status-offline';
-                        statusText.textContent = 'Error';
+                        statusIndicator.classList.add('status-offline');
+                        statusIndicator.classList.remove('status-online');
+                        statusText.textContent = 'Offline';
                     });
             }
             
+            // Fetch logs
             function fetchLogs() {
                 fetch(ENDPOINTS.logs)
                     .then(response => response.json())
                     .then(data => {
                         logContainer.innerHTML = '';
+                        
+                        if (data.logs.length === 0) {
+                            logContainer.innerHTML = '<div class="log-entry log-info">No logs available</div>';
+                            return;
+                        }
+                        
                         data.logs.forEach(log => {
                             const logEntry = document.createElement('div');
-                            logEntry.className = `log-entry log-${log.level}`;
-                            logEntry.textContent = `[${log.timestamp}] ${log.message}`;
+                            logEntry.classList.add('log-entry');
+                            logEntry.classList.add(`log-${log.level}`);
+                            
+                            const timestamp = new Date(log.timestamp).toLocaleTimeString();
+                            logEntry.textContent = `[${timestamp}] ${log.message}`;
+                            
                             logContainer.appendChild(logEntry);
                         });
-                        
-                        // Auto-scroll to bottom
-                        logContainer.scrollTop = logContainer.scrollHeight;
                     })
                     .catch(error => {
                         console.error('Error fetching logs:', error);
+                        logContainer.innerHTML = '<div class="log-entry log-error">Error loading logs</div>';
                     });
             }
             
+            // Fetch stats
             function fetchStats() {
                 fetch(ENDPOINTS.stats)
                     .then(response => response.json())
                     .then(data => {
-                        totalProducts.textContent = data.totalProducts || '0';
-                        lastSync.textContent = formatTime(data.lastSync) || 'Never';
-                        nextSync.textContent = formatTime(data.nextSync) || '--';
-                        syncStatus.textContent = data.syncStatus || 'Unknown';
+                        totalProducts.textContent = data.totalProducts || 0;
+                        totalAvailable.textContent = data.totalAvailable || 0;
                         
-                        if (data.syncStatus === 'Running') {
-                            syncStatus.style.color = 'var(--warning)';
-                        } else if (data.syncStatus === 'Error') {
-                            syncStatus.style.color = 'var(--danger)';
+                        if (data.lastSync) {
+                            const lastSyncDate = new Date(data.lastSync);
+                            lastSync.textContent = lastSyncDate.toLocaleTimeString();
                         } else {
-                            syncStatus.style.color = 'var(--success)';
+                            lastSync.textContent = 'Never';
+                        }
+                        
+                        if (data.nextSync) {
+                            const nextSyncDate = new Date(data.nextSync);
+                            nextSync.textContent = nextSyncDate.toLocaleTimeString();
+                        } else {
+                            nextSync.textContent = '--';
+                        }
+                        
+                        syncStatus.textContent = data.syncStatus || 'Ready';
+                        
+                        // Update progress bar
+                        const percentage = data.syncPercentage || 0;
+                        syncProgressBar.style.width = `${percentage}%`;
+                        syncPercentage.textContent = `${percentage}%`;
+                        
+                        // Update sync count
+                        const synced = data.totalProducts || 0;
+                        const available = data.totalAvailable || 0;
+                        syncCount.textContent = `${synced} of ${available} products`;
+                        
+                        // Update last sync count if available
+                        if (data.lastSyncCount) {
+                            lastSyncCount.textContent = `Last sync: ${data.lastSyncCount} products`;
+                        } else {
+                            lastSyncCount.textContent = '';
+                        }
+                        
+                        // Disable sync buttons if sync is in progress
+                        if (data.syncStatus === 'Running') {
+                            syncBtn.disabled = true;
+                            fullSyncBtn.disabled = true;
+                        } else {
+                            syncBtn.disabled = false;
+                            fullSyncBtn.disabled = false;
                         }
                     })
                     .catch(error => {
@@ -514,6 +586,7 @@
                     });
             }
             
+            // Fetch sync history
             function fetchHistory() {
                 fetch(ENDPOINTS.history)
                     .then(response => response.json())
@@ -522,143 +595,50 @@
                         
                         if (data.history.length === 0) {
                             const item = document.createElement('li');
-                            item.className = 'sync-item';
+                            item.classList.add('sync-item');
                             item.innerHTML = '<span class="sync-time">No sync history available</span>';
                             syncHistory.appendChild(item);
                             return;
                         }
                         
-                        data.history.forEach(sync => {
+                        data.history.forEach(record => {
                             const item = document.createElement('li');
-                            item.className = 'sync-item';
+                            item.classList.add('sync-item');
                             
-                            const timeSpan = document.createElement('span');
-                            timeSpan.className = 'sync-time';
-                            timeSpan.textContent = formatTime(sync.timestamp);
+                            const timestamp = new Date(record.timestamp).toLocaleString();
                             
-                            const statusSpan = document.createElement('span');
-                            statusSpan.className = `sync-status sync-${sync.success ? 'success' : 'error'}`;
-                            statusSpan.textContent = sync.success ? 'Success' : 'Failed';
-                            
-                            if (sync.count) {
-                                const countSpan = document.createElement('span');
-                                countSpan.className = 'sync-count';
-                                countSpan.textContent = `${sync.count} products`;
-                                statusSpan.appendChild(countSpan);
+                            let statusHtml = '';
+                            if (record.success) {
+                                statusHtml = `<span class="sync-status sync-success">Success`;
+                                if (record.count !== null) {
+                                    if (record.totalAvailable) {
+                                        statusHtml += `<span class="sync-count">${record.count} of ${record.totalAvailable}</span>`;
+                                    } else {
+                                        statusHtml += `<span class="sync-count">${record.count}</span>`;
+                                    }
+                                }
+                                statusHtml += `</span>`;
+                            } else {
+                                statusHtml = `<span class="sync-status sync-error">Failed</span>`;
                             }
                             
-                            item.appendChild(timeSpan);
-                            item.appendChild(statusSpan);
+                            item.innerHTML = `
+                                <span class="sync-time">${timestamp}</span>
+                                ${statusHtml}
+                            `;
+                            
                             syncHistory.appendChild(item);
                         });
                     })
                     .catch(error => {
                         console.error('Error fetching history:', error);
+                        syncHistory.innerHTML = '<li class="sync-item"><span class="sync-time">Error loading history</span></li>';
                     });
             }
             
-            function triggerSync() {
-                syncBtn.disabled = true;
-                syncBtn.textContent = 'Syncing...';
-                
-                fetch(ENDPOINTS.sync)
-                    .then(response => response.json())
-                    .then(data => {
-                        addLog('info', 'Manual sync triggered: ' + data.message);
-                        fetchStats();
-                        fetchHistory();
-                    })
-                    .catch(error => {
-                        console.error('Error triggering sync:', error);
-                        addLog('error', 'Failed to trigger sync: ' + error.message);
-                    })
-                    .finally(() => {
-                        syncBtn.disabled = false;
-                        syncBtn.textContent = 'Sync Now';
-                    });
-            }
-            
-            function triggerFullSync() {
-                if (!confirm('Are you sure you want to run a full sync? This may take a while.')) {
-                    return;
-                }
-                
-                fullSyncBtn.disabled = true;
-                fullSyncBtn.textContent = 'Syncing...';
-                
-                fetch(ENDPOINTS.fullSync)
-                    .then(response => response.json())
-                    .then(data => {
-                        addLog('info', 'Manual full sync triggered: ' + data.message);
-                        fetchStats();
-                        fetchHistory();
-                    })
-                    .catch(error => {
-                        console.error('Error triggering full sync:', error);
-                        addLog('error', 'Failed to trigger full sync: ' + error.message);
-                    })
-                    .finally(() => {
-                        fullSyncBtn.disabled = false;
-                        fullSyncBtn.textContent = 'Full Sync';
-                    });
-            }
-            
-            function clearLogs() {
-                if (confirm('Are you sure you want to clear all logs?')) {
-                    logContainer.innerHTML = '';
-                    addLog('info', 'Logs cleared by user');
-                    
-                    // Optional: Send request to clear logs on server
-                    fetch(`${API_BASE}/dashboard/logs/clear`, { method: 'POST' })
-                        .then(response => response.json())
-                        .then(data => {
-                            console.log('Logs cleared on server:', data);
-                        })
-                        .catch(error => {
-                            console.error('Error clearing logs on server:', error);
-                        });
-                }
-            }
-            
-            function saveEmailSettings(e) {
-                e.preventDefault();
-                
-                const email = document.getElementById('email').value;
-                const notifyErrors = document.getElementById('notify-errors').checked;
-                const notifySync = document.getElementById('notify-sync').checked;
-                
-                if (!email && (notifyErrors || notifySync)) {
-                    alert('Please enter an email address for notifications.');
-                    return;
-                }
-                
-                const settings = {
-                    email,
-                    notifyErrors,
-                    notifySync
-                };
-                
-                fetch(ENDPOINTS.email, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(settings)
-                })
-                    .then(response => response.json())
-                    .then(data => {
-                        addLog('success', 'Email notification settings saved');
-                        alert('Email notification settings saved successfully!');
-                    })
-                    .catch(error => {
-                        console.error('Error saving email settings:', error);
-                        addLog('error', 'Failed to save email settings: ' + error.message);
-                        alert('Failed to save email settings. Please try again.');
-                    });
-            }
-            
-            function loadEmailSettings() {
-                fetch(`${API_BASE}/dashboard/email`)
+            // Fetch email settings
+            function fetchEmailSettings() {
+                fetch(ENDPOINTS.email)
                     .then(response => response.json())
                     .then(data => {
                         document.getElementById('email').value = data.email || '';
@@ -666,27 +646,114 @@
                         document.getElementById('notify-sync').checked = data.notifySync || false;
                     })
                     .catch(error => {
-                        console.error('Error loading email settings:', error);
+                        console.error('Error fetching email settings:', error);
                     });
             }
             
-            function addLog(level, message) {
-                const logEntry = document.createElement('div');
-                logEntry.className = `log-entry log-${level}`;
-                const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-                logEntry.textContent = `[${timestamp}] ${message}`;
-                logContainer.appendChild(logEntry);
-                logContainer.scrollTop = logContainer.scrollHeight;
+            // Trigger sync
+            function triggerSync(full = false) {
+                const endpoint = full ? ENDPOINTS.fullSync : ENDPOINTS.sync;
+                
+                // Disable buttons
+                syncBtn.disabled = true;
+                fullSyncBtn.disabled = true;
+                
+                fetch(endpoint)
+                    .then(response => response.json())
+                    .then(data => {
+                        // Show result in logs
+                        if (data.success) {
+                            console.log('Sync triggered successfully:', data);
+                        } else {
+                            console.error('Sync failed:', data);
+                        }
+                        
+                        // Refresh data
+                        fetchLogs();
+                        fetchStats();
+                        fetchHistory();
+                        
+                        // Re-enable buttons after a delay
+                        setTimeout(() => {
+                            syncBtn.disabled = false;
+                            fullSyncBtn.disabled = false;
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        console.error('Error triggering sync:', error);
+                        
+                        // Re-enable buttons
+                        syncBtn.disabled = false;
+                        fullSyncBtn.disabled = false;
+                    });
             }
             
-            function formatTime(timestamp) {
-                if (!timestamp) return null;
-                
-                const date = new Date(timestamp);
-                if (isNaN(date.getTime())) return timestamp;
-                
-                return date.toLocaleString();
+            // Clear logs
+            function clearLogs() {
+                fetch(ENDPOINTS.clearLogs, {
+                    method: 'POST'
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            fetchLogs();
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error clearing logs:', error);
+                    });
             }
+            
+            // Save email settings
+            function saveEmailSettings(event) {
+                event.preventDefault();
+                
+                const email = document.getElementById('email').value;
+                const notifyErrors = document.getElementById('notify-errors').checked;
+                const notifySync = document.getElementById('notify-sync').checked;
+                
+                fetch(ENDPOINTS.email, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email,
+                        notifyErrors,
+                        notifySync
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Show success message
+                            alert('Email settings saved successfully');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error saving email settings:', error);
+                        alert('Error saving email settings');
+                    });
+            }
+            
+            // Event listeners
+            syncBtn.addEventListener('click', () => triggerSync(false));
+            fullSyncBtn.addEventListener('click', () => triggerSync(true));
+            clearLogsBtn.addEventListener('click', clearLogs);
+            emailForm.addEventListener('submit', saveEmailSettings);
+            
+            // Initial data fetch
+            fetchStatus();
+            fetchLogs();
+            fetchStats();
+            fetchHistory();
+            fetchEmailSettings();
+            
+            // Refresh data periodically
+            setInterval(fetchStatus, 30000); // Every 30 seconds
+            setInterval(fetchLogs, 10000); // Every 10 seconds
+            setInterval(fetchStats, 5000); // Every 5 seconds
+            setInterval(fetchHistory, 10000); // Every 10 seconds
         });
     </script>
 </body>
