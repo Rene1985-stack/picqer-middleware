@@ -70,7 +70,7 @@ class PicklistService {
       // Create PicklistProductLocations table
       await pool.request().query(picklistsSchema.createPicklistProductLocationsTableSQL);
       
-      // Check if SyncStatus table exists and add picklists entity if needed
+      // Check if SyncStatus table exists
       const tableResult = await pool.request().query(`
         SELECT COUNT(*) AS tableExists 
         FROM INFORMATION_SCHEMA.TABLES 
@@ -80,39 +80,88 @@ class PicklistService {
       const syncTableExists = tableResult.recordset[0].tableExists > 0;
       
       if (syncTableExists) {
-        // Check if picklists entity exists in SyncStatus
-        const entityResult = await pool.request().query(`
-          SELECT COUNT(*) AS entityExists 
-          FROM SyncStatus 
-          WHERE entity_name = 'picklists'
+        // Check if entity_type column exists in SyncStatus
+        const columnResult = await pool.request().query(`
+          SELECT 
+            COLUMN_NAME 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE 
+            TABLE_NAME = 'SyncStatus' AND 
+            COLUMN_NAME = 'entity_type'
         `);
         
-        const entityExists = entityResult.recordset[0].entityExists > 0;
+        const hasEntityTypeColumn = columnResult.recordset.length > 0;
         
-        if (!entityExists) {
-          // Check if entity_type column exists in SyncStatus
-          const columnResult = await pool.request().query(`
-            SELECT 
-              COLUMN_NAME 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE 
-              TABLE_NAME = 'SyncStatus' AND 
-              COLUMN_NAME = 'entity_type'
+        if (hasEntityTypeColumn) {
+          // Check if picklists entity already exists in SyncStatus with entity_type
+          const entityTypeResult = await pool.request().query(`
+            SELECT COUNT(*) AS entityExists 
+            FROM SyncStatus 
+            WHERE entity_type = 'picklists'
           `);
           
-          const hasEntityTypeColumn = columnResult.recordset.length > 0;
+          const entityTypeExists = entityTypeResult.recordset[0].entityExists > 0;
           
-          // Add picklists entity to SyncStatus with appropriate columns
-          if (hasEntityTypeColumn) {
+          if (entityTypeExists) {
+            // Entity with this entity_type already exists, update it instead of inserting
             await pool.request().query(`
-              INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
-              VALUES ('picklists', 'picklists', '2025-01-01T00:00:00.000Z');
+              UPDATE SyncStatus 
+              SET entity_name = 'picklists', last_sync_date = '2025-01-01T00:00:00.000Z'
+              WHERE entity_type = 'picklists'
             `);
+            console.log('Updated existing picklists entity in SyncStatus');
           } else {
+            // Check if picklists entity exists by name
+            const entityNameResult = await pool.request().query(`
+              SELECT COUNT(*) AS entityExists 
+              FROM SyncStatus 
+              WHERE entity_name = 'picklists'
+            `);
+            
+            const entityNameExists = entityNameResult.recordset[0].entityExists > 0;
+            
+            if (entityNameExists) {
+              // Entity with this name exists, update it
+              await pool.request().query(`
+                UPDATE SyncStatus 
+                SET entity_type = 'picklists', last_sync_date = '2025-01-01T00:00:00.000Z'
+                WHERE entity_name = 'picklists'
+              `);
+              console.log('Updated existing picklists entity in SyncStatus');
+            } else {
+              // No entity exists, insert new one
+              await pool.request().query(`
+                INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
+                VALUES ('picklists', 'picklists', '2025-01-01T00:00:00.000Z');
+              `);
+              console.log('Inserted new picklists entity in SyncStatus');
+            }
+          }
+        } else {
+          // No entity_type column, check by entity_name only
+          const entityResult = await pool.request().query(`
+            SELECT COUNT(*) AS entityExists 
+            FROM SyncStatus 
+            WHERE entity_name = 'picklists'
+          `);
+          
+          const entityExists = entityResult.recordset[0].entityExists > 0;
+          
+          if (entityExists) {
+            // Entity exists, update it
+            await pool.request().query(`
+              UPDATE SyncStatus 
+              SET last_sync_date = '2025-01-01T00:00:00.000Z'
+              WHERE entity_name = 'picklists'
+            `);
+            console.log('Updated existing picklists entity in SyncStatus');
+          } else {
+            // No entity exists, insert new one
             await pool.request().query(`
               INSERT INTO SyncStatus (entity_name, last_sync_date)
               VALUES ('picklists', '2025-01-01T00:00:00.000Z');
             `);
+            console.log('Inserted new picklists entity in SyncStatus');
           }
         }
       }
@@ -221,10 +270,32 @@ class PicklistService {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
+      // Check if entity_type column exists in SyncStatus
+      const columnResult = await pool.request().query(`
+        SELECT 
+          COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE 
+          TABLE_NAME = 'SyncStatus' AND 
+          COLUMN_NAME = 'entity_type'
+      `);
+      
+      const hasEntityTypeColumn = columnResult.recordset.length > 0;
+      
       // Get last sync date for picklists from SyncStatus table
-      const result = await pool.request()
-        .input('entityName', sql.NVarChar, 'picklists')
-        .query('SELECT last_sync_date FROM SyncStatus WHERE entity_name = @entityName');
+      let result;
+      if (hasEntityTypeColumn) {
+        result = await pool.request()
+          .query(`
+            SELECT last_sync_date 
+            FROM SyncStatus 
+            WHERE entity_type = 'picklists' OR entity_name = 'picklists'
+          `);
+      } else {
+        result = await pool.request()
+          .input('entityName', sql.NVarChar, 'picklists')
+          .query('SELECT last_sync_date FROM SyncStatus WHERE entity_name = @entityName');
+      }
       
       if (result.recordset.length > 0) {
         return new Date(result.recordset[0].last_sync_date);
@@ -262,27 +333,74 @@ class PicklistService {
       
       const hasEntityTypeColumn = columnResult.recordset.length > 0;
       
-      // Check if picklists entity exists in SyncStatus
-      const result = await pool.request()
-        .input('entityName', sql.NVarChar, 'picklists')
-        .query('SELECT COUNT(*) AS count FROM SyncStatus WHERE entity_name = @entityName');
+      if (hasEntityTypeColumn) {
+        // Check if picklists entity exists by entity_type
+        const entityTypeResult = await pool.request().query(`
+          SELECT COUNT(*) AS entityExists 
+          FROM SyncStatus 
+          WHERE entity_type = 'picklists'
+        `);
+        
+        const entityTypeExists = entityTypeResult.recordset[0].entityExists > 0;
+        
+        if (entityTypeExists) {
+          // Update existing record by entity_type
+          await pool.request()
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              UPDATE SyncStatus SET
+                entity_name = 'picklists',
+                last_sync_date = @lastSyncDate,
+                total_count = @totalCount,
+                last_sync_count = @lastSyncCount
+              WHERE entity_type = 'picklists'
+            `);
+          return true;
+        }
+      }
       
-      if (result.recordset[0].count > 0) {
-        // Update existing record
-        await pool.request()
-          .input('entityName', sql.NVarChar, 'picklists')
-          .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
-          .input('totalCount', sql.Int, totalCount)
-          .input('lastSyncCount', sql.Int, lastSyncCount)
-          .query(`
-            UPDATE SyncStatus SET
-              last_sync_date = @lastSyncDate,
-              total_count = @totalCount,
-              last_sync_count = @lastSyncCount
-            WHERE entity_name = @entityName
-          `);
+      // Check if picklists entity exists by name
+      const entityNameResult = await pool.request()
+        .input('entityName', sql.NVarChar, 'picklists')
+        .query('SELECT COUNT(*) AS entityExists FROM SyncStatus WHERE entity_name = @entityName');
+      
+      const entityNameExists = entityNameResult.recordset[0].entityExists > 0;
+      
+      if (entityNameExists) {
+        // Update existing record by name
+        if (hasEntityTypeColumn) {
+          await pool.request()
+            .input('entityName', sql.NVarChar, 'picklists')
+            .input('entityType', sql.NVarChar, 'picklists')
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              UPDATE SyncStatus SET
+                entity_type = @entityType,
+                last_sync_date = @lastSyncDate,
+                total_count = @totalCount,
+                last_sync_count = @lastSyncCount
+              WHERE entity_name = @entityName
+            `);
+        } else {
+          await pool.request()
+            .input('entityName', sql.NVarChar, 'picklists')
+            .input('lastSyncDate', sql.DateTime, new Date(lastSyncDate))
+            .input('totalCount', sql.Int, totalCount)
+            .input('lastSyncCount', sql.Int, lastSyncCount)
+            .query(`
+              UPDATE SyncStatus SET
+                last_sync_date = @lastSyncDate,
+                total_count = @totalCount,
+                last_sync_count = @lastSyncCount
+              WHERE entity_name = @entityName
+            `);
+        }
       } else {
-        // Insert new record with or without entity_type based on schema
+        // No record exists, insert new one
         if (hasEntityTypeColumn) {
           await pool.request()
             .input('entityName', sql.NVarChar, 'picklists')
