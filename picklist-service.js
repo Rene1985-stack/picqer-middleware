@@ -4,7 +4,7 @@
  */
 const axios = require('axios');
 const sql = require('mssql');
-const picklistsSchema = require('./updated_picklists_schema');
+const picklistsSchema = require('./picklists_schema');
 
 class PicklistService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -90,11 +90,10 @@ class PicklistService {
         const entityExists = entityResult.recordset[0].entityExists > 0;
         
         if (!entityExists) {
-          // Check if entity_type column exists and is required
+          // Check if entity_type column exists in SyncStatus
           const columnResult = await pool.request().query(`
             SELECT 
-              COLUMN_NAME, 
-              IS_NULLABLE 
+              COLUMN_NAME 
             FROM INFORMATION_SCHEMA.COLUMNS 
             WHERE 
               TABLE_NAME = 'SyncStatus' AND 
@@ -102,7 +101,6 @@ class PicklistService {
           `);
           
           const hasEntityTypeColumn = columnResult.recordset.length > 0;
-          const isEntityTypeRequired = hasEntityTypeColumn && columnResult.recordset[0].IS_NULLABLE === 'NO';
           
           // Add picklists entity to SyncStatus with appropriate columns
           if (hasEntityTypeColumn) {
