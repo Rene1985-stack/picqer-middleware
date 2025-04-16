@@ -1,63 +1,49 @@
 const express = require('express');
 const path = require('path');
-const dotenv = require('dotenv');
-const sql = require('mssql');
 const PicqerService = require('./picqer-service');
+const cron = require('node-cron');
+require('dotenv').config();
 
-// Load environment variables
-dotenv.config();
-
-// Create Express app
+// Initialize Express app
 const app = express();
 const port = process.env.PORT || 8080;
 
-// Middleware
-app.use(express.json());
-app.use(express.static('public'));
-app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
-
-// SQL configuration
-const sqlConfig = {
-  user: process.env.SQL_USER,
-  password: process.env.SQL_PASSWORD,
-  server: process.env.SQL_SERVER,
-  database: process.env.SQL_DATABASE,
-  options: {
-    encrypt: true,
-    trustServerCertificate: false
-  }
-};
-
-// Initialize Picqer service
+// Create PicqerService instance
 const picqerService = new PicqerService(
   process.env.PICQER_API_KEY,
-  process.env.PICQER_BASE_URL,
-  sqlConfig
+  process.env.PICQER_API_URL,
+  {
+    server: process.env.DB_SERVER,
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    options: {
+      encrypt: true,
+      trustServerCertificate: false
+    }
+  }
 );
 
-// Dashboard route
-app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard/enhanced-dashboard.html'));
-});
+// Initialize database
+async function initializeDatabase() {
+  try {
+    await picqerService.initializeDatabase();
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error.message);
+  }
+}
 
-// API routes
+// Initialize database on startup
+initializeDatabase();
+
+// API Routes
 app.get('/api/test', async (req, res) => {
   try {
     const result = await picqerService.testConnection();
-    res.json({ success: true, message: 'Connection to Picqer API successful', data: result });
+    res.json({ success: true, message: 'API connection successful', data: result });
   } catch (error) {
-    console.error('Error testing connection:', error.message);
-    res.status(500).json({ success: false, message: `Error testing connection: ${error.message}` });
-  }
-});
-
-app.get('/api/products', async (req, res) => {
-  try {
-    const products = await picqerService.getAllProducts();
-    res.json({ success: true, count: products.length, products });
-  } catch (error) {
-    console.error('Error fetching products:', error.message);
-    res.status(500).json({ success: false, message: `Error fetching products: ${error.message}` });
+    res.json({ success: false, message: `API connection failed: ${error.message}` });
   }
 });
 
@@ -73,8 +59,7 @@ app.get('/api/sync', async (req, res) => {
       res.json(result);
     }
   } catch (error) {
-    console.error('Error during sync:', error.message);
-    res.status(500).json({ success: false, message: `Error during sync: ${error.message}` });
+    res.json({ success: false, message: `Sync failed: ${error.message}` });
   }
 });
 
@@ -87,41 +72,31 @@ app.get('/api/stats', async (req, res) => {
       success: true,
       stats: {
         totalProducts,
-        lastSyncDate: lastSyncDate.toISOString()
+        lastSyncDate
       }
     });
   } catch (error) {
-    console.error('Error fetching stats:', error.message);
-    res.status(500).json({ success: false, message: `Error fetching stats: ${error.message}` });
+    res.json({ success: false, message: `Error getting stats: ${error.message}` });
   }
 });
 
-// Initialize database and start server
-async function startServer() {
-  try {
-    // Initialize database
-    await picqerService.initializeDatabase();
-    console.log('Database initialized successfully');
-    
-    // Start server
-    app.listen(port, () => {
-      console.log(`Server running on port ${port}`);
-    });
-    
-    // Schedule hourly sync
-    setInterval(async () => {
-      try {
-        console.log('Starting scheduled sync...');
-        await picqerService.performIncrementalSync();
-      } catch (error) {
-        console.error('Scheduled sync failed:', error.message);
-      }
-    }, 60 * 60 * 1000); // Run every hour
-  } catch (error) {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
-  }
-}
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
+});
 
-// Start the server
-startServer();
+// Schedule hourly sync
+cron.schedule('0 * * * *', async () => {
+  console.log('Running scheduled sync...');
+  try {
+    await picqerService.performIncrementalSync();
+    console.log('Scheduled sync completed successfully');
+  } catch (error) {
+    console.error('Scheduled sync failed:', error.message);
+  }
+});
+
+// Start server
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
