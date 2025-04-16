@@ -9,9 +9,9 @@ app.use(express.json());
 
 app.get('/picklists', async (req, res) => {
   try {
-    const response = await axios.get(\`\${process.env.PICQER_BASE_URL}/picklists\`, {
+    const response = await axios.get(`${process.env.PICQER_BASE_URL}/picklists`, {
       headers: {
-        Authorization: \`Bearer \${process.env.PICQER_API_KEY}\`
+        Authorization: `Bearer ${process.env.PICQER_API_KEY}`
       }
     });
 
@@ -24,5 +24,5 @@ app.get('/picklists', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(\`Server draait op poort \${PORT}\`);
+  console.log(`Server draait op poort ${PORT}`);
 });
