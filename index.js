@@ -8,15 +8,15 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 8080;
 
-// Create PicqerService instance
+// Create PicqerService instance with corrected environment variable names
 const picqerService = new PicqerService(
   process.env.PICQER_API_KEY,
-  process.env.PICQER_API_URL,
+  process.env.PICQER_BASE_URL, // Changed from PICQER_API_URL to PICQER_BASE_URL
   {
-    server: process.env.DB_SERVER,
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
+    server: process.env.SQL_SERVER,     // Changed from DB_SERVER to SQL_SERVER
+    database: process.env.SQL_DATABASE, // Changed from DB_NAME to SQL_DATABASE
+    user: process.env.SQL_USER,         // Changed from DB_USER to SQL_USER
+    password: process.env.SQL_PASSWORD, // Changed from DB_PASSWORD to SQL_PASSWORD
     options: {
       encrypt: true,
       trustServerCertificate: false
