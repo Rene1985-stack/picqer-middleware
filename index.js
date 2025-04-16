@@ -1,10 +1,11 @@
 /**
  * Enhanced index.js with picklists integration
  * Integrates both product and picklist sync functionality
+ * Modified to work with existing PicqerService
  */
 const express = require('express');
 const path = require('path');
-const PicqerService = require('./robust_picqer_service');
+const PicqerService = require('./picqer-service'); // Using existing picqer-service.js
 const PicklistService = require('./picklist-service');
 const dashboard = require('./dashboard/dashboard-api');
 const cron = require('node-cron');
