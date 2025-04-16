@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const dotenv = require('dotenv');
 const sql = require('mssql');
-const PicqerService = require('./enhanced_picqer_service');
+const PicqerService = require('./picqer-service');
 
 // Load environment variables
 dotenv.config();
