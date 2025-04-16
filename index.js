@@ -1,16 +1,13 @@
 const sql = require('mssql');
 
-// Updated configuration with explicit server name
+// Updated configuration using SQL Authentication with a simple username
 const config = {
     server: process.env.SQL_SERVER, // Should be in format: servername.database.windows.net
     database: process.env.SQL_DATABASE,
-    user: process.env.SQL_USER,
+    user: process.env.SQL_USER,     // Should be a simple SQL username, not an email address
     password: process.env.SQL_PASSWORD,
     options: {
-        encrypt: true,
-        trustServerCertificate: false,
-        // Force the driver to use the server name from the config
-        hostNameInCertificate: process.env.SQL_SERVER
+        encrypt: true
     }
 };
 
