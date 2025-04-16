@@ -3,128 +3,795 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Picqer Middleware Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>Skapa Picqer <-> SQL Middleware</title>
     <style>
-        body { padding: 20px; }
-        .card { margin-bottom: 20px; }
-        .log-container { 
-            height: 300px; 
-            overflow-y: auto; 
-            background-color: #f8f9fa; 
-            padding: 10px;
-            border-radius: 5px;
+        :root {
+            --primary: #00c853; /* Skapa green */
+            --primary-light: #5efc82;
+            --primary-dark: #009624;
+            --secondary: #002654; /* Skapa dark blue */
+            --secondary-light: #335781;
+            --secondary-dark: #00002c;
+            --accent: #4fc3f7; /* Light blue accent */
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --light: #f8f9fa;
+            --dark: #002654;
+            --gray: #6c757d;
+            --light-gray: #e9ecef;
+            --white: #ffffff;
         }
-        .success { color: green; }
-        .error { color: red; }
-        .warning { color: orange; }
-        .info { color: blue; }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f5f5f5;
+            color: var(--secondary);
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--light-gray);
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo h1 {
+            font-size: 24px;
+            color: var(--secondary);
+            font-weight: 700;
+        }
+        
+        .logo span {
+            color: var(--primary);
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            font-weight: 500;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online {
+            background-color: var(--primary);
+        }
+        
+        .status-offline {
+            background-color: var(--danger);
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            padding: 20px;
+            margin-bottom: 20px;
+            border-top: 4px solid var(--primary);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--light-gray);
+        }
+        
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--secondary);
+        }
+        
+        .card-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border-radius: 4px;
+            border: none;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background-color: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: var(--primary-dark);
+        }
+        
+        .btn-outline {
+            background-color: transparent;
+            border: 1px solid var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-outline:hover {
+            background-color: var(--primary);
+            color: white;
+        }
+        
+        .btn-danger {
+            background-color: var(--danger);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background-color: #bd2130;
+        }
+        
+        .log-container {
+            height: 300px;
+            overflow-y: auto;
+            background-color: var(--secondary);
+            border-radius: 4px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 14px;
+            color: var(--light);
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        .log-info {
+            color: var(--accent);
+        }
+        
+        .log-success {
+            color: var(--primary);
+        }
+        
+        .log-warning {
+            color: var(--warning);
+        }
+        
+        .log-error {
+            color: var(--danger);
+            font-weight: bold;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+        
+        .stat-card {
+            background-color: var(--light-gray);
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: var(--secondary);
+            font-weight: 500;
+        }
+        
+        .sync-history {
+            list-style: none;
+        }
+        
+        .sync-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--light-gray);
+        }
+        
+        .sync-item:last-child {
+            border-bottom: none;
+        }
+        
+        .sync-time {
+            font-size: 14px;
+            color: var(--gray);
+        }
+        
+        .sync-status {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .sync-success {
+            color: var(--success);
+        }
+        
+        .sync-error {
+            color: var(--danger);
+        }
+        
+        .sync-count {
+            background-color: var(--light-gray);
+            border-radius: 20px;
+            padding: 2px 8px;
+            margin-left: 8px;
+            font-size: 12px;
+            color: var(--secondary);
+        }
+        
+        .email-form {
+            margin-top: 15px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: var(--secondary);
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid var(--light-gray);
+            font-size: 14px;
+        }
+        
+        .form-check {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .form-check-input {
+            margin-right: 8px;
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--light-gray);
+            color: var(--gray);
+            font-size: 14px;
+        }
+        
+        /* Progress bar styles */
+        .progress-container {
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .progress {
+            height: 8px;
+            background-color: var(--light-gray);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background-color: var(--primary);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        /* Notification badge */
+        .notification-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background-color: var(--danger);
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="mb-4">Picqer Middleware Dashboard</h1>
+        <header>
+            <div class="logo">
+                <h1>Skapa <span>Picqer &lt;-&gt; SQL</span> Middleware</h1>
+            </div>
+            <div class="status">
+                <div class="status-indicator status-online" id="status-indicator"></div>
+                <span id="status-text">Online</span>
+            </div>
+        </header>
         
-        <div class="row">
-            <div class="col-md-6">
+        <div class="dashboard-grid">
+            <div>
                 <div class="card">
                     <div class="card-header">
-                        <h5>Sync Status</h5>
+                        <h2 class="card-title">Synchronization</h2>
+                        <div class="card-actions">
+                            <button class="btn btn-primary" id="sync-btn">Sync Now</button>
+                            <button class="btn btn-outline" id="full-sync-btn">Full Sync</button>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <div id="sync-status">Loading...</div>
-                        <div class="progress mt-3">
-                            <div id="sync-progress" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                    <div class="progress-container">
+                        <div class="progress">
+                            <div class="progress-bar" id="sync-progress-bar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="total-products">--</div>
+                            <div class="stat-label">Total Products</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="last-sync">--</div>
+                            <div class="stat-label">Last Sync</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="next-sync">--</div>
+                            <div class="stat-label">Next Sync</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="sync-status">--</div>
+                            <div class="stat-label">Status</div>
                         </div>
                     </div>
                 </div>
                 
                 <div class="card">
                     <div class="card-header">
-                        <h5>Sync Controls</h5>
+                        <h2 class="card-title">Sync History</h2>
                     </div>
-                    <div class="card-body">
-                        <button id="run-sync" class="btn btn-primary me-2">Run Incremental Sync</button>
-                        <button id="run-full-sync" class="btn btn-warning">Run Full Sync</button>
-                    </div>
+                    <ul class="sync-history" id="sync-history">
+                        <li class="sync-item">
+                            <span class="sync-time">Loading history...</span>
+                            <span class="sync-status"></span>
+                        </li>
+                    </ul>
                 </div>
             </div>
             
-            <div class="col-md-6">
+            <div>
                 <div class="card">
                     <div class="card-header">
-                        <h5>Logs</h5>
+                        <h2 class="card-title">Logs</h2>
+                        <div class="card-actions">
+                            <button class="btn btn-outline" id="clear-logs-btn">Clear Logs</button>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <div id="logs" class="log-container">Loading logs...</div>
+                    <div class="log-container" id="log-container">
+                        <div class="log-entry log-info">Loading logs...</div>
                     </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Email Notifications</h2>
+                    </div>
+                    <form class="email-form" id="email-form">
+                        <div class="form-group">
+                            <label for="email">Email Address</label>
+                            <input type="email" class="form-control" id="email" placeholder="Enter email for notifications">
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="notify-errors">
+                            <label for="notify-errors">Notify on errors</label>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="notify-sync">
+                            <label for="notify-sync">Notify on successful syncs</label>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Notification Settings</button>
+                    </form>
                 </div>
             </div>
         </div>
+        
+        <footer>
+            <p>Skapa Picqer <-> SQL Middleware &copy; 2025 | Powered by Skapa Global</p>
+        </footer>
     </div>
-
+    
     <script>
-        // Function to fetch sync status
-        async function fetchSyncStatus() {
-            try {
-                const response = await fetch('/api/stats');
-                const data = await response.json();
-                
-                if (data.success) {
-                    const stats = data.stats;
-                    const lastSyncDate = new Date(stats.lastSyncDate).toLocaleString();
-                    
-                    let html = `
-                        <p><strong>Total Products:</strong> ${stats.totalProducts}</p>
-                        <p><strong>Last Sync:</strong> ${lastSyncDate}</p>
-                    `;
-                    
-                    document.getElementById('sync-status').innerHTML = html;
-                    
-                    // Update progress bar
-                    const progress = Math.min(100, Math.round((stats.totalProducts / 100) * 100));
-                    const progressBar = document.getElementById('sync-progress');
-                    progressBar.style.width = `${progress}%`;
-                    progressBar.setAttribute('aria-valuenow', progress);
-                    progressBar.textContent = `${progress}%`;
-                } else {
-                    document.getElementById('sync-status').innerHTML = `<p class="text-danger">Error fetching stats: ${data.message}</p>`;
-                }
-            } catch (error) {
-                document.getElementById('sync-status').innerHTML = `<p class="text-danger">Error fetching stats: ${error.message}</p>`;
+        // Dashboard functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            // Elements
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            const syncBtn = document.getElementById('sync-btn');
+            const fullSyncBtn = document.getElementById('full-sync-btn');
+            const clearLogsBtn = document.getElementById('clear-logs-btn');
+            const logContainer = document.getElementById('log-container');
+            const totalProducts = document.getElementById('total-products');
+            const lastSync = document.getElementById('last-sync');
+            const nextSync = document.getElementById('next-sync');
+            const syncStatus = document.getElementById('sync-status');
+            const syncHistory = document.getElementById('sync-history');
+            const emailForm = document.getElementById('email-form');
+            const syncProgressBar = document.getElementById('sync-progress-bar');
+            
+            // API endpoints
+            const API_BASE = window.location.origin;
+            const ENDPOINTS = {
+                status: `${API_BASE}/api/test`,
+                logs: `${API_BASE}/dashboard/logs`,
+                sync: `${API_BASE}/api/sync`,
+                fullSync: `${API_BASE}/api/sync?full=true`,
+                stats: `${API_BASE}/api/stats`,
+                history: `${API_BASE}/dashboard/history`,
+                email: `${API_BASE}/dashboard/email`,
+                clearLogs: `${API_BASE}/dashboard/logs/clear`
+            };
+            
+            // Initialize
+            fetchStatus();
+            fetchLogs();
+            fetchStats();
+            fetchHistory();
+            loadEmailSettings();
+            
+            // Set up polling
+            setInterval(fetchStatus, 30000);
+            setInterval(fetchLogs, 10000);
+            setInterval(fetchStats, 30000);
+            setInterval(fetchHistory, 30000);
+            
+            // Event listeners
+            syncBtn.addEventListener('click', triggerSync);
+            fullSyncBtn.addEventListener('click', triggerFullSync);
+            clearLogsBtn.addEventListener('click', clearLogs);
+            emailForm.addEventListener('submit', saveEmailSettings);
+            
+            // Functions
+            function fetchStatus() {
+                fetch(ENDPOINTS.status)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            statusIndicator.className = 'status-indicator status-online';
+                            statusText.textContent = 'Online';
+                        } else {
+                            statusIndicator.className = 'status-indicator status-offline';
+                            statusText.textContent = 'Offline';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching status:', error);
+                        statusIndicator.className = 'status-indicator status-offline';
+                        statusText.textContent = 'Error';
+                    });
             }
-        }
-        
-        // Function to run sync
-        async function runSync(full = false) {
-            try {
-                document.getElementById('logs').innerHTML += `<p class="info">${full ? 'Full' : 'Incremental'} sync started...</p>`;
-                
-                const response = await fetch(`/api/sync?full=${full}`);
-                const data = await response.json();
-                
-                if (data.success) {
-                    document.getElementById('logs').innerHTML += `<p class="success">${data.message}</p>`;
-                } else {
-                    document.getElementById('logs').innerHTML += `<p class="error">${data.message}</p>`;
-                }
-                
-                // Refresh sync status
-                fetchSyncStatus();
-            } catch (error) {
-                document.getElementById('logs').innerHTML += `<p class="error">Error running sync: ${error.message}</p>`;
+            
+            function fetchLogs() {
+                fetch(ENDPOINTS.logs)
+                    .then(response => response.json())
+                    .then(data => {
+                        logContainer.innerHTML = '';
+                        if (data.logs && data.logs.length > 0) {
+                            data.logs.forEach(log => {
+                                const logEntry = document.createElement('div');
+                                logEntry.className = `log-entry log-${log.level}`;
+                                logEntry.textContent = `[${formatTime(log.timestamp)}] ${log.message}`;
+                                logContainer.appendChild(logEntry);
+                            });
+                        } else {
+                            const logEntry = document.createElement('div');
+                            logEntry.className = 'log-entry log-info';
+                            logEntry.textContent = 'No logs available.';
+                            logContainer.appendChild(logEntry);
+                        }
+                        
+                        // Auto-scroll to bottom
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    })
+                    .catch(error => {
+                        console.error('Error fetching logs:', error);
+                        logContainer.innerHTML = '<div class="log-entry log-error">Error loading logs.</div>';
+                    });
             }
-        }
-        
-        // Event listeners
-        document.getElementById('run-sync').addEventListener('click', () => runSync(false));
-        document.getElementById('run-full-sync').addEventListener('click', () => runSync(true));
-        
-        // Initial load
-        fetchSyncStatus();
-        
-        // Auto-refresh every 30 seconds
-        setInterval(fetchSyncStatus, 30000);
+            
+            function fetchStats() {
+                fetch(ENDPOINTS.stats)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            const stats = data.stats;
+                            totalProducts.textContent = stats.totalProducts || '0';
+                            lastSync.textContent = formatTime(stats.lastSyncDate) || 'Never';
+                            
+                            // Calculate next sync time (1 hour after last sync)
+                            if (stats.lastSyncDate) {
+                                const lastSyncDate = new Date(stats.lastSyncDate);
+                                const nextSyncDate = new Date(lastSyncDate.getTime() + 60 * 60 * 1000);
+                                nextSync.textContent = formatTime(nextSyncDate);
+                            } else {
+                                nextSync.textContent = 'N/A';
+                            }
+                            
+                            syncStatus.textContent = 'Ready';
+                            
+                            // Update progress bar if we have total count information
+                            if (stats.totalProducts) {
+                                const progress = Math.min(100, Math.round((stats.totalProducts / (stats.totalProducts || 1)) * 100));
+                                syncProgressBar.style.width = `${progress}%`;
+                            }
+                        } else {
+                            totalProducts.textContent = '0';
+                            lastSync.textContent = 'Never';
+                            nextSync.textContent = 'N/A';
+                            syncStatus.textContent = 'Error';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching stats:', error);
+                        totalProducts.textContent = 'Error';
+                        lastSync.textContent = 'Error';
+                        nextSync.textContent = 'Error';
+                        syncStatus.textContent = 'Error';
+                    });
+            }
+            
+            function fetchHistory() {
+                fetch(ENDPOINTS.history)
+                    .then(response => response.json())
+                    .then(data => {
+                        syncHistory.innerHTML = '';
+                        if (data.history && data.history.length > 0) {
+                            data.history.forEach(item => {
+                                const syncItem = document.createElement('li');
+                                syncItem.className = 'sync-item';
+                                
+                                const syncTime = document.createElement('span');
+                                syncTime.className = 'sync-time';
+                                syncTime.textContent = formatTime(item.timestamp);
+                                
+                                const syncStatus = document.createElement('span');
+                                syncStatus.className = `sync-status ${item.success ? 'sync-success' : 'sync-error'}`;
+                                syncStatus.textContent = item.success ? 'Success' : 'Failed';
+                                
+                                if (item.count) {
+                                    const syncCount = document.createElement('span');
+                                    syncCount.className = 'sync-count';
+                                    syncCount.textContent = `${item.count} products`;
+                                    syncStatus.appendChild(syncCount);
+                                }
+                                
+                                syncItem.appendChild(syncTime);
+                                syncItem.appendChild(syncStatus);
+                                syncHistory.appendChild(syncItem);
+                            });
+                        } else {
+                            const syncItem = document.createElement('li');
+                            syncItem.className = 'sync-item';
+                            syncItem.textContent = 'No sync history available.';
+                            syncHistory.appendChild(syncItem);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching history:', error);
+                        syncHistory.innerHTML = '<li class="sync-item">Error loading sync history.</li>';
+                    });
+            }
+            
+            function triggerSync() {
+                syncBtn.disabled = true;
+                syncBtn.textContent = 'Syncing...';
+                syncStatus.textContent = 'Syncing';
+                
+                fetch(ENDPOINTS.sync)
+                    .then(response => response.json())
+                    .then(data => {
+                        syncBtn.disabled = false;
+                        syncBtn.textContent = 'Sync Now';
+                        
+                        // Add a log entry
+                        const logEntry = document.createElement('div');
+                        logEntry.className = `log-entry log-${data.success ? 'success' : 'error'}`;
+                        logEntry.textContent = `[${new Date().toISOString()}] ${data.message}`;
+                        logContainer.appendChild(logEntry);
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                        
+                        // Refresh data
+                        fetchStats();
+                        fetchHistory();
+                        fetchLogs();
+                    })
+                    .catch(error => {
+                        console.error('Error triggering sync:', error);
+                        syncBtn.disabled = false;
+                        syncBtn.textContent = 'Sync Now';
+                        
+                        // Add error log entry
+                        const logEntry = document.createElement('div');
+                        logEntry.className = 'log-entry log-error';
+                        logEntry.textContent = `[${new Date().toISOString()}] Error triggering sync: ${error.message}`;
+                        logContainer.appendChild(logEntry);
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    });
+            }
+            
+            function triggerFullSync() {
+                fullSyncBtn.disabled = true;
+                fullSyncBtn.textContent = 'Syncing...';
+                syncStatus.textContent = 'Full Sync';
+                
+                fetch(ENDPOINTS.fullSync)
+                    .then(response => response.json())
+                    .then(data => {
+                        fullSyncBtn.disabled = false;
+                        fullSyncBtn.textContent = 'Full Sync';
+                        
+                        // Add a log entry
+                        const logEntry = document.createElement('div');
+                        logEntry.className = `log-entry log-${data.success ? 'success' : 'error'}`;
+                        logEntry.textContent = `[${new Date().toISOString()}] ${data.message}`;
+                        logContainer.appendChild(logEntry);
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                        
+                        // Refresh data
+                        fetchStats();
+                        fetchHistory();
+                        fetchLogs();
+                    })
+                    .catch(error => {
+                        console.error('Error triggering full sync:', error);
+                        fullSyncBtn.disabled = false;
+                        fullSyncBtn.textContent = 'Full Sync';
+                        
+                        // Add error log entry
+                        const logEntry = document.createElement('div');
+                        logEntry.className = 'log-entry log-error';
+                        logEntry.textContent = `[${new Date().toISOString()}] Error triggering full sync: ${error.message}`;
+                        logContainer.appendChild(logEntry);
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    });
+            }
+            
+            function clearLogs() {
+                fetch(ENDPOINTS.clearLogs, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            logContainer.innerHTML = '<div class="log-entry log-info">Logs cleared.</div>';
+                        } else {
+                            logContainer.innerHTML = '<div class="log-entry log-error">Failed to clear logs.</div>';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error clearing logs:', error);
+                        logContainer.innerHTML = '<div class="log-entry log-error">Error clearing logs.</div>';
+                    });
+            }
+            
+            function loadEmailSettings() {
+                fetch(ENDPOINTS.email)
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('email').value = data.email || '';
+                        document.getElementById('notify-errors').checked = data.notifyErrors || false;
+                        document.getElementById('notify-sync').checked = data.notifySync || false;
+                    })
+                    .catch(error => {
+                        console.error('Error loading email settings:', error);
+                    });
+            }
+            
+            function saveEmailSettings(event) {
+                event.preventDefault();
+                
+                const email = document.getElementById('email').value;
+                const notifyErrors = document.getElementById('notify-errors').checked;
+                const notifySync = document.getElementById('notify-sync').checked;
+                
+                fetch(ENDPOINTS.email, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email,
+                        notifyErrors,
+                        notifySync
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Add success log entry
+                            const logEntry = document.createElement('div');
+                            logEntry.className = 'log-entry log-success';
+                            logEntry.textContent = `[${new Date().toISOString()}] Email notification settings updated.`;
+                            logContainer.appendChild(logEntry);
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        } else {
+                            // Add error log entry
+                            const logEntry = document.createElement('div');
+                            logEntry.className = 'log-entry log-error';
+                            logEntry.textContent = `[${new Date().toISOString()}] Failed to update email settings: ${data.message}`;
+                            logContainer.appendChild(logEntry);
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error saving email settings:', error);
+                        
+                        // Add error log entry
+                        const logEntry = document.createElement('div');
+                        logEntry.className = 'log-entry log-error';
+                        logEntry.textContent = `[${new Date().toISOString()}] Error saving email settings: ${error.message}`;
+                        logContainer.appendChild(logEntry);
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    });
+            }
+            
+            // Helper function to format timestamps
+            function formatTime(timestamp) {
+                if (!timestamp) return null;
+                
+                const date = new Date(timestamp);
+                return date.toLocaleString();
+            }
+        });
     </script>
 </body>
 </html>
