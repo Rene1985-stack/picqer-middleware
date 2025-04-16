@@ -15,12 +15,10 @@ const sqlConfig = {
   server: process.env.SQL_SERVER,
   database: process.env.SQL_DATABASE,
   options: {
-    encrypt: true,
-    trustServerCertificate: false
+    encrypt: true
   }
 };
 
-// Product ophalen + wegschrijven
 async function fetchAndStoreProducts() {
   const pageSize = 100;
   let page = 1;
@@ -29,7 +27,6 @@ async function fetchAndStoreProducts() {
   try {
     const pool = await sql.connect(sqlConfig);
 
-    // Maak de tabel aan als die niet bestaat
     await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'products')
       CREATE TABLE products (
@@ -90,8 +87,6 @@ async function fetchAndStoreProducts() {
       totalFetched += products.length;
       console.log(`✅ Pagina ${page} verwerkt, totaal ${totalFetched} producten`);
       page++;
-
-      // Wacht 1 seconde per request ivm Picqer rate limits
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
