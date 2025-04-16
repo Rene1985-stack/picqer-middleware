@@ -8,25 +8,21 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.send('✅ Middleware API draait. Gebruik /apikeys of /picklists voor Picqer-data.');
+  res.send('✅ Middleware API draait. Gebruik /products, /picklists of /apikeys voor Picqer-data.');
 });
 
 app.get('/apikeys', async (req, res) => {
   try {
-    console.log('🔧 DEBUG: BASE URL =', process.env.PICQER_BASE_URL);
-    console.log('🔧 DEBUG: API KEY =', process.env.PICQER_API_KEY);
-
     const response = await axios.get(`${process.env.PICQER_BASE_URL}/apikeys`, {
       headers: {
         Authorization: `Bearer ${process.env.PICQER_API_KEY}`
       }
     });
-
     res.json(response.data);
   } catch (err) {
     console.error('❌ Fout bij ophalen apikeys:', err.message, err.response?.data);
-    res.status(500).json({ 
-      error: 'Fout bij ophalen data uit Picqer (/apikeys)', 
+    res.status(500).json({
+      error: 'Fout bij ophalen data uit Picqer (/apikeys)',
       details: err.message,
       response: err.response?.data || null
     });
@@ -40,12 +36,30 @@ app.get('/picklists', async (req, res) => {
         Authorization: `Bearer ${process.env.PICQER_API_KEY}`
       }
     });
-
     res.json(response.data);
   } catch (err) {
     console.error('❌ Fout bij ophalen picklists:', err.message, err.response?.data);
-    res.status(500).json({ 
-      error: 'Fout bij ophalen data uit Picqer (/picklists)', 
+    res.status(500).json({
+      error: 'Fout bij ophalen data uit Picqer (/picklists)',
+      details: err.message,
+      response: err.response?.data || null
+    });
+  }
+});
+
+app.get('/products', async (req, res) => {
+  try {
+    const from = req.query.from || '2025-01-01';
+    const response = await axios.get(`${process.env.PICQER_BASE_URL}/products?updated_since=${from}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.PICQER_API_KEY}`
+      }
+    });
+    res.json(response.data);
+  } catch (err) {
+    console.error('❌ Fout bij ophalen products:', err.message, err.response?.data);
+    res.status(500).json({
+      error: 'Fout bij ophalen data uit Picqer (/products)',
       details: err.message,
       response: err.response?.data || null
     });
