@@ -1,12 +1,17 @@
 const axios = require('axios');
 
 /**
- * Service for interacting with the Picqer API
+ * Service for interacting with the Picqer API with enhanced debugging
  */
 class PicqerService {
   constructor(apiKey, baseUrl) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
+    
+    console.log('Initializing PicqerService with:');
+    console.log('API Key (first 5 chars):', this.apiKey.substring(0, 5) + '...');
+    console.log('Base URL:', this.baseUrl);
+    
     this.client = axios.create({
       baseURL: baseUrl,
       headers: {
@@ -14,6 +19,57 @@ class PicqerService {
         'Content-Type': 'application/json'
       }
     });
+    
+    // Add request interceptor for debugging
+    this.client.interceptors.request.use(request => {
+      console.log('Making request to:', request.baseURL + request.url);
+      console.log('Request headers:', JSON.stringify(request.headers));
+      return request;
+    });
+    
+    // Add response interceptor for debugging
+    this.client.interceptors.response.use(
+      response => {
+        console.log('Response status:', response.status);
+        console.log('Response headers:', JSON.stringify(response.headers));
+        return response;
+      },
+      error => {
+        console.error('Request failed:');
+        if (error.response) {
+          // The request was made and the server responded with a status code
+          // that falls out of the range of 2xx
+          console.error('Response status:', error.response.status);
+          console.error('Response headers:', JSON.stringify(error.response.headers));
+          console.error('Response data:', JSON.stringify(error.response.data));
+        } else if (error.request) {
+          // The request was made but no response was received
+          console.error('No response received:', error.request);
+        } else {
+          // Something happened in setting up the request that triggered an Error
+          console.error('Error message:', error.message);
+        }
+        console.error('Error config:', JSON.stringify(error.config));
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  /**
+   * Test the API connection
+   * @returns {Promise<Object>} - API response
+   */
+  async testConnection() {
+    try {
+      console.log('Testing connection to Picqer API...');
+      // Try to get a single product to test the connection
+      const response = await this.client.get('/products', { params: { limit: 1 } });
+      console.log('Connection test successful!');
+      return response.data;
+    } catch (error) {
+      console.error('Connection test failed:', error.message);
+      throw error;
+    }
   }
 
   /**
