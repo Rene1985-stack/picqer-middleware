@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.send('✅ Middleware API draait. Gebruik /apikeys om Picqer API-keys op te halen.');
+  res.send('✅ Middleware API draait. Gebruik /apikeys of /picklists voor Picqer-data.');
 });
 
 app.get('/apikeys', async (req, res) => {
@@ -26,7 +26,26 @@ app.get('/apikeys', async (req, res) => {
   } catch (err) {
     console.error('❌ Fout bij ophalen apikeys:', err.message, err.response?.data);
     res.status(500).json({ 
-      error: 'Fout bij ophalen data uit Picqer', 
+      error: 'Fout bij ophalen data uit Picqer (/apikeys)', 
+      details: err.message,
+      response: err.response?.data || null
+    });
+  }
+});
+
+app.get('/picklists', async (req, res) => {
+  try {
+    const response = await axios.get(`${process.env.PICQER_BASE_URL}/picklists`, {
+      headers: {
+        Authorization: `Bearer ${process.env.PICQER_API_KEY}`
+      }
+    });
+
+    res.json(response.data);
+  } catch (err) {
+    console.error('❌ Fout bij ophalen picklists:', err.message, err.response?.data);
+    res.status(500).json({ 
+      error: 'Fout bij ophalen data uit Picqer (/picklists)', 
       details: err.message,
       response: err.response?.data || null
     });
