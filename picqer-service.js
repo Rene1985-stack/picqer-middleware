@@ -4,7 +4,7 @@ const sql = require('mssql');
 /**
  * Enhanced service for interacting with the Picqer API and syncing all product attributes to Azure SQL
  * With improved pagination and duplicate prevention
- * Modified to work with existing database structure
+ * Modified to work with existing database structure and dynamically create missing columns
  */
 class PicqerService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -13,7 +13,7 @@ class PicqerService {
     this.sqlConfig = sqlConfig;
     
     console.log('Initializing PicqerService with:');
-    console.log('API Key (first 5 chars):', this.apiKey.substring(0, 5) + '...');
+    console.log('API Key (first 5 chars):', this.apiKey ? this.apiKey.substring(0, 5) + '...' : 'undefined');
     console.log('Base URL:', this.baseUrl);
     
     // Create Base64 encoded credentials (apiKey + ":")
@@ -66,41 +66,16 @@ class PicqerService {
       console.log('Initializing database with expanded product schema...');
       const pool = await sql.connect(this.sqlConfig);
       
-      // Create expanded Products table with all Picqer attributes if it doesn't exist
+      // Create Products table if it doesn't exist
       await pool.request().query(`
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Products')
         BEGIN
           CREATE TABLE Products (
             id INT IDENTITY(1,1) PRIMARY KEY,
             idproduct INT NOT NULL,
-            idvatgroup INT NULL,
             name NVARCHAR(255) NOT NULL,
-            price DECIMAL(18,2) NULL,
-            fixedstockprice DECIMAL(18,2) NULL,
-            idsupplier INT NULL,
             productcode NVARCHAR(100) NOT NULL,
-            productcode_supplier NVARCHAR(100) NULL,
-            deliverytime INT NULL,
-            description NVARCHAR(MAX) NULL,
-            barcode NVARCHAR(100) NULL,
-            type NVARCHAR(50) NULL,
-            unlimitedstock BIT NULL,
-            weight INT NULL,
-            length INT NULL,
-            width INT NULL,
-            height INT NULL,
-            minimum_purchase_quantity INT NULL,
-            purchase_in_quantities_of INT NULL,
-            hs_code NVARCHAR(50) NULL,
-            country_of_origin NVARCHAR(2) NULL,
-            active BIT NULL,
-            idfulfilment_customer INT NULL,
-            analysis_pick_amount_per_day FLOAT NULL,
-            analysis_abc_classification NVARCHAR(1) NULL,
-            tags NVARCHAR(MAX) NULL,
-            productfields NVARCHAR(MAX) NULL,
-            images NVARCHAR(MAX) NULL,
-            pricelists NVARCHAR(MAX) NULL,
+            price DECIMAL(18,2) NULL,
             stock INT NULL,
             created DATETIME NULL,
             updated DATETIME NULL,
@@ -111,7 +86,6 @@ class PicqerService {
           CREATE INDEX IX_Products_idproduct ON Products(idproduct);
           CREATE INDEX IX_Products_productcode ON Products(productcode);
           CREATE INDEX IX_Products_updated ON Products(updated);
-          CREATE INDEX IX_Products_barcode ON Products(barcode);
         END
       `);
       
@@ -155,11 +129,26 @@ class PicqerService {
           if (!entityNameColumnExists) {
             // Add entity_name column if it doesn't exist
             console.log('Adding entity_name column to SyncStatus table...');
-            await pool.request().query(`
-              ALTER TABLE SyncStatus 
-              ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products',
-              CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
-            `);
+            try {
+              await pool.request().query(`
+                ALTER TABLE SyncStatus 
+                ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products'
+              `);
+              
+              // Add unique constraint in a separate statement
+              try {
+                await pool.request().query(`
+                  ALTER TABLE SyncStatus 
+                  ADD CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
+                `);
+              } catch (constraintError) {
+                console.warn('Error adding constraint:', constraintError.message);
+                // Continue even if constraint creation fails
+              }
+            } catch (alterError) {
+              console.warn('Error adding entity_name column:', alterError.message);
+              // Continue even if column addition fails
+            }
           }
         } catch (columnError) {
           console.warn('Error checking for entity_name column:', columnError.message);
@@ -167,11 +156,84 @@ class PicqerService {
         }
       }
       
+      // Ensure all expanded product columns exist
+      await this.ensureProductColumnsExist();
+      
       console.log('✅ Database initialized successfully with expanded schema');
       return true;
     } catch (error) {
       console.error('❌ Error initializing database:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Ensure all expanded product columns exist in the Products table
+   * @returns {Promise<boolean>} - Success status
+   */
+  async ensureProductColumnsExist() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Define all columns that should be in the expanded Products table
+      const columns = [
+        { name: 'idvatgroup', type: 'INT', nullable: true },
+        { name: 'fixedstockprice', type: 'DECIMAL(18,2)', nullable: true },
+        { name: 'idsupplier', type: 'INT', nullable: true },
+        { name: 'productcode_supplier', type: 'NVARCHAR(100)', nullable: true },
+        { name: 'deliverytime', type: 'INT', nullable: true },
+        { name: 'description', type: 'NVARCHAR(MAX)', nullable: true },
+        { name: 'barcode', type: 'NVARCHAR(100)', nullable: true },
+        { name: 'type', type: 'NVARCHAR(50)', nullable: true },
+        { name: 'unlimitedstock', type: 'BIT', nullable: true },
+        { name: 'weight', type: 'INT', nullable: true },
+        { name: 'length', type: 'INT', nullable: true },
+        { name: 'width', type: 'INT', nullable: true },
+        { name: 'height', type: 'INT', nullable: true },
+        { name: 'minimum_purchase_quantity', type: 'INT', nullable: true },
+        { name: 'purchase_in_quantities_of', type: 'INT', nullable: true },
+        { name: 'hs_code', type: 'NVARCHAR(50)', nullable: true },
+        { name: 'country_of_origin', type: 'NVARCHAR(2)', nullable: true },
+        { name: 'active', type: 'BIT', nullable: true },
+        { name: 'idfulfilment_customer', type: 'INT', nullable: true },
+        { name: 'analysis_pick_amount_per_day', type: 'FLOAT', nullable: true },
+        { name: 'analysis_abc_classification', type: 'NVARCHAR(1)', nullable: true },
+        { name: 'tags', type: 'NVARCHAR(MAX)', nullable: true },
+        { name: 'productfields', type: 'NVARCHAR(MAX)', nullable: true },
+        { name: 'images', type: 'NVARCHAR(MAX)', nullable: true },
+        { name: 'pricelists', type: 'NVARCHAR(MAX)', nullable: true }
+      ];
+      
+      // Check each column and add if it doesn't exist
+      for (const column of columns) {
+        try {
+          const columnResult = await pool.request().query(`
+            SELECT COUNT(*) AS columnExists 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'Products' AND COLUMN_NAME = '${column.name}'
+          `);
+          
+          const columnExists = columnResult.recordset[0].columnExists > 0;
+          
+          if (!columnExists) {
+            console.log(`Adding ${column.name} column to Products table...`);
+            const nullableStr = column.nullable ? 'NULL' : 'NOT NULL';
+            await pool.request().query(`
+              ALTER TABLE Products 
+              ADD ${column.name} ${column.type} ${nullableStr}
+            `);
+          }
+        } catch (columnError) {
+          console.warn(`Error checking/adding column ${column.name}:`, columnError.message);
+          // Continue with next column even if this one fails
+        }
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error ensuring product columns exist:', error.message);
+      // Return true anyway to allow the process to continue
+      return true;
     }
   }
 
@@ -482,9 +544,19 @@ class PicqerService {
             try {
               await pool.request().query(`
                 ALTER TABLE SyncStatus 
-                ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products',
-                CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
+                ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products'
               `);
+              
+              // Try to add constraint in a separate statement
+              try {
+                await pool.request().query(`
+                  ALTER TABLE SyncStatus 
+                  ADD CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
+                `);
+              } catch (constraintError) {
+                console.warn('Error adding constraint:', constraintError.message);
+                // Continue even if constraint creation fails
+              }
               
               // Try insert again with entity_name
               await pool.request()
@@ -531,7 +603,29 @@ class PicqerService {
   }
 
   /**
-   * Save products to the database with all attributes
+   * Get the available columns in the Products table
+   * @returns {Promise<Array<string>>} - Array of column names
+   */
+  async getProductTableColumns() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      const result = await pool.request().query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'Products'
+      `);
+      
+      return result.recordset.map(row => row.COLUMN_NAME);
+    } catch (error) {
+      console.error('Error getting product table columns:', error.message);
+      // Return basic columns as fallback
+      return ['id', 'idproduct', 'name', 'productcode', 'price', 'stock', 'created', 'updated', 'last_sync_date'];
+    }
+  }
+
+  /**
+   * Save products to the database with dynamic column handling
    * @param {Array} products - Array of products from Picqer API
    * @returns {Promise<number>} - Number of products saved
    */
@@ -547,11 +641,15 @@ class PicqerService {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
+      // Get available columns in the Products table
+      const availableColumns = await this.getProductTableColumns();
+      console.log(`Available columns in Products table: ${availableColumns.length}`);
+      
       // Process products in batches of 50 for better performance
       const batchSize = 50;
       for (let i = 0; i < products.length; i += batchSize) {
         const batch = products.slice(i, i + batchSize);
-        console.log(`Processing batch ${i / batchSize + 1} of ${Math.ceil(products.length / batchSize)}...`);
+        console.log(`Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(products.length / batchSize)}...`);
         
         // Process each product in the batch
         for (const product of batch) {
@@ -563,113 +661,129 @@ class PicqerService {
             
             const exists = checkResult.recordset[0].count > 0;
             
-            // Prepare all inputs with proper type conversion
+            // Start building the request with required fields
             const request = pool.request()
               .input('idproduct', sql.Int, product.idproduct)
-              .input('idvatgroup', sql.Int, product.idvatgroup || null)
               .input('name', sql.NVarChar, product.name || '')
-              .input('price', sql.Decimal(18, 2), product.price ? parseFloat(product.price) || 0 : 0)
-              .input('fixedstockprice', sql.Decimal(18, 2), product.fixedstockprice ? parseFloat(product.fixedstockprice) || 0 : 0)
-              .input('idsupplier', sql.Int, product.idsupplier || null)
               .input('productcode', sql.NVarChar, product.productcode || '')
-              .input('productcode_supplier', sql.NVarChar, product.productcode_supplier || null)
-              .input('deliverytime', sql.Int, product.deliverytime || null)
-              .input('description', sql.NVarChar(sql.MAX), product.description || null)
-              .input('barcode', sql.NVarChar, product.barcode || null)
-              .input('type', sql.NVarChar, product.type || null)
-              .input('unlimitedstock', sql.Bit, product.unlimitedstock ? 1 : 0)
-              .input('weight', sql.Int, product.weight || null)
-              .input('length', sql.Int, product.length || null)
-              .input('width', sql.Int, product.width || null)
-              .input('height', sql.Int, product.height || null)
-              .input('minimum_purchase_quantity', sql.Int, product.minimum_purchase_quantity || null)
-              .input('purchase_in_quantities_of', sql.Int, product.purchase_in_quantities_of || null)
-              .input('hs_code', sql.NVarChar, product.hs_code || null)
-              .input('country_of_origin', sql.NVarChar, product.country_of_origin || null)
-              .input('active', sql.Bit, product.active ? 1 : 0)
-              .input('idfulfilment_customer', sql.Int, product.idfulfilment_customer || null)
-              .input('analysis_pick_amount_per_day', sql.Float, product.analysis_pick_amount_per_day || null)
-              .input('analysis_abc_classification', sql.NVarChar(1), product.analysis_abc_classification || null)
-              .input('tags', sql.NVarChar(sql.MAX), product.tags ? JSON.stringify(product.tags) : null)
-              .input('productfields', sql.NVarChar(sql.MAX), product.productfields ? JSON.stringify(product.productfields) : null)
-              .input('images', sql.NVarChar(sql.MAX), product.images ? JSON.stringify(product.images) : null)
-              .input('pricelists', sql.NVarChar(sql.MAX), product.pricelists ? JSON.stringify(product.pricelists) : null)
-              .input('stock', sql.Int, product.stock ? parseInt(product.stock, 10) || 0 : 0)
-              .input('created', sql.DateTime, product.created ? new Date(product.created) : new Date())
-              .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : new Date())
               .input('last_sync_date', sql.DateTime, new Date());
             
+            // Add optional fields only if the column exists in the database
+            if (availableColumns.includes('price')) {
+              request.input('price', sql.Decimal(18, 2), product.price ? parseFloat(product.price) || 0 : 0);
+            }
+            
+            if (availableColumns.includes('stock')) {
+              request.input('stock', sql.Int, product.stock ? parseInt(product.stock, 10) || 0 : 0);
+            }
+            
+            if (availableColumns.includes('created')) {
+              request.input('created', sql.DateTime, product.created ? new Date(product.created) : new Date());
+            }
+            
+            if (availableColumns.includes('updated')) {
+              request.input('updated', sql.DateTime, product.updated ? new Date(product.updated) : new Date());
+            }
+            
+            // Add all other fields dynamically if they exist in the database
+            const additionalFields = [
+              { name: 'idvatgroup', type: sql.Int, value: product.idvatgroup || null },
+              { name: 'fixedstockprice', type: sql.Decimal(18, 2), value: product.fixedstockprice ? parseFloat(product.fixedstockprice) || 0 : 0 },
+              { name: 'idsupplier', type: sql.Int, value: product.idsupplier || null },
+              { name: 'productcode_supplier', type: sql.NVarChar, value: product.productcode_supplier || null },
+              { name: 'deliverytime', type: sql.Int, value: product.deliverytime || null },
+              { name: 'description', type: sql.NVarChar(sql.MAX), value: product.description || null },
+              { name: 'barcode', type: sql.NVarChar, value: product.barcode || null },
+              { name: 'type', type: sql.NVarChar, value: product.type || null },
+              { name: 'unlimitedstock', type: sql.Bit, value: product.unlimitedstock ? 1 : 0 },
+              { name: 'weight', type: sql.Int, value: product.weight || null },
+              { name: 'length', type: sql.Int, value: product.length || null },
+              { name: 'width', type: sql.Int, value: product.width || null },
+              { name: 'height', type: sql.Int, value: product.height || null },
+              { name: 'minimum_purchase_quantity', type: sql.Int, value: product.minimum_purchase_quantity || null },
+              { name: 'purchase_in_quantities_of', type: sql.Int, value: product.purchase_in_quantities_of || null },
+              { name: 'hs_code', type: sql.NVarChar, value: product.hs_code || null },
+              { name: 'country_of_origin', type: sql.NVarChar, value: product.country_of_origin || null },
+              { name: 'active', type: sql.Bit, value: product.active ? 1 : 0 },
+              { name: 'idfulfilment_customer', type: sql.Int, value: product.idfulfilment_customer || null },
+              { name: 'analysis_pick_amount_per_day', type: sql.Float, value: product.analysis_pick_amount_per_day || null },
+              { name: 'analysis_abc_classification', type: sql.NVarChar(1), value: product.analysis_abc_classification || null },
+              { name: 'tags', type: sql.NVarChar(sql.MAX), value: product.tags ? JSON.stringify(product.tags) : null },
+              { name: 'productfields', type: sql.NVarChar(sql.MAX), value: product.productfields ? JSON.stringify(product.productfields) : null },
+              { name: 'images', type: sql.NVarChar(sql.MAX), value: product.images ? JSON.stringify(product.images) : null },
+              { name: 'pricelists', type: sql.NVarChar(sql.MAX), value: product.pricelists ? JSON.stringify(product.pricelists) : null }
+            ];
+            
+            for (const field of additionalFields) {
+              if (availableColumns.includes(field.name)) {
+                request.input(field.name, field.type, field.value);
+              }
+            }
+            
+            // Build column lists for SQL query
+            const availableFieldNames = ['idproduct', 'name', 'productcode', 'last_sync_date'];
+            const availableParamNames = ['@idproduct', '@name', '@productcode', '@last_sync_date'];
+            
+            if (availableColumns.includes('price')) {
+              availableFieldNames.push('price');
+              availableParamNames.push('@price');
+            }
+            
+            if (availableColumns.includes('stock')) {
+              availableFieldNames.push('stock');
+              availableParamNames.push('@stock');
+            }
+            
+            if (availableColumns.includes('created')) {
+              availableFieldNames.push('created');
+              availableParamNames.push('@created');
+            }
+            
+            if (availableColumns.includes('updated')) {
+              availableFieldNames.push('updated');
+              availableParamNames.push('@updated');
+            }
+            
+            // Add additional fields to column lists
+            for (const field of additionalFields) {
+              if (availableColumns.includes(field.name)) {
+                availableFieldNames.push(field.name);
+                availableParamNames.push(`@${field.name}`);
+              }
+            }
+            
+            // Execute query based on whether product exists
             if (exists) {
-              // Update existing product
+              // Build SET clause for UPDATE
+              const setClause = availableFieldNames
+                .filter(name => name !== 'idproduct') // Don't update primary key
+                .map(name => `${name} = @${name}`)
+                .join(', ');
+              
               await request.query(`
-                UPDATE Products SET
-                  idvatgroup = @idvatgroup,
-                  name = @name,
-                  price = @price,
-                  fixedstockprice = @fixedstockprice,
-                  idsupplier = @idsupplier,
-                  productcode = @productcode,
-                  productcode_supplier = @productcode_supplier,
-                  deliverytime = @deliverytime,
-                  description = @description,
-                  barcode = @barcode,
-                  type = @type,
-                  unlimitedstock = @unlimitedstock,
-                  weight = @weight,
-                  length = @length,
-                  width = @width,
-                  height = @height,
-                  minimum_purchase_quantity = @minimum_purchase_quantity,
-                  purchase_in_quantities_of = @purchase_in_quantities_of,
-                  hs_code = @hs_code,
-                  country_of_origin = @country_of_origin,
-                  active = @active,
-                  idfulfilment_customer = @idfulfilment_customer,
-                  analysis_pick_amount_per_day = @analysis_pick_amount_per_day,
-                  analysis_abc_classification = @analysis_abc_classification,
-                  tags = @tags,
-                  productfields = @productfields,
-                  images = @images,
-                  pricelists = @pricelists,
-                  stock = @stock,
-                  created = @created,
-                  updated = @updated,
-                  last_sync_date = @last_sync_date
+                UPDATE Products SET ${setClause}
                 WHERE idproduct = @idproduct
               `);
             } else {
-              // Insert new product
+              // Build column and value lists for INSERT
+              const columnList = availableFieldNames.join(', ');
+              const valueList = availableParamNames.join(', ');
+              
               await request.query(`
-                INSERT INTO Products (
-                  idproduct, idvatgroup, name, price, fixedstockprice, idsupplier,
-                  productcode, productcode_supplier, deliverytime, description, barcode,
-                  type, unlimitedstock, weight, length, width, height,
-                  minimum_purchase_quantity, purchase_in_quantities_of, hs_code, country_of_origin,
-                  active, idfulfilment_customer, analysis_pick_amount_per_day, analysis_abc_classification,
-                  tags, productfields, images, pricelists, stock, created, updated, last_sync_date
-                ) VALUES (
-                  @idproduct, @idvatgroup, @name, @price, @fixedstockprice, @idsupplier,
-                  @productcode, @productcode_supplier, @deliverytime, @description, @barcode,
-                  @type, @unlimitedstock, @weight, @length, @width, @height,
-                  @minimum_purchase_quantity, @purchase_in_quantities_of, @hs_code, @country_of_origin,
-                  @active, @idfulfilment_customer, @analysis_pick_amount_per_day, @analysis_abc_classification,
-                  @tags, @productfields, @images, @pricelists, @stock, @created, @updated, @last_sync_date
-                )
+                INSERT INTO Products (${columnList})
+                VALUES (${valueList})
               `);
             }
             
             savedCount++;
           } catch (productError) {
             console.error(`Error saving product ${product.idproduct}:`, productError.message);
-            // Continue with next product
+            // Continue with next product even if this one fails
           }
         }
-        
-        // Log progress after each batch
-        console.log(`Saved ${savedCount} products so far...`);
       }
       
-      console.log(`✅ Successfully saved ${savedCount} products to database`);
+      console.log(`✅ Saved ${savedCount} products to database`);
       return savedCount;
     } catch (error) {
       console.error('❌ Error saving to database:', error.message);
@@ -679,58 +793,46 @@ class PicqerService {
 
   /**
    * Perform a full sync of all products
-   * @returns {Promise<Object>} - Sync results
+   * @returns {Promise<Object>} - Sync result
    */
   async performFullSync() {
     try {
-      console.log('Starting full product sync...');
-      
-      // Initialize database if needed
-      await this.initializeDatabase();
+      console.log('Starting full sync...');
       
       // Get all products from Picqer
       const products = await this.getAllProducts();
-      const totalProducts = products.length;
-      
-      console.log(`Retrieved ${totalProducts} unique products from Picqer`);
+      console.log(`Retrieved ${products.length} products from Picqer`);
       
       // Save products to database
       const savedCount = await this.saveProductsToDatabase(products);
-      const totalInDb = await this.getProductCountFromDatabase();
       
       // Update sync status
-      await this.updateSyncStatus('products', new Date().toISOString(), totalInDb, savedCount);
+      const totalCount = await this.getProductCountFromDatabase();
+      await this.updateSyncStatus('products', new Date().toISOString(), totalCount, savedCount);
       
-      console.log(`✅ Full sync completed: ${savedCount} products processed`);
-      
+      console.log('✅ Full sync completed successfully');
       return {
         success: true,
-        message: `Full sync completed: ${savedCount} products processed`,
-        stats: {
-          retrieved: totalProducts,
-          saved: savedCount,
-          totalInDatabase: totalInDb
-        }
+        message: `Full sync completed successfully. Saved ${savedCount} products.`,
+        totalCount,
+        savedCount
       };
     } catch (error) {
-      console.error('❌ Full sync failed:', error.message);
+      console.error('❌ Sync failed:', error.message);
       return {
         success: false,
-        message: `Full sync failed: ${error.message}`
+        message: `Sync failed: ${error.message}`
       };
     }
   }
 
   /**
    * Perform an incremental sync of products updated since last sync
-   * @returns {Promise<Object>} - Sync results
+   * @returns {Promise<Object>} - Sync result
    */
   async performIncrementalSync() {
     try {
-      console.log('Starting incremental product sync...');
-      
-      // Initialize database if needed
-      await this.initializeDatabase();
+      console.log('Starting incremental sync...');
       
       // Get last sync date
       const lastSyncDate = await this.getLastSyncDate('products');
@@ -738,46 +840,27 @@ class PicqerService {
       
       // Get products updated since last sync
       const products = await this.getProductsUpdatedSince(lastSyncDate);
-      const totalProducts = products.length;
-      
-      console.log(`Retrieved ${totalProducts} updated products from Picqer`);
-      
-      if (totalProducts === 0) {
-        console.log('No products updated since last sync.');
-        return {
-          success: true,
-          message: 'No products updated since last sync.',
-          stats: {
-            retrieved: 0,
-            saved: 0,
-            totalInDatabase: await this.getProductCountFromDatabase()
-          }
-        };
-      }
+      console.log(`Retrieved ${products.length} updated products from Picqer`);
       
       // Save products to database
       const savedCount = await this.saveProductsToDatabase(products);
-      const totalInDb = await this.getProductCountFromDatabase();
       
       // Update sync status
-      await this.updateSyncStatus('products', new Date().toISOString(), totalInDb, savedCount);
+      const totalCount = await this.getProductCountFromDatabase();
+      await this.updateSyncStatus('products', new Date().toISOString(), totalCount, savedCount);
       
-      console.log(`✅ Incremental sync completed: ${savedCount} products processed`);
-      
+      console.log('✅ Incremental sync completed successfully');
       return {
         success: true,
-        message: `Incremental sync completed: ${savedCount} products processed`,
-        stats: {
-          retrieved: totalProducts,
-          saved: savedCount,
-          totalInDatabase: totalInDb
-        }
+        message: `Incremental sync completed successfully. Saved ${savedCount} products.`,
+        totalCount,
+        savedCount
       };
     } catch (error) {
-      console.error('❌ Incremental sync failed:', error.message);
+      console.error('❌ Sync failed:', error.message);
       return {
         success: false,
-        message: `Incremental sync failed: ${error.message}`
+        message: `Sync failed: ${error.message}`
       };
     }
   }
