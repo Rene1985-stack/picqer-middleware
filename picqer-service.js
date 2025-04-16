@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 /**
- * Service for interacting with the Picqer API with enhanced debugging
+ * Service for interacting with the Picqer API using Basic Authentication
  */
 class PicqerService {
   constructor(apiKey, baseUrl) {
@@ -12,10 +12,17 @@ class PicqerService {
     console.log('API Key (first 5 chars):', this.apiKey.substring(0, 5) + '...');
     console.log('Base URL:', this.baseUrl);
     
+    // Create Basic Authentication header
+    // Picqer uses the API key as the username and an empty password
+    const auth = {
+      username: this.apiKey,
+      password: ''
+    };
+    
     this.client = axios.create({
       baseURL: baseUrl,
+      auth: auth,
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       }
     });
@@ -31,7 +38,6 @@ class PicqerService {
     this.client.interceptors.response.use(
       response => {
         console.log('Response status:', response.status);
-        console.log('Response headers:', JSON.stringify(response.headers));
         return response;
       },
       error => {
@@ -40,7 +46,6 @@ class PicqerService {
           // The request was made and the server responded with a status code
           // that falls out of the range of 2xx
           console.error('Response status:', error.response.status);
-          console.error('Response headers:', JSON.stringify(error.response.headers));
           console.error('Response data:', JSON.stringify(error.response.data));
         } else if (error.request) {
           // The request was made but no response was received
@@ -49,7 +54,6 @@ class PicqerService {
           // Something happened in setting up the request that triggered an Error
           console.error('Error message:', error.message);
         }
-        console.error('Error config:', JSON.stringify(error.config));
         return Promise.reject(error);
       }
     );
