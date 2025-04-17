@@ -349,6 +349,95 @@
             align-items: center;
             justify-content: center;
         }
+
+        /* Entity tabs */
+        .entity-tabs {
+            display: flex;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--light-gray);
+            overflow-x: auto;
+        }
+        
+        .entity-tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--gray);
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        
+        .entity-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+        
+        .entity-tab:hover {
+            color: var(--primary-dark);
+        }
+
+        /* Entity content */
+        .entity-content {
+            display: none;
+        }
+        
+        .entity-content.active {
+            display: block;
+        }
+
+        /* Filter dropdown */
+        .filter-dropdown {
+            position: relative;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        
+        .filter-dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: white;
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1;
+            border-radius: 4px;
+            padding: 5px 0;
+        }
+        
+        .filter-dropdown:hover .filter-dropdown-content {
+            display: block;
+        }
+        
+        .filter-option {
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .filter-option:hover {
+            background-color: var(--light-gray);
+        }
+        
+        .filter-option.active {
+            background-color: var(--primary-light);
+            color: var(--secondary);
+        }
+
+        /* Retry button */
+        .retry-btn {
+            padding: 2px 8px;
+            font-size: 12px;
+            margin-left: 8px;
+            background-color: var(--warning);
+            color: var(--dark);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .retry-btn:hover {
+            background-color: #e0a800;
+        }
     </style>
 </head>
 <body>
@@ -369,31 +458,191 @@
                     <div class="card-header">
                         <h2 class="card-title">Synchronization</h2>
                         <div class="card-actions">
+                            <div class="filter-dropdown">
+                                <button class="btn btn-outline" id="filter-btn">Filter</button>
+                                <div class="filter-dropdown-content" id="filter-options">
+                                    <div class="filter-option active" data-filter="all">All</div>
+                                    <div class="filter-option" data-filter="success">Success</div>
+                                    <div class="filter-option" data-filter="error">Error</div>
+                                </div>
+                            </div>
                             <button class="btn btn-primary" id="sync-btn">Sync Now</button>
                             <button class="btn btn-outline" id="full-sync-btn">Full Sync</button>
                         </div>
                     </div>
+                    
+                    <div class="entity-tabs">
+                        <div class="entity-tab active" data-entity="all">All Entities</div>
+                        <div class="entity-tab" data-entity="products">Products</div>
+                        <div class="entity-tab" data-entity="picklists">Picklists</div>
+                        <div class="entity-tab" data-entity="warehouses">Warehouses</div>
+                        <div class="entity-tab" data-entity="users">Users</div>
+                        <div class="entity-tab" data-entity="suppliers">Suppliers</div>
+                    </div>
+                    
                     <div class="progress-container">
                         <div class="progress">
                             <div class="progress-bar" id="sync-progress-bar" style="width: 0%"></div>
                         </div>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="total-products">--</div>
-                            <div class="stat-label">Total Products</div>
+                    
+                    <!-- All Entities Stats -->
+                    <div class="entity-content active" id="all-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-products">--</div>
+                                <div class="stat-label">Total Products</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-picklists">--</div>
+                                <div class="stat-label">Total Picklists</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-warehouses">--</div>
+                                <div class="stat-label">Total Warehouses</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-users">--</div>
+                                <div class="stat-label">Total Users</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-suppliers">--</div>
+                                <div class="stat-label">Total Suppliers</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="last-sync">--</div>
-                            <div class="stat-label">Last Sync</div>
+                    </div>
+                    
+                    <!-- Products Stats -->
+                    <div class="entity-content" id="products-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-count">--</div>
+                                <div class="stat-label">Total Products</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="next-sync">--</div>
-                            <div class="stat-label">Next Sync</div>
+                        <div class="card-actions" style="margin-top: 15px; justify-content: center;">
+                            <button class="btn btn-primary" id="sync-products-btn">Sync Products</button>
+                            <button class="btn btn-outline" id="full-sync-products-btn">Full Sync Products</button>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="sync-status">--</div>
-                            <div class="stat-label">Status</div>
+                    </div>
+                    
+                    <!-- Picklists Stats -->
+                    <div class="entity-content" id="picklists-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-count">--</div>
+                                <div class="stat-label">Total Picklists</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                        <div class="card-actions" style="margin-top: 15px; justify-content: center;">
+                            <button class="btn btn-primary" id="sync-picklists-btn">Sync Picklists</button>
+                            <button class="btn btn-outline" id="full-sync-picklists-btn">Full Sync Picklists</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Warehouses Stats -->
+                    <div class="entity-content" id="warehouses-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-count">--</div>
+                                <div class="stat-label">Total Warehouses</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                        <div class="card-actions" style="margin-top: 15px; justify-content: center;">
+                            <button class="btn btn-primary" id="sync-warehouses-btn">Sync Warehouses</button>
+                            <button class="btn btn-outline" id="full-sync-warehouses-btn">Full Sync Warehouses</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Users Stats -->
+                    <div class="entity-content" id="users-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-count">--</div>
+                                <div class="stat-label">Total Users</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                        <div class="card-actions" style="margin-top: 15px; justify-content: center;">
+                            <button class="btn btn-primary" id="sync-users-btn">Sync Users</button>
+                            <button class="btn btn-outline" id="full-sync-users-btn">Full Sync Users</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Suppliers Stats -->
+                    <div class="entity-content" id="suppliers-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-count">--</div>
+                                <div class="stat-label">Total Suppliers</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                        <div class="card-actions" style="margin-top: 15px; justify-content: center;">
+                            <button class="btn btn-primary" id="sync-suppliers-btn">Sync Suppliers</button>
+                            <button class="btn btn-outline" id="full-sync-suppliers-btn">Full Sync Suppliers</button>
                         </div>
                     </div>
                 </div>
@@ -401,6 +650,19 @@
                 <div class="card">
                     <div class="card-header">
                         <h2 class="card-title">Sync History</h2>
+                        <div class="card-actions">
+                            <div class="filter-dropdown">
+                                <button class="btn btn-outline" id="history-filter-btn">Filter</button>
+                                <div class="filter-dropdown-content" id="history-filter-options">
+                                    <div class="filter-option active" data-filter="all">All Entities</div>
+                                    <div class="filter-option" data-filter="products">Products</div>
+                                    <div class="filter-option" data-filter="picklists">Picklists</div>
+                                    <div class="filter-option" data-filter="warehouses">Warehouses</div>
+                                    <div class="filter-option" data-filter="users">Users</div>
+                                    <div class="filter-option" data-filter="suppliers">Suppliers</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <ul class="sync-history" id="sync-history">
                         <li class="sync-item">
@@ -416,6 +678,16 @@
                     <div class="card-header">
                         <h2 class="card-title">Logs</h2>
                         <div class="card-actions">
+                            <div class="filter-dropdown">
+                                <button class="btn btn-outline" id="logs-filter-btn">Filter</button>
+                                <div class="filter-dropdown-content" id="logs-filter-options">
+                                    <div class="filter-option active" data-filter="all">All</div>
+                                    <div class="filter-option" data-filter="info">Info</div>
+                                    <div class="filter-option" data-filter="success">Success</div>
+                                    <div class="filter-option" data-filter="warning">Warning</div>
+                                    <div class="filter-option" data-filter="error">Error</div>
+                                </div>
+                            </div>
                             <button class="btn btn-outline" id="clear-logs-btn">Clear Logs</button>
                         </div>
                     </div>
@@ -463,12 +735,35 @@
             const clearLogsBtn = document.getElementById('clear-logs-btn');
             const logContainer = document.getElementById('log-container');
             const totalProducts = document.getElementById('total-products');
+            const totalPicklists = document.getElementById('total-picklists');
+            const totalWarehouses = document.getElementById('total-warehouses');
+            const totalUsers = document.getElementById('total-users');
+            const totalSuppliers = document.getElementById('total-suppliers');
             const lastSync = document.getElementById('last-sync');
-            const nextSync = document.getElementById('next-sync');
-            const syncStatus = document.getElementById('sync-status');
             const syncHistory = document.getElementById('sync-history');
             const emailForm = document.getElementById('email-form');
             const syncProgressBar = document.getElementById('sync-progress-bar');
+            
+            // Entity-specific elements
+            const entityTabs = document.querySelectorAll('.entity-tab');
+            const entityContents = document.querySelectorAll('.entity-content');
+            
+            // Entity-specific sync buttons
+            const syncProductsBtn = document.getElementById('sync-products-btn');
+            const fullSyncProductsBtn = document.getElementById('full-sync-products-btn');
+            const syncPicklistsBtn = document.getElementById('sync-picklists-btn');
+            const fullSyncPicklistsBtn = document.getElementById('full-sync-picklists-btn');
+            const syncWarehousesBtn = document.getElementById('sync-warehouses-btn');
+            const fullSyncWarehousesBtn = document.getElementById('full-sync-warehouses-btn');
+            const syncUsersBtn = document.getElementById('sync-users-btn');
+            const fullSyncUsersBtn = document.getElementById('full-sync-users-btn');
+            const syncSuppliersBtn = document.getElementById('sync-suppliers-btn');
+            const fullSyncSuppliersBtn = document.getElementById('full-sync-suppliers-btn');
+            
+            // Filter elements
+            const filterOptions = document.querySelectorAll('#filter-options .filter-option');
+            const historyFilterOptions = document.querySelectorAll('#history-filter-options .filter-option');
+            const logsFilterOptions = document.querySelectorAll('#logs-filter-options .filter-option');
             
             // API endpoints
             const API_BASE = window.location.origin;
@@ -480,7 +775,10 @@
                 stats: `${API_BASE}/api/stats`,
                 history: `${API_BASE}/dashboard/history`,
                 email: `${API_BASE}/dashboard/email`,
-                clearLogs: `${API_BASE}/dashboard/logs/clear`
+                clearLogs: `${API_BASE}/dashboard/logs/clear`,
+                // Entity-specific endpoints
+                syncEntity: (entity, full = false) => `${API_BASE}/api/sync/${entity}${full ? '?full=true' : ''}`,
+                retrySync: (syncId) => `${API_BASE}/api/sync/retry/${syncId}`
             };
             
             // Initialize
@@ -496,18 +794,90 @@
             setInterval(fetchStats, 30000);
             setInterval(fetchHistory, 30000);
             
-            // Event listeners
+            // Event listeners for entity tabs
+            entityTabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    // Remove active class from all tabs
+                    entityTabs.forEach(t => t.classList.remove('active'));
+                    // Add active class to clicked tab
+                    tab.classList.add('active');
+                    
+                    // Hide all content sections
+                    entityContents.forEach(content => content.classList.remove('active'));
+                    
+                    // Show content for selected entity
+                    const entityType = tab.getAttribute('data-entity');
+                    const contentElement = document.getElementById(`${entityType}-content`);
+                    if (contentElement) {
+                        contentElement.classList.add('active');
+                    }
+                });
+            });
+            
+            // Event listeners for filter options
+            filterOptions.forEach(option => {
+                option.addEventListener('click', () => {
+                    // Remove active class from all options
+                    filterOptions.forEach(o => o.classList.remove('active'));
+                    // Add active class to clicked option
+                    option.classList.add('active');
+                    
+                    // Apply filter to sync history
+                    const filterType = option.getAttribute('data-filter');
+                    filterSyncHistory(filterType);
+                });
+            });
+            
+            historyFilterOptions.forEach(option => {
+                option.addEventListener('click', () => {
+                    // Remove active class from all options
+                    historyFilterOptions.forEach(o => o.classList.remove('active'));
+                    // Add active class to clicked option
+                    option.classList.add('active');
+                    
+                    // Apply entity filter to sync history
+                    const entityType = option.getAttribute('data-filter');
+                    filterSyncHistoryByEntity(entityType);
+                });
+            });
+            
+            logsFilterOptions.forEach(option => {
+                option.addEventListener('click', () => {
+                    // Remove active class from all options
+                    logsFilterOptions.forEach(o => o.classList.remove('active'));
+                    // Add active class to clicked option
+                    option.classList.add('active');
+                    
+                    // Apply filter to logs
+                    const filterType = option.getAttribute('data-filter');
+                    filterLogs(filterType);
+                });
+            });
+            
+            // Event listeners for sync buttons
             syncBtn.addEventListener('click', triggerSync);
             fullSyncBtn.addEventListener('click', triggerFullSync);
             clearLogsBtn.addEventListener('click', clearLogs);
             emailForm.addEventListener('submit', saveEmailSettings);
+            
+            // Entity-specific sync buttons
+            syncProductsBtn.addEventListener('click', () => triggerEntitySync('products'));
+            fullSyncProductsBtn.addEventListener('click', () => triggerEntityFullSync('products'));
+            syncPicklistsBtn.addEventListener('click', () => triggerEntitySync('picklists'));
+            fullSyncPicklistsBtn.addEventListener('click', () => triggerEntityFullSync('picklists'));
+            syncWarehousesBtn.addEventListener('click', () => triggerEntitySync('warehouses'));
+            fullSyncWarehousesBtn.addEventListener('click', () => triggerEntityFullSync('warehouses'));
+            syncUsersBtn.addEventListener('click', () => triggerEntitySync('users'));
+            fullSyncUsersBtn.addEventListener('click', () => triggerEntityFullSync('users'));
+            syncSuppliersBtn.addEventListener('click', () => triggerEntitySync('suppliers'));
+            fullSyncSuppliersBtn.addEventListener('click', () => triggerEntityFullSync('suppliers'));
             
             // Functions
             function fetchStatus() {
                 fetch(ENDPOINTS.status)
                     .then(response => response.json())
                     .then(data => {
-                        if (data.success) {
+                        if (data.online) {
                             statusIndicator.className = 'status-indicator status-online';
                             statusText.textContent = 'Online';
                         } else {
@@ -518,7 +888,7 @@
                     .catch(error => {
                         console.error('Error fetching status:', error);
                         statusIndicator.className = 'status-indicator status-offline';
-                        statusText.textContent = 'Error';
+                        statusText.textContent = 'Offline';
                     });
             }
             
@@ -526,94 +896,163 @@
                 fetch(ENDPOINTS.logs)
                     .then(response => response.json())
                     .then(data => {
-                        logContainer.innerHTML = '';
                         if (data.logs && data.logs.length > 0) {
-                            data.logs.forEach(log => {
+                            logContainer.innerHTML = '';
+                            
+                            // Get active filter
+                            const activeFilter = document.querySelector('#logs-filter-options .filter-option.active');
+                            const filterType = activeFilter ? activeFilter.getAttribute('data-filter') : 'all';
+                            
+                            // Apply filter
+                            const filteredLogs = filterType === 'all' 
+                                ? data.logs 
+                                : data.logs.filter(log => log.level === filterType);
+                            
+                            filteredLogs.forEach(log => {
                                 const logEntry = document.createElement('div');
                                 logEntry.className = `log-entry log-${log.level}`;
-                                logEntry.textContent = `[${formatTime(log.timestamp)}] ${log.message}`;
+                                logEntry.textContent = `[${new Date(log.timestamp).toLocaleString()}] ${log.message}`;
                                 logContainer.appendChild(logEntry);
                             });
                         } else {
-                            const logEntry = document.createElement('div');
-                            logEntry.className = 'log-entry log-info';
-                            logEntry.textContent = 'No logs available.';
-                            logContainer.appendChild(logEntry);
+                            logContainer.innerHTML = '<div class="log-entry log-info">No logs available</div>';
                         }
-                        
-                        // Auto-scroll to bottom
-                        logContainer.scrollTop = logContainer.scrollHeight;
                     })
                     .catch(error => {
                         console.error('Error fetching logs:', error);
-                        logContainer.innerHTML = '<div class="log-entry log-error">Error loading logs.</div>';
+                        logContainer.innerHTML = '<div class="log-entry log-error">Error loading logs</div>';
                     });
+            }
+            
+            function filterLogs(filterType) {
+                // Re-fetch logs with the new filter
+                fetchLogs();
             }
             
             function fetchStats() {
                 fetch(ENDPOINTS.stats)
                     .then(response => response.json())
                     .then(data => {
-                        if (data.success) {
-                            const stats = data.stats;
-                            totalProducts.textContent = stats.totalProducts || '0';
-                            lastSync.textContent = formatTime(stats.lastSyncDate) || 'Never';
-                            
-                            // Calculate next sync time (1 hour after last sync)
-                            if (stats.lastSyncDate) {
-                                const lastSyncDate = new Date(stats.lastSyncDate);
-                                const nextSyncDate = new Date(lastSyncDate.getTime() + 60 * 60 * 1000);
-                                nextSync.textContent = formatTime(nextSyncDate);
-                            } else {
-                                nextSync.textContent = 'N/A';
-                            }
-                            
-                            syncStatus.textContent = 'Ready';
-                            
-                            // Update progress bar if we have total count information
-                            if (stats.totalProducts) {
-                                const progress = Math.min(100, Math.round((stats.totalProducts / (stats.totalProducts || 1)) * 100));
-                                syncProgressBar.style.width = `${progress}%`;
-                            }
+                        // Update all entities stats
+                        totalProducts.textContent = data.totalProducts || 0;
+                        totalPicklists.textContent = data.totalPicklists || 0;
+                        totalWarehouses.textContent = data.totalWarehouses || 0;
+                        totalUsers.textContent = data.totalUsers || 0;
+                        totalSuppliers.textContent = data.totalSuppliers || 0;
+                        
+                        if (data.lastSync) {
+                            const lastSyncDate = new Date(data.lastSync);
+                            lastSync.textContent = lastSyncDate.toLocaleString();
                         } else {
-                            totalProducts.textContent = '0';
                             lastSync.textContent = 'Never';
-                            nextSync.textContent = 'N/A';
-                            syncStatus.textContent = 'Error';
+                        }
+                        
+                        // Update entity-specific stats
+                        updateEntityStats('products', data.entities?.products);
+                        updateEntityStats('picklists', data.entities?.picklists);
+                        updateEntityStats('warehouses', data.entities?.warehouses);
+                        updateEntityStats('users', data.entities?.users);
+                        updateEntityStats('suppliers', data.entities?.suppliers);
+                        
+                        // Update sync progress if available
+                        if (data.syncProgress) {
+                            const progress = Math.min(
+                                Math.round((data.syncProgress.itemsProcessed / data.syncProgress.totalItems) * 100),
+                                100
+                            );
+                            syncProgressBar.style.width = `${progress}%`;
+                        } else {
+                            syncProgressBar.style.width = '0%';
                         }
                     })
                     .catch(error => {
                         console.error('Error fetching stats:', error);
-                        totalProducts.textContent = 'Error';
-                        lastSync.textContent = 'Error';
-                        nextSync.textContent = 'Error';
-                        syncStatus.textContent = 'Error';
                     });
+            }
+            
+            function updateEntityStats(entityType, entityData) {
+                if (!entityData) return;
+                
+                const countElement = document.getElementById(`${entityType}-count`);
+                const lastSyncElement = document.getElementById(`${entityType}-last-sync`);
+                const statusElement = document.getElementById(`${entityType}-sync-status`);
+                const syncCountElement = document.getElementById(`${entityType}-sync-count`);
+                
+                if (countElement) countElement.textContent = entityData.count || 0;
+                
+                if (lastSyncElement) {
+                    if (entityData.lastSync) {
+                        const lastSyncDate = new Date(entityData.lastSync);
+                        lastSyncElement.textContent = lastSyncDate.toLocaleString();
+                    } else {
+                        lastSyncElement.textContent = 'Never';
+                    }
+                }
+                
+                if (statusElement) statusElement.textContent = entityData.status || 'Ready';
+                if (syncCountElement) syncCountElement.textContent = entityData.lastSyncCount || 0;
             }
             
             function fetchHistory() {
                 fetch(ENDPOINTS.history)
                     .then(response => response.json())
                     .then(data => {
-                        syncHistory.innerHTML = '';
                         if (data.history && data.history.length > 0) {
-                            data.history.forEach(item => {
+                            syncHistory.innerHTML = '';
+                            
+                            // Get active filter
+                            const activeStatusFilter = document.querySelector('#filter-options .filter-option.active');
+                            const statusFilterType = activeStatusFilter ? activeStatusFilter.getAttribute('data-filter') : 'all';
+                            
+                            const activeEntityFilter = document.querySelector('#history-filter-options .filter-option.active');
+                            const entityFilterType = activeEntityFilter ? activeEntityFilter.getAttribute('data-filter') : 'all';
+                            
+                            // Apply filters
+                            let filteredHistory = data.history;
+                            
+                            // Apply status filter
+                            if (statusFilterType !== 'all') {
+                                filteredHistory = filteredHistory.filter(item => 
+                                    statusFilterType === 'success' ? item.success : !item.success
+                                );
+                            }
+                            
+                            // Apply entity filter
+                            if (entityFilterType !== 'all') {
+                                filteredHistory = filteredHistory.filter(item => 
+                                    item.entity_type === entityFilterType
+                                );
+                            }
+                            
+                            filteredHistory.forEach(item => {
                                 const syncItem = document.createElement('li');
                                 syncItem.className = 'sync-item';
                                 
                                 const syncTime = document.createElement('span');
                                 syncTime.className = 'sync-time';
-                                syncTime.textContent = formatTime(item.timestamp);
+                                syncTime.textContent = `${new Date(item.timestamp).toLocaleString()} - ${item.entity_type || 'all'}`;
                                 
                                 const syncStatus = document.createElement('span');
                                 syncStatus.className = `sync-status ${item.success ? 'sync-success' : 'sync-error'}`;
-                                syncStatus.textContent = item.success ? 'Success' : 'Failed';
+                                
+                                const statusText = document.createElement('span');
+                                statusText.textContent = item.success ? 'Success' : 'Failed';
+                                syncStatus.appendChild(statusText);
                                 
                                 if (item.count) {
                                     const syncCount = document.createElement('span');
                                     syncCount.className = 'sync-count';
-                                    syncCount.textContent = `${item.count} products`;
+                                    syncCount.textContent = item.count;
                                     syncStatus.appendChild(syncCount);
+                                }
+                                
+                                // Add retry button for failed syncs
+                                if (!item.success && item.sync_id) {
+                                    const retryBtn = document.createElement('button');
+                                    retryBtn.className = 'retry-btn';
+                                    retryBtn.textContent = 'Retry';
+                                    retryBtn.addEventListener('click', () => retrySync(item.sync_id));
+                                    syncStatus.appendChild(retryBtn);
                                 }
                                 
                                 syncItem.appendChild(syncTime);
@@ -621,106 +1060,23 @@
                                 syncHistory.appendChild(syncItem);
                             });
                         } else {
-                            const syncItem = document.createElement('li');
-                            syncItem.className = 'sync-item';
-                            syncItem.textContent = 'No sync history available.';
-                            syncHistory.appendChild(syncItem);
+                            syncHistory.innerHTML = '<li class="sync-item"><span class="sync-time">No sync history available</span></li>';
                         }
                     })
                     .catch(error => {
                         console.error('Error fetching history:', error);
-                        syncHistory.innerHTML = '<li class="sync-item">Error loading sync history.</li>';
+                        syncHistory.innerHTML = '<li class="sync-item"><span class="sync-time">Error loading sync history</span></li>';
                     });
             }
             
-            function triggerSync() {
-                syncBtn.disabled = true;
-                syncBtn.textContent = 'Syncing...';
-                syncStatus.textContent = 'Syncing';
-                
-                fetch(ENDPOINTS.sync)
-                    .then(response => response.json())
-                    .then(data => {
-                        syncBtn.disabled = false;
-                        syncBtn.textContent = 'Sync Now';
-                        
-                        // Add a log entry
-                        const logEntry = document.createElement('div');
-                        logEntry.className = `log-entry log-${data.success ? 'success' : 'error'}`;
-                        logEntry.textContent = `[${new Date().toISOString()}] ${data.message}`;
-                        logContainer.appendChild(logEntry);
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                        
-                        // Refresh data
-                        fetchStats();
-                        fetchHistory();
-                        fetchLogs();
-                    })
-                    .catch(error => {
-                        console.error('Error triggering sync:', error);
-                        syncBtn.disabled = false;
-                        syncBtn.textContent = 'Sync Now';
-                        
-                        // Add error log entry
-                        const logEntry = document.createElement('div');
-                        logEntry.className = 'log-entry log-error';
-                        logEntry.textContent = `[${new Date().toISOString()}] Error triggering sync: ${error.message}`;
-                        logContainer.appendChild(logEntry);
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                    });
+            function filterSyncHistory(filterType) {
+                // Re-fetch history with the new filter
+                fetchHistory();
             }
             
-            function triggerFullSync() {
-                fullSyncBtn.disabled = true;
-                fullSyncBtn.textContent = 'Syncing...';
-                syncStatus.textContent = 'Full Sync';
-                
-                fetch(ENDPOINTS.fullSync)
-                    .then(response => response.json())
-                    .then(data => {
-                        fullSyncBtn.disabled = false;
-                        fullSyncBtn.textContent = 'Full Sync';
-                        
-                        // Add a log entry
-                        const logEntry = document.createElement('div');
-                        logEntry.className = `log-entry log-${data.success ? 'success' : 'error'}`;
-                        logEntry.textContent = `[${new Date().toISOString()}] ${data.message}`;
-                        logContainer.appendChild(logEntry);
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                        
-                        // Refresh data
-                        fetchStats();
-                        fetchHistory();
-                        fetchLogs();
-                    })
-                    .catch(error => {
-                        console.error('Error triggering full sync:', error);
-                        fullSyncBtn.disabled = false;
-                        fullSyncBtn.textContent = 'Full Sync';
-                        
-                        // Add error log entry
-                        const logEntry = document.createElement('div');
-                        logEntry.className = 'log-entry log-error';
-                        logEntry.textContent = `[${new Date().toISOString()}] Error triggering full sync: ${error.message}`;
-                        logContainer.appendChild(logEntry);
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                    });
-            }
-            
-            function clearLogs() {
-                fetch(ENDPOINTS.clearLogs, { method: 'POST' })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            logContainer.innerHTML = '<div class="log-entry log-info">Logs cleared.</div>';
-                        } else {
-                            logContainer.innerHTML = '<div class="log-entry log-error">Failed to clear logs.</div>';
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error clearing logs:', error);
-                        logContainer.innerHTML = '<div class="log-entry log-error">Error clearing logs.</div>';
-                    });
+            function filterSyncHistoryByEntity(entityType) {
+                // Re-fetch history with the new entity filter
+                fetchHistory();
             }
             
             function loadEmailSettings() {
@@ -733,6 +1089,164 @@
                     })
                     .catch(error => {
                         console.error('Error loading email settings:', error);
+                    });
+            }
+            
+            function triggerSync() {
+                syncBtn.disabled = true;
+                syncBtn.textContent = 'Syncing...';
+                
+                fetch(ENDPOINTS.sync, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addLogEntry('success', 'Sync started successfully');
+                        } else {
+                            addLogEntry('error', `Sync failed: ${data.message}`);
+                        }
+                        
+                        // Re-enable button after a short delay
+                        setTimeout(() => {
+                            syncBtn.disabled = false;
+                            syncBtn.textContent = 'Sync Now';
+                            fetchStats();
+                            fetchHistory();
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        console.error('Error triggering sync:', error);
+                        addLogEntry('error', 'Error triggering sync');
+                        
+                        syncBtn.disabled = false;
+                        syncBtn.textContent = 'Sync Now';
+                    });
+            }
+            
+            function triggerFullSync() {
+                fullSyncBtn.disabled = true;
+                fullSyncBtn.textContent = 'Syncing...';
+                
+                fetch(ENDPOINTS.fullSync, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addLogEntry('success', 'Full sync started successfully');
+                        } else {
+                            addLogEntry('error', `Full sync failed: ${data.message}`);
+                        }
+                        
+                        // Re-enable button after a short delay
+                        setTimeout(() => {
+                            fullSyncBtn.disabled = false;
+                            fullSyncBtn.textContent = 'Full Sync';
+                            fetchStats();
+                            fetchHistory();
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        console.error('Error triggering full sync:', error);
+                        addLogEntry('error', 'Error triggering full sync');
+                        
+                        fullSyncBtn.disabled = false;
+                        fullSyncBtn.textContent = 'Full Sync';
+                    });
+            }
+            
+            function triggerEntitySync(entityType) {
+                const button = document.getElementById(`sync-${entityType}-btn`);
+                button.disabled = true;
+                button.textContent = 'Syncing...';
+                
+                fetch(ENDPOINTS.syncEntity(entityType), { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addLogEntry('success', `${entityType} sync started successfully`);
+                        } else {
+                            addLogEntry('error', `${entityType} sync failed: ${data.message}`);
+                        }
+                        
+                        // Re-enable button after a short delay
+                        setTimeout(() => {
+                            button.disabled = false;
+                            button.textContent = `Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+                            fetchStats();
+                            fetchHistory();
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        console.error(`Error triggering ${entityType} sync:`, error);
+                        addLogEntry('error', `Error triggering ${entityType} sync`);
+                        
+                        button.disabled = false;
+                        button.textContent = `Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+                    });
+            }
+            
+            function triggerEntityFullSync(entityType) {
+                const button = document.getElementById(`full-sync-${entityType}-btn`);
+                button.disabled = true;
+                button.textContent = 'Syncing...';
+                
+                fetch(ENDPOINTS.syncEntity(entityType, true), { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addLogEntry('success', `${entityType} full sync started successfully`);
+                        } else {
+                            addLogEntry('error', `${entityType} full sync failed: ${data.message}`);
+                        }
+                        
+                        // Re-enable button after a short delay
+                        setTimeout(() => {
+                            button.disabled = false;
+                            button.textContent = `Full Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+                            fetchStats();
+                            fetchHistory();
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        console.error(`Error triggering ${entityType} full sync:`, error);
+                        addLogEntry('error', `Error triggering ${entityType} full sync`);
+                        
+                        button.disabled = false;
+                        button.textContent = `Full Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+                    });
+            }
+            
+            function retrySync(syncId) {
+                fetch(ENDPOINTS.retrySync(syncId), { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addLogEntry('success', `Retry of sync ${syncId} started successfully`);
+                        } else {
+                            addLogEntry('error', `Retry of sync ${syncId} failed: ${data.message}`);
+                        }
+                        
+                        // Refresh data
+                        fetchStats();
+                        fetchHistory();
+                    })
+                    .catch(error => {
+                        console.error(`Error retrying sync ${syncId}:`, error);
+                        addLogEntry('error', `Error retrying sync ${syncId}`);
+                    });
+            }
+            
+            function clearLogs() {
+                fetch(ENDPOINTS.clearLogs, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            logContainer.innerHTML = '<div class="log-entry log-info">Logs cleared</div>';
+                        } else {
+                            addLogEntry('error', `Failed to clear logs: ${data.message}`);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error clearing logs:', error);
+                        addLogEntry('error', 'Error clearing logs');
                     });
             }
             
@@ -757,39 +1271,22 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            // Add success log entry
-                            const logEntry = document.createElement('div');
-                            logEntry.className = 'log-entry log-success';
-                            logEntry.textContent = `[${new Date().toISOString()}] Email notification settings updated.`;
-                            logContainer.appendChild(logEntry);
-                            logContainer.scrollTop = logContainer.scrollHeight;
+                            addLogEntry('success', 'Email notification settings updated');
                         } else {
-                            // Add error log entry
-                            const logEntry = document.createElement('div');
-                            logEntry.className = 'log-entry log-error';
-                            logEntry.textContent = `[${new Date().toISOString()}] Failed to update email settings: ${data.message}`;
-                            logContainer.appendChild(logEntry);
-                            logContainer.scrollTop = logContainer.scrollHeight;
+                            addLogEntry('error', `Failed to update email settings: ${data.message}`);
                         }
                     })
                     .catch(error => {
                         console.error('Error saving email settings:', error);
-                        
-                        // Add error log entry
-                        const logEntry = document.createElement('div');
-                        logEntry.className = 'log-entry log-error';
-                        logEntry.textContent = `[${new Date().toISOString()}] Error saving email settings: ${error.message}`;
-                        logContainer.appendChild(logEntry);
-                        logContainer.scrollTop = logContainer.scrollHeight;
+                        addLogEntry('error', 'Error saving email settings');
                     });
             }
             
-            // Helper function to format timestamps
-            function formatTime(timestamp) {
-                if (!timestamp) return null;
-                
-                const date = new Date(timestamp);
-                return date.toLocaleString();
+            function addLogEntry(level, message) {
+                const logEntry = document.createElement('div');
+                logEntry.className = `log-entry log-${level}`;
+                logEntry.textContent = `[${new Date().toLocaleString()}] ${message}`;
+                logContainer.insertBefore(logEntry, logContainer.firstChild);
             }
         });
     </script>
