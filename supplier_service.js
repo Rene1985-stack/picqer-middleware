@@ -1,12 +1,11 @@
 /**
- * Auto-schema Supplier service with dynamic column creation and improved error handling
- * Includes performance optimizations and schema management:
- * 1. 30-day rolling window for incremental syncs
- * 2. Increased batch size for database operations
- * 3. Optimized database operations with bulk inserts
- * 4. Newest-first processing to prioritize recent data
- * 5. Resumable sync to continue from last position after restarts
- * 6. Dynamic schema detection and automatic column creation
+ * Robust SQL Parameter Supplier service with comprehensive parameter handling
+ * Includes automatic schema management and parameter declaration safety:
+ * 1. Automatically creates missing columns when needed
+ * 2. Ensures all SQL parameters are properly declared
+ * 3. Safely handles null or missing values in API responses
+ * 4. Provides detailed error logging for troubleshooting
+ * 5. Implements retry mechanisms for API failures
  */
 const axios = require('axios');
 const sql = require('mssql');
@@ -515,7 +514,7 @@ class SupplierService {
   }
 
   /**
-   * Save suppliers to database
+   * Save suppliers to database with robust parameter handling
    * @param {Array} suppliers - Array of suppliers to save
    * @param {Object|null} syncProgress - Sync progress record for resumable sync
    * @returns {Promise<Object>} - Result with success status and count
@@ -625,13 +624,18 @@ class SupplierService {
               request.input('emailaddress', sql.NVarChar, mergedSupplier.email || '');
             }
             
-            // Add created and updated parameters if columns exist
-            if (createdColumnExists && mergedSupplier.created) {
-              request.input('created', sql.DateTime, new Date(mergedSupplier.created));
+            // IMPORTANT FIX: Always declare parameters for columns that exist in the schema
+            // regardless of whether the supplier has those values
+            if (createdColumnExists) {
+              // If supplier has created value, use it; otherwise use null
+              const createdValue = mergedSupplier.created ? new Date(mergedSupplier.created) : null;
+              request.input('created', sql.DateTime, createdValue);
             }
             
-            if (updatedColumnExists && mergedSupplier.updated) {
-              request.input('updated', sql.DateTime, new Date(mergedSupplier.updated));
+            if (updatedColumnExists) {
+              // If supplier has updated value, use it; otherwise use null
+              const updatedValue = mergedSupplier.updated ? new Date(mergedSupplier.updated) : null;
+              request.input('updated', sql.DateTime, updatedValue);
             }
             
             // Build dynamic SQL query based on which columns exist
@@ -652,6 +656,8 @@ class SupplierService {
               updateColumns.push('emailaddress = @emailaddress');
             }
             
+            // Only include columns in SQL if they exist in the schema
+            // The parameters are already declared above regardless of value
             if (createdColumnExists) {
               updateColumns.push('created = @created');
             }
@@ -749,25 +755,22 @@ class SupplierService {
                   .input('idsupplier', sql.Int, mergedSupplier.idsupplier)
                   .input('idproduct', sql.Int, product.idproduct);
                 
-                // Add parameters based on which columns exist
-                if (productCodeColumnExists || supplierProductCodeColumnExists) {
-                  const productCode = product.productcode || '';
-                  if (productCodeColumnExists) {
-                    productRequest.input('productcode', sql.NVarChar, productCode);
-                  }
-                  if (supplierProductCodeColumnExists) {
-                    productRequest.input('supplier_productcode', sql.NVarChar, productCode);
-                  }
+                // IMPORTANT FIX: Always declare parameters for columns that exist in the schema
+                // regardless of whether the product has those values
+                if (productCodeColumnExists) {
+                  productRequest.input('productcode', sql.NVarChar, product.productcode || '');
                 }
                 
-                if (priceColumnExists || purchasePriceColumnExists) {
-                  const price = product.price || 0;
-                  if (priceColumnExists) {
-                    productRequest.input('price', sql.Decimal(18, 2), price);
-                  }
-                  if (purchasePriceColumnExists) {
-                    productRequest.input('purchase_price', sql.Decimal(18, 2), price);
-                  }
+                if (supplierProductCodeColumnExists) {
+                  productRequest.input('supplier_productcode', sql.NVarChar, product.productcode || '');
+                }
+                
+                if (priceColumnExists) {
+                  productRequest.input('price', sql.Decimal(18, 2), product.price || 0);
+                }
+                
+                if (purchasePriceColumnExists) {
+                  productRequest.input('purchase_price', sql.Decimal(18, 2), product.price || 0);
                 }
                 
                 // Add name parameter
@@ -864,7 +867,7 @@ class SupplierService {
   }
 
   /**
-   * Update sync status
+   * Update sync status with robust parameter handling
    * @param {string} entityType - Entity type (e.g., 'suppliers')
    * @param {number} count - Number of items synced
    * @returns {Promise<boolean>} - Success status
@@ -888,11 +891,29 @@ class SupplierService {
       
       const pool = await sql.connect(this.sqlConfig);
       
-      // Update sync status
+      // IMPORTANT FIX: Check if the record exists first to handle the total_count properly
+      const recordResult = await pool.request()
+        .input('entityType', sql.NVarChar, entityType)
+        .query(`
+          SELECT total_count 
+          FROM SyncStatus 
+          WHERE entity_type = @entityType
+        `);
+      
+      let totalCount = count;
+      
+      // If record exists, add current count to existing total_count
+      if (recordResult.recordset.length > 0) {
+        const existingTotalCount = recordResult.recordset[0].total_count || 0;
+        totalCount = existingTotalCount + count;
+      }
+      
+      // Update sync status with properly declared parameters
       await pool.request()
         .input('entityType', sql.NVarChar, entityType)
         .input('now', sql.DateTime, new Date().toISOString())
         .input('count', sql.Int, count)
+        .input('totalCount', sql.Int, totalCount)
         .query(`
           MERGE INTO SyncStatus AS target
           USING (SELECT @entityType AS entity_type) AS source
@@ -902,7 +923,7 @@ class SupplierService {
               entity_name = @entityType,
               last_sync_date = @now,
               last_sync_count = @count,
-              total_count = ISNULL(total_count, 0) + @count
+              total_count = @totalCount
           WHEN NOT MATCHED THEN
             INSERT (entity_name, entity_type, last_sync_date, total_count, last_sync_count)
             VALUES (@entityType, @entityType, @now, @count, @count);
@@ -951,9 +972,10 @@ class SupplierService {
         await pool.request()
           .input('entityType', sql.NVarChar, 'suppliers')
           .input('defaultDate', sql.DateTime, new Date('2025-01-01T00:00:00.000Z'))
+          .input('defaultCount', sql.Int, 0)
           .query(`
             INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, total_count, last_sync_count)
-            VALUES (@entityType, @entityType, @defaultDate, 0, 0)
+            VALUES (@entityType, @entityType, @defaultDate, @defaultCount, @defaultCount)
           `);
         
         return new Date('2025-01-01T00:00:00.000Z');
