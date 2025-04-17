@@ -1,562 +1,711 @@
-// dashboard.js - Fixed API paths for dashboard frontend
+// fixed_dashboard.js - Properly defined API endpoints and improved error handling
 
-// API endpoints
-const API_BASE_URL = ''; // Empty string for relative paths from current domain
-const API_ENDPOINTS = {
+// API endpoints definition - this was missing in the original implementation
+const ENDPOINTS = {
     status: '/api/status',
     stats: '/api/stats',
     logs: '/api/logs',
     history: '/api/history',
-    email: '/api/email',
     sync: '/api/sync',
-    syncEntity: (entity) => `/api/sync/${entity}`,
-    retrySyncById: (syncId) => `/api/sync/retry/${syncId}`,
+    fullSync: '/api/sync?full=true',
+    syncEntity: (entityType, fullSync = false) => `/api/sync/${entityType}${fullSync ? '?full=true' : ''}`,
+    retrySync: (syncId) => `/api/sync/retry/${syncId}`,
+    email: '/api/email',
+    clearLogs: '/api/logs/clear',
     test: '/api/test'
 };
 
-// DOM elements
-const statusIndicator = document.getElementById('status-indicator');
-const statusText = document.getElementById('status-text');
-const syncBtn = document.getElementById('sync-btn');
-const fullSyncBtn = document.getElementById('full-sync-btn');
-const syncProgressBar = document.getElementById('sync-progress-bar');
-const entityTabs = document.querySelectorAll('.entity-tab');
-const entityContents = document.querySelectorAll('.entity-content');
-const filterOptions = document.querySelectorAll('.filter-option');
-
-// Stats elements
-const totalProductsEl = document.getElementById('total-products');
-const totalPicklistsEl = document.getElementById('total-picklists');
-const totalWarehousesEl = document.getElementById('total-warehouses');
-const totalUsersEl = document.getElementById('total-users');
-const totalSuppliersEl = document.getElementById('total-suppliers');
-const lastSyncEl = document.getElementById('last-sync');
-
-// Entity-specific elements
-const productsCountEl = document.getElementById('products-count');
-const productsLastSyncEl = document.getElementById('products-last-sync');
-const productsSyncStatusEl = document.getElementById('products-sync-status');
-const productsLastSyncCountEl = document.getElementById('products-last-sync-count');
-const syncProductsBtn = document.getElementById('sync-products-btn');
-const fullSyncProductsBtn = document.getElementById('full-sync-products-btn');
-
-// Initialize dashboard
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('Dashboard initializing...');
+// Initialize dashboard with improved error handling
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Dashboard initializing with improved error handling...');
     
-    // Check middleware status
-    checkStatus();
+    // Elements
+    const statusIndicator = document.getElementById('status-indicator');
+    const statusText = document.getElementById('status-text');
+    const syncBtn = document.getElementById('sync-btn');
+    const fullSyncBtn = document.getElementById('full-sync-btn');
+    const clearLogsBtn = document.getElementById('clear-logs-btn');
+    const logContainer = document.getElementById('log-container');
+    const totalProducts = document.getElementById('total-products');
+    const totalPicklists = document.getElementById('total-picklists');
+    const totalWarehouses = document.getElementById('total-warehouses');
+    const totalUsers = document.getElementById('total-users');
+    const totalSuppliers = document.getElementById('total-suppliers');
+    const lastSync = document.getElementById('last-sync');
+    const syncHistory = document.getElementById('sync-history');
+    const emailForm = document.getElementById('email-form');
+    const syncProgressBar = document.getElementById('sync-progress-bar');
     
-    // Load initial data
+    // Entity-specific elements
+    const entityTabs = document.querySelectorAll('.entity-tab');
+    const entityContents = document.querySelectorAll('.entity-content');
+    
+    // Entity-specific sync buttons
+    const syncProductsBtn = document.getElementById('sync-products-btn');
+    const fullSyncProductsBtn = document.getElementById('full-sync-products-btn');
+    const syncPicklistsBtn = document.getElementById('sync-picklists-btn');
+    const fullSyncPicklistsBtn = document.getElementById('full-sync-picklists-btn');
+    const syncWarehousesBtn = document.getElementById('sync-warehouses-btn');
+    const fullSyncWarehousesBtn = document.getElementById('full-sync-warehouses-btn');
+    const syncUsersBtn = document.getElementById('sync-users-btn');
+    const fullSyncUsersBtn = document.getElementById('full-sync-users-btn');
+    const syncSuppliersBtn = document.getElementById('sync-suppliers-btn');
+    const fullSyncSuppliersBtn = document.getElementById('full-sync-suppliers-btn');
+    
+    // Filter elements
+    const filterOptions = document.querySelectorAll('#filter-options .filter-option');
+    const historyFilterOptions = document.querySelectorAll('#history-filter-options .filter-option');
+    const logsFilterOptions = document.querySelectorAll('#logs-filter-options .filter-option');
+    
+    // Initial data load with improved error handling
+    fetchStatus();
     fetchStats();
     fetchLogs();
     fetchHistory();
-    fetchEmailSettings();
+    loadEmailSettings();
     
     // Set up refresh intervals
-    setInterval(checkStatus, 30000); // Check status every 30 seconds
+    setInterval(fetchStatus, 30000); // Check status every 30 seconds
     setInterval(fetchStats, 60000); // Refresh stats every minute
     setInterval(fetchLogs, 10000); // Refresh logs every 10 seconds
     
     // Set up event listeners
-    setupEventListeners();
-});
-
-// Check middleware status
-function checkStatus() {
-    console.log('Checking middleware status...');
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.status}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Status check failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Status response:', data);
-            if (data.online) {
-                setStatusOnline();
-            } else {
-                setStatusOffline();
-            }
-        })
-        .catch(error => {
-            console.error('Error checking status:', error);
-            setStatusOffline();
-        });
-}
-
-// Set status to online
-function setStatusOnline() {
-    statusIndicator.classList.remove('status-offline');
-    statusIndicator.classList.add('status-online');
-    statusText.textContent = 'Online';
-    statusText.style.color = 'var(--success)';
-}
-
-// Set status to offline
-function setStatusOffline() {
-    statusIndicator.classList.remove('status-online');
-    statusIndicator.classList.add('status-offline');
-    statusText.textContent = 'Offline';
-    statusText.style.color = 'var(--danger)';
-}
-
-// Fetch middleware stats
-function fetchStats() {
-    console.log('Fetching middleware stats...');
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.stats}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Stats fetch failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Stats response:', data);
-            updateStats(data);
-        })
-        .catch(error => {
-            console.error('Error fetching stats:', error);
-        });
-}
-
-// Update stats in the UI
-function updateStats(data) {
-    // Update all entities stats
-    totalProductsEl.textContent = data.totalProducts || 0;
-    totalPicklistsEl.textContent = data.totalPicklists || 0;
-    totalWarehousesEl.textContent = data.totalWarehouses || 0;
-    totalUsersEl.textContent = data.totalUsers || 0;
-    totalSuppliersEl.textContent = data.totalSuppliers || 0;
-    
-    // Format last sync date
-    const lastSyncDate = data.lastSync ? new Date(data.lastSync) : null;
-    lastSyncEl.textContent = lastSyncDate ? formatDate(lastSyncDate) : 'Never';
-    
-    // Update entity-specific stats if available
-    if (data.entities) {
-        // Products
-        if (data.entities.products) {
-            productsCountEl.textContent = data.entities.products.count || 0;
-            productsLastSyncEl.textContent = data.entities.products.lastSync ? formatDate(new Date(data.entities.products.lastSync)) : 'Never';
-            productsSyncStatusEl.textContent = data.entities.products.status || 'Ready';
-            productsLastSyncCountEl.textContent = data.entities.products.lastSyncCount || 0;
-        }
-        
-        // Add similar updates for other entities
-    }
-    
-    // Update sync progress if a sync is running
-    if (data.syncStatus === 'Running' && data.syncProgress) {
-        const progress = data.syncProgress;
-        const percent = progress.totalItems > 0 ? Math.round((progress.itemsProcessed / progress.totalItems) * 100) : 0;
-        
-        syncProgressBar.style.width = `${percent}%`;
-        
-        // Highlight the tab of the entity being synced
-        if (progress.entityType) {
-            entityTabs.forEach(tab => {
-                if (tab.dataset.entity === progress.entityType) {
-                    tab.classList.add('syncing');
-                } else {
-                    tab.classList.remove('syncing');
-                }
-            });
-        }
-    } else {
-        syncProgressBar.style.width = '0%';
-        entityTabs.forEach(tab => tab.classList.remove('syncing'));
-    }
-}
-
-// Fetch logs
-function fetchLogs() {
-    console.log('Fetching logs...');
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.logs}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Logs fetch failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Logs response:', data);
-            updateLogs(data.logs);
-        })
-        .catch(error => {
-            console.error('Error fetching logs:', error);
-        });
-}
-
-// Update logs in the UI
-function updateLogs(logs) {
-    const logContainer = document.querySelector('.log-container');
-    if (!logContainer) return;
-    
-    logContainer.innerHTML = '';
-    
-    if (!logs || logs.length === 0) {
-        logContainer.innerHTML = '<div class="log-entry">No logs available</div>';
-        return;
-    }
-    
-    logs.forEach(log => {
-        const logEntry = document.createElement('div');
-        logEntry.className = `log-entry log-${log.level}`;
-        
-        const timestamp = new Date(log.timestamp);
-        const formattedTime = formatTime(timestamp);
-        
-        logEntry.innerHTML = `[${formattedTime}] ${log.message}`;
-        logContainer.appendChild(logEntry);
-    });
-}
-
-// Fetch sync history
-function fetchHistory() {
-    console.log('Fetching sync history...');
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.history}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`History fetch failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('History response:', data);
-            updateHistory(data.history);
-        })
-        .catch(error => {
-            console.error('Error fetching history:', error);
-        });
-}
-
-// Update sync history in the UI
-function updateHistory(history) {
-    const historyContainer = document.querySelector('.sync-history');
-    if (!historyContainer) return;
-    
-    historyContainer.innerHTML = '';
-    
-    if (!history || history.length === 0) {
-        historyContainer.innerHTML = '<div class="sync-item">No sync history available</div>';
-        return;
-    }
-    
-    // Get current filter
-    const activeFilter = document.querySelector('.filter-option.active').dataset.filter;
-    
-    history.forEach(item => {
-        // Apply filter
-        if (activeFilter === 'success' && !item.success) return;
-        if (activeFilter === 'error' && item.success) return;
-        
-        const syncItem = document.createElement('div');
-        syncItem.className = 'sync-item';
-        
-        const timestamp = new Date(item.timestamp);
-        const formattedTime = formatDate(timestamp);
-        
-        let entityType = item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1);
-        
-        let statusHtml = item.success 
-            ? `<span class="sync-status sync-success">Success</span>` 
-            : `<span class="sync-status sync-error">Error ${item.sync_id ? `<button class="retry-btn" data-sync-id="${item.sync_id}">Retry</button>` : ''}</span>`;
-        
-        let countHtml = item.count ? `<span class="sync-count">${item.count}</span>` : '';
-        
-        syncItem.innerHTML = `
-            <div>
-                <div>${entityType}</div>
-                <div class="sync-time">${formattedTime}</div>
-            </div>
-            <div>
-                ${statusHtml}
-                ${countHtml}
-            </div>
-        `;
-        
-        historyContainer.appendChild(syncItem);
-    });
-    
-    // Add event listeners to retry buttons
-    document.querySelectorAll('.retry-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.preventDefault();
-            const syncId = btn.dataset.syncId;
-            retrySync(syncId);
-        });
-    });
-}
-
-// Fetch email settings
-function fetchEmailSettings() {
-    console.log('Fetching email settings...');
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.email}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Email settings fetch failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Email settings response:', data);
-            updateEmailSettings(data);
-        })
-        .catch(error => {
-            console.error('Error loading email settings:', error);
-        });
-}
-
-// Update email settings in the UI
-function updateEmailSettings(settings) {
-    const emailInput = document.querySelector('input[type="email"]');
-    const notifyErrorsCheckbox = document.getElementById('notify-errors');
-    const notifySyncCheckbox = document.getElementById('notify-sync');
-    
-    if (emailInput) emailInput.value = settings.email || '';
-    if (notifyErrorsCheckbox) notifyErrorsCheckbox.checked = settings.notifyErrors || false;
-    if (notifySyncCheckbox) notifySyncCheckbox.checked = settings.notifySync || false;
-}
-
-// Start sync
-function startSync(fullSync = false, entityType = null) {
-    let url = `${API_BASE_URL}${API_ENDPOINTS.sync}`;
-    
-    if (entityType && entityType !== 'all') {
-        url = `${API_BASE_URL}${API_ENDPOINTS.syncEntity(entityType)}`;
-    }
-    
-    if (fullSync) {
-        url += '?full=true';
-    }
-    
-    console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync for ${entityType || 'all entities'}...`);
-    
-    fetch(url, { method: 'POST' })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Sync request failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Sync response:', data);
-            alert(data.message);
-            
-            // Refresh stats and history after a short delay
-            setTimeout(() => {
-                fetchStats();
-                fetchHistory();
-            }, 2000);
-        })
-        .catch(error => {
-            console.error('Error starting sync:', error);
-            alert(`Error starting sync: ${error.message}`);
-        });
-}
-
-// Retry sync
-function retrySync(syncId) {
-    console.log(`Retrying sync with ID: ${syncId}...`);
-    
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.retrySyncById(syncId)}`, { method: 'POST' })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Retry request failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Retry response:', data);
-            alert(data.message);
-            
-            // Refresh stats and history after a short delay
-            setTimeout(() => {
-                fetchStats();
-                fetchHistory();
-            }, 2000);
-        })
-        .catch(error => {
-            console.error('Error retrying sync:', error);
-            alert(`Error retrying sync: ${error.message}`);
-        });
-}
-
-// Save email settings
-function saveEmailSettings() {
-    const emailInput = document.querySelector('input[type="email"]');
-    const notifyErrorsCheckbox = document.getElementById('notify-errors');
-    const notifySyncCheckbox = document.getElementById('notify-sync');
-    
-    const settings = {
-        email: emailInput.value,
-        notifyErrors: notifyErrorsCheckbox.checked,
-        notifySync: notifySyncCheckbox.checked
-    };
-    
-    console.log('Saving email settings:', settings);
-    
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.email}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(settings)
-    })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Save settings request failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Save settings response:', data);
-            alert('Email notification settings saved');
-        })
-        .catch(error => {
-            console.error('Error saving email settings:', error);
-            alert(`Error saving email settings: ${error.message}`);
-        });
-}
-
-// Set up event listeners
-function setupEventListeners() {
-    // Sync buttons
-    if (syncBtn) {
-        syncBtn.addEventListener('click', () => {
-            const activeTab = document.querySelector('.entity-tab.active');
-            const entityType = activeTab.dataset.entity;
-            startSync(false, entityType);
-        });
-    }
-    
-    if (fullSyncBtn) {
-        fullSyncBtn.addEventListener('click', () => {
-            const activeTab = document.querySelector('.entity-tab.active');
-            const entityType = activeTab.dataset.entity;
-            startSync(true, entityType);
-        });
-    }
-    
-    // Entity tabs
     entityTabs.forEach(tab => {
         tab.addEventListener('click', () => {
-            // Update active tab
+            // Remove active class from all tabs
             entityTabs.forEach(t => t.classList.remove('active'));
+            // Add active class to clicked tab
             tab.classList.add('active');
             
-            // Show corresponding content
-            const entityType = tab.dataset.entity;
-            entityContents.forEach(content => {
-                if (content.id === `${entityType}-content`) {
-                    content.classList.add('active');
-                } else {
-                    content.classList.remove('active');
-                }
-            });
+            // Hide all content sections
+            entityContents.forEach(content => content.classList.remove('active'));
+            
+            // Show content for selected entity
+            const entityType = tab.getAttribute('data-entity');
+            const contentElement = document.getElementById(`${entityType}-content`);
+            if (contentElement) {
+                contentElement.classList.add('active');
+            }
         });
     });
     
-    // Filter options
+    // Event listeners for filter options
     filterOptions.forEach(option => {
         option.addEventListener('click', () => {
-            // Update active filter
+            // Remove active class from all options
             filterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
             option.classList.add('active');
             
-            // Refresh history with new filter
-            fetchHistory();
+            // Apply filter to sync history
+            const filterType = option.getAttribute('data-filter');
+            filterSyncHistory(filterType);
         });
     });
     
+    historyFilterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove active class from all options
+            historyFilterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
+            option.classList.add('active');
+            
+            // Apply entity filter to sync history
+            const entityType = option.getAttribute('data-filter');
+            filterSyncHistoryByEntity(entityType);
+        });
+    });
+    
+    logsFilterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove active class from all options
+            logsFilterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
+            option.classList.add('active');
+            
+            // Apply filter to logs
+            const filterType = option.getAttribute('data-filter');
+            filterLogs(filterType);
+        });
+    });
+    
+    // Event listeners for sync buttons
+    if (syncBtn) syncBtn.addEventListener('click', triggerSync);
+    if (fullSyncBtn) fullSyncBtn.addEventListener('click', triggerFullSync);
+    if (clearLogsBtn) clearLogsBtn.addEventListener('click', clearLogs);
+    if (emailForm) emailForm.addEventListener('submit', saveEmailSettings);
+    
     // Entity-specific sync buttons
-    if (syncProductsBtn) {
-        syncProductsBtn.addEventListener('click', () => {
-            startSync(false, 'products');
-        });
-    }
+    if (syncProductsBtn) syncProductsBtn.addEventListener('click', () => triggerEntitySync('products'));
+    if (fullSyncProductsBtn) fullSyncProductsBtn.addEventListener('click', () => triggerEntityFullSync('products'));
+    if (syncPicklistsBtn) syncPicklistsBtn.addEventListener('click', () => triggerEntitySync('picklists'));
+    if (fullSyncPicklistsBtn) fullSyncPicklistsBtn.addEventListener('click', () => triggerEntityFullSync('picklists'));
+    if (syncWarehousesBtn) syncWarehousesBtn.addEventListener('click', () => triggerEntitySync('warehouses'));
+    if (fullSyncWarehousesBtn) fullSyncWarehousesBtn.addEventListener('click', () => triggerEntityFullSync('warehouses'));
+    if (syncUsersBtn) syncUsersBtn.addEventListener('click', () => triggerEntitySync('users'));
+    if (fullSyncUsersBtn) fullSyncUsersBtn.addEventListener('click', () => triggerEntityFullSync('users'));
+    if (syncSuppliersBtn) syncSuppliersBtn.addEventListener('click', () => triggerEntitySync('suppliers'));
+    if (fullSyncSuppliersBtn) fullSyncSuppliersBtn.addEventListener('click', () => triggerEntityFullSync('suppliers'));
     
-    if (fullSyncProductsBtn) {
-        fullSyncProductsBtn.addEventListener('click', () => {
-            startSync(true, 'products');
-        });
-    }
-    
-    // Add similar event listeners for other entity-specific buttons
-    
-    // Email settings form
-    const saveSettingsBtn = document.getElementById('save-settings-btn');
-    if (saveSettingsBtn) {
-        saveSettingsBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            saveEmailSettings();
-        });
-    }
-    
-    // Clear logs button
-    const clearLogsBtn = document.getElementById('clear-logs-btn');
-    if (clearLogsBtn) {
-        clearLogsBtn.addEventListener('click', () => {
-            fetch(`${API_BASE_URL}${API_ENDPOINTS.logs}/clear`, { method: 'POST' })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`Clear logs request failed: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('Clear logs response:', data);
-                    fetchLogs();
-                })
-                .catch(error => {
-                    console.error('Error clearing logs:', error);
-                    alert(`Error clearing logs: ${error.message}`);
-                });
-        });
-    }
-}
-
-// Helper function to format date
-function formatDate(date) {
-    return date.toLocaleString();
-}
-
-// Helper function to format time
-function formatTime(date) {
-    return date.toLocaleTimeString();
-}
-
-// Test API connection
-function testApiConnection() {
-    console.log('Testing API connection...');
-    fetch(`${API_BASE_URL}${API_ENDPOINTS.test}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`API test failed: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('API test response:', data);
-            if (data.success) {
-                alert('API connection successful!');
-                setStatusOnline();
-            } else {
-                alert(`API connection failed: ${data.message}`);
+    // Functions with improved error handling
+    function fetchStatus() {
+        console.log('Checking middleware status...');
+        fetch(ENDPOINTS.status)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status check failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Status response:', data);
+                if (data && data.online) {
+                    setStatusOnline();
+                } else {
+                    setStatusOffline();
+                }
+            })
+            .catch(error => {
+                console.error('Error checking status:', error);
                 setStatusOffline();
+                addLogEntry('error', `Status check failed: ${error.message}`);
+            });
+    }
+    
+    function setStatusOnline() {
+        if (statusIndicator && statusText) {
+            statusIndicator.classList.remove('status-offline');
+            statusIndicator.classList.add('status-online');
+            statusText.textContent = 'Online';
+            statusText.style.color = 'var(--success)';
+        }
+    }
+    
+    function setStatusOffline() {
+        if (statusIndicator && statusText) {
+            statusIndicator.classList.remove('status-online');
+            statusIndicator.classList.add('status-offline');
+            statusText.textContent = 'Offline';
+            statusText.style.color = 'var(--danger)';
+        }
+    }
+    
+    function fetchLogs() {
+        console.log('Fetching logs...');
+        fetch(ENDPOINTS.logs)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Logs fetch failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Logs response:', data);
+                if (logContainer) {
+                    if (data && data.logs && data.logs.length > 0) {
+                        logContainer.innerHTML = '';
+                        
+                        // Get active filter
+                        const activeFilter = document.querySelector('#logs-filter-options .filter-option.active');
+                        const filterType = activeFilter ? activeFilter.getAttribute('data-filter') : 'all';
+                        
+                        // Apply filter
+                        const filteredLogs = filterType === 'all' 
+                            ? data.logs 
+                            : data.logs.filter(log => log.level === filterType);
+                        
+                        filteredLogs.forEach(log => {
+                            const logEntry = document.createElement('div');
+                            logEntry.className = `log-entry log-${log.level}`;
+                            logEntry.textContent = `[${new Date(log.timestamp).toLocaleString()}] ${log.message}`;
+                            logContainer.appendChild(logEntry);
+                        });
+                    } else {
+                        logContainer.innerHTML = '<div class="log-entry log-info">No logs available</div>';
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching logs:', error);
+                if (logContainer) {
+                    logContainer.innerHTML = `<div class="log-entry log-error">Error loading logs: ${error.message}</div>`;
+                }
+            });
+    }
+    
+    function filterLogs(filterType) {
+        // Re-fetch logs with the new filter
+        fetchLogs();
+    }
+    
+    function fetchStats() {
+        console.log('Fetching middleware stats...');
+        fetch(ENDPOINTS.stats)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Stats fetch failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Stats response:', data);
+                
+                // Update all entities stats if elements exist
+                if (totalProducts) totalProducts.textContent = data.stats?.products?.totalCount || 0;
+                if (totalPicklists) totalPicklists.textContent = data.stats?.picklists?.totalCount || 0;
+                if (totalWarehouses) totalWarehouses.textContent = data.stats?.warehouses?.totalCount || 0;
+                if (totalUsers) totalUsers.textContent = data.stats?.users?.totalCount || 0;
+                if (totalSuppliers) totalSuppliers.textContent = data.stats?.suppliers?.totalCount || 0;
+                
+                // Format last sync date
+                if (lastSync) {
+                    const lastSyncDate = data.stats?.products?.lastSyncDate ? new Date(data.stats.products.lastSyncDate) : null;
+                    lastSync.textContent = lastSyncDate ? lastSyncDate.toLocaleString() : 'Never';
+                }
+                
+                // Update entity-specific stats
+                updateEntityStats('products', data.stats?.products);
+                updateEntityStats('picklists', data.stats?.picklists);
+                updateEntityStats('warehouses', data.stats?.warehouses);
+                updateEntityStats('users', data.stats?.users);
+                updateEntityStats('suppliers', data.stats?.suppliers);
+                
+                // Update sync progress if available
+                if (syncProgressBar && data.syncProgress) {
+                    const progress = Math.min(
+                        Math.round((data.syncProgress.itemsProcessed / data.syncProgress.totalItems) * 100),
+                        100
+                    );
+                    syncProgressBar.style.width = `${progress}%`;
+                } else if (syncProgressBar) {
+                    syncProgressBar.style.width = '0%';
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching stats:', error);
+                addLogEntry('error', `Error fetching stats: ${error.message}`);
+            });
+    }
+    
+    function updateEntityStats(entityType, entityData) {
+        if (!entityData) return;
+        
+        const countElement = document.getElementById(`${entityType}-count`);
+        const lastSyncElement = document.getElementById(`${entityType}-last-sync`);
+        const statusElement = document.getElementById(`${entityType}-sync-status`);
+        const syncCountElement = document.getElementById(`${entityType}-sync-count`);
+        
+        if (countElement) countElement.textContent = entityData.totalCount || 0;
+        
+        if (lastSyncElement) {
+            if (entityData.lastSyncDate) {
+                const lastSyncDate = new Date(entityData.lastSyncDate);
+                lastSyncElement.textContent = lastSyncDate.toLocaleString();
+            } else {
+                lastSyncElement.textContent = 'Never';
             }
+        }
+        
+        if (statusElement) statusElement.textContent = entityData.status || 'Ready';
+        if (syncCountElement) syncCountElement.textContent = entityData.lastSyncCount || 0;
+    }
+    
+    function fetchHistory() {
+        console.log('Fetching sync history...');
+        fetch(ENDPOINTS.history)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`History fetch failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('History response:', data);
+                if (syncHistory) {
+                    if (data && data.history && data.history.length > 0) {
+                        syncHistory.innerHTML = '';
+                        
+                        // Get active filter
+                        const activeStatusFilter = document.querySelector('#filter-options .filter-option.active');
+                        const statusFilterType = activeStatusFilter ? activeStatusFilter.getAttribute('data-filter') : 'all';
+                        
+                        const activeEntityFilter = document.querySelector('#history-filter-options .filter-option.active');
+                        const entityFilterType = activeEntityFilter ? activeEntityFilter.getAttribute('data-filter') : 'all';
+                        
+                        // Apply filters
+                        let filteredHistory = data.history;
+                        
+                        // Apply status filter
+                        if (statusFilterType !== 'all') {
+                            filteredHistory = filteredHistory.filter(item => 
+                                statusFilterType === 'success' ? item.success : !item.success
+                            );
+                        }
+                        
+                        // Apply entity filter
+                        if (entityFilterType !== 'all') {
+                            filteredHistory = filteredHistory.filter(item => 
+                                item.entity_type === entityFilterType
+                            );
+                        }
+                        
+                        filteredHistory.forEach(item => {
+                            const syncItem = document.createElement('li');
+                            syncItem.className = 'sync-item';
+                            
+                            const syncTime = document.createElement('span');
+                            syncTime.className = 'sync-time';
+                            syncTime.textContent = `${new Date(item.timestamp).toLocaleString()} - ${item.entity_type || 'all'}`;
+                            
+                            const syncStatus = document.createElement('span');
+                            syncStatus.className = `sync-status ${item.success ? 'sync-success' : 'sync-error'}`;
+                            
+                            const statusText = document.createElement('span');
+                            statusText.textContent = item.success ? 'Success' : 'Failed';
+                            syncStatus.appendChild(statusText);
+                            
+                            if (item.count) {
+                                const syncCount = document.createElement('span');
+                                syncCount.className = 'sync-count';
+                                syncCount.textContent = item.count;
+                                syncStatus.appendChild(syncCount);
+                            }
+                            
+                            // Add retry button for failed syncs
+                            if (!item.success && item.sync_id) {
+                                const retryBtn = document.createElement('button');
+                                retryBtn.className = 'retry-btn';
+                                retryBtn.textContent = 'Retry';
+                                retryBtn.addEventListener('click', () => retrySync(item.sync_id));
+                                syncStatus.appendChild(retryBtn);
+                            }
+                            
+                            syncItem.appendChild(syncTime);
+                            syncItem.appendChild(syncStatus);
+                            syncHistory.appendChild(syncItem);
+                        });
+                    } else {
+                        syncHistory.innerHTML = '<li class="sync-item"><span class="sync-time">No sync history available</span></li>';
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching history:', error);
+                if (syncHistory) {
+                    syncHistory.innerHTML = `<li class="sync-item"><span class="sync-time">Error loading sync history: ${error.message}</span></li>`;
+                }
+                addLogEntry('error', `Error fetching sync history: ${error.message}`);
+            });
+    }
+    
+    function filterSyncHistory(filterType) {
+        // Re-fetch history with the new filter
+        fetchHistory();
+    }
+    
+    function filterSyncHistoryByEntity(entityType) {
+        // Re-fetch history with the new entity filter
+        fetchHistory();
+    }
+    
+    function loadEmailSettings() {
+        console.log('Loading email settings...');
+        fetch(ENDPOINTS.email)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Email settings fetch failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Email settings response:', data);
+                const emailInput = document.getElementById('email');
+                const notifyErrorsCheckbox = document.getElementById('notify-errors');
+                const notifySyncCheckbox = document.getElementById('notify-sync');
+                
+                if (emailInput) emailInput.value = data.email || '';
+                if (notifyErrorsCheckbox) notifyErrorsCheckbox.checked = data.notifyErrors || false;
+                if (notifySyncCheckbox) notifySyncCheckbox.checked = data.notifySync || false;
+            })
+            .catch(error => {
+                console.error('Error loading email settings:', error);
+                addLogEntry('error', `Error loading email settings: ${error.message}`);
+            });
+    }
+    
+    function triggerSync() {
+        if (!syncBtn) return;
+        
+        syncBtn.disabled = true;
+        syncBtn.textContent = 'Syncing...';
+        
+        console.log('Triggering sync...');
+        fetch(ENDPOINTS.sync, { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Sync request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Sync response:', data);
+                if (data.success) {
+                    addLogEntry('success', 'Sync started successfully');
+                } else {
+                    addLogEntry('error', `Sync failed: ${data.message}`);
+                }
+                
+                // Re-enable button after a short delay
+                setTimeout(() => {
+                    syncBtn.disabled = false;
+                    syncBtn.textContent = 'Sync Now';
+                    fetchStats();
+                    fetchHistory();
+                }, 2000);
+            })
+            .catch(error => {
+                console.error('Error triggering sync:', error);
+                addLogEntry('error', `Error triggering sync: ${error.message}`);
+                
+                syncBtn.disabled = false;
+                syncBtn.textContent = 'Sync Now';
+            });
+    }
+    
+    function triggerFullSync() {
+        if (!fullSyncBtn) return;
+        
+        fullSyncBtn.disabled = true;
+        fullSyncBtn.textContent = 'Syncing...';
+        
+        console.log('Triggering full sync...');
+        fetch(ENDPOINTS.fullSync, { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Full sync request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Full sync response:', data);
+                if (data.success) {
+                    addLogEntry('success', 'Full sync started successfully');
+                } else {
+                    addLogEntry('error', `Full sync failed: ${data.message}`);
+                }
+                
+                // Re-enable button after a short delay
+                setTimeout(() => {
+                    fullSyncBtn.disabled = false;
+                    fullSyncBtn.textContent = 'Full Sync';
+                    fetchStats();
+                    fetchHistory();
+                }, 2000);
+            })
+            .catch(error => {
+                console.error('Error triggering full sync:', error);
+                addLogEntry('error', `Error triggering full sync: ${error.message}`);
+                
+                fullSyncBtn.disabled = false;
+                fullSyncBtn.textContent = 'Full Sync';
+            });
+    }
+    
+    function triggerEntitySync(entityType) {
+        const button = document.getElementById(`sync-${entityType}-btn`);
+        if (!button) return;
+        
+        button.disabled = true;
+        button.textContent = 'Syncing...';
+        
+        console.log(`Triggering ${entityType} sync...`);
+        fetch(ENDPOINTS.syncEntity(entityType), { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`${entityType} sync request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log(`${entityType} sync response:`, data);
+                if (data.success) {
+                    addLogEntry('success', `${entityType} sync started successfully`);
+                } else {
+                    addLogEntry('error', `${entityType} sync failed: ${data.message}`);
+                }
+                
+                // Re-enable button after a short delay
+                setTimeout(() => {
+                    button.disabled = false;
+                    button.textContent = `Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+                    fetchStats();
+                    fetchHistory();
+                }, 2000);
+            })
+            .catch(error => {
+                console.error(`Error triggering ${entityType} sync:`, error);
+                addLogEntry('error', `Error triggering ${entityType} sync: ${error.message}`);
+                
+                button.disabled = false;
+                button.textContent = `Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+            });
+    }
+    
+    function triggerEntityFullSync(entityType) {
+        const button = document.getElementById(`full-sync-${entityType}-btn`);
+        if (!button) return;
+        
+        button.disabled = true;
+        button.textContent = 'Syncing...';
+        
+        console.log(`Triggering ${entityType} full sync...`);
+        fetch(ENDPOINTS.syncEntity(entityType, true), { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`${entityType} full sync request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log(`${entityType} full sync response:`, data);
+                if (data.success) {
+                    addLogEntry('success', `${entityType} full sync started successfully`);
+                } else {
+                    addLogEntry('error', `${entityType} full sync failed: ${data.message}`);
+                }
+                
+                // Re-enable button after a short delay
+                setTimeout(() => {
+                    button.disabled = false;
+                    button.textContent = `Full Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+                    fetchStats();
+                    fetchHistory();
+                }, 2000);
+            })
+            .catch(error => {
+                console.error(`Error triggering ${entityType} full sync:`, error);
+                addLogEntry('error', `Error triggering ${entityType} full sync: ${error.message}`);
+                
+                button.disabled = false;
+                button.textContent = `Full Sync ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+            });
+    }
+    
+    function retrySync(syncId) {
+        console.log(`Retrying sync ${syncId}...`);
+        fetch(ENDPOINTS.retrySync(syncId), { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Retry sync request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log(`Retry sync ${syncId} response:`, data);
+                if (data.success) {
+                    addLogEntry('success', `Retry of sync ${syncId} started successfully`);
+                } else {
+                    addLogEntry('error', `Retry of sync ${syncId} failed: ${data.message}`);
+                }
+                
+                // Refresh data
+                fetchStats();
+                fetchHistory();
+            })
+            .catch(error => {
+                console.error(`Error retrying sync ${syncId}:`, error);
+                addLogEntry('error', `Error retrying sync ${syncId}: ${error.message}`);
+            });
+    }
+    
+    function clearLogs() {
+        console.log('Clearing logs...');
+        fetch(ENDPOINTS.clearLogs, { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Clear logs request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Clear logs response:', data);
+                if (data.success) {
+                    logContainer.innerHTML = '<div class="log-entry log-info">Logs cleared</div>';
+                } else {
+                    addLogEntry('error', `Failed to clear logs: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error clearing logs:', error);
+                addLogEntry('error', `Error clearing logs: ${error.message}`);
+            });
+    }
+    
+    function saveEmailSettings(event) {
+        event.preventDefault();
+        
+        const email = document.getElementById('email').value;
+        const notifyErrors = document.getElementById('notify-errors').checked;
+        const notifySync = document.getElementById('notify-sync').checked;
+        
+        console.log('Saving email settings...');
+        fetch(ENDPOINTS.email, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email,
+                notifyErrors,
+                notifySync
+            })
         })
-        .catch(error => {
-            console.error('Error testing API connection:', error);
-            alert(`Error testing API connection: ${error.message}`);
-            setStatusOffline();
-        });
-}
-
-// Add a global test function that can be called from the console for debugging
-window.testApiConnection = testApiConnection;
-
-// Log initialization complete
-console.log('Dashboard initialization complete');
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Save email settings request failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Save email settings response:', data);
+                if (data.success) {
+                    addLogEntry('success', 'Email notification settings updated');
+                } else {
+                    addLogEntry('error', `Failed to update email settings: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error saving email settings:', error);
+                addLogEntry('error', `Error saving email settings: ${error.message}`);
+            });
+    }
+    
+    function addLogEntry(level, message) {
+        if (!logContainer) return;
+        
+        const logEntry = document.createElement('div');
+        logEntry.className = `log-entry log-${level}`;
+        logEntry.textContent = `[${new Date().toLocaleString()}] ${message}`;
+        logContainer.insertBefore(logEntry, logContainer.firstChild);
+    }
+    
+    // Debug function to test API connectivity
+    window.testApiConnectivity = function() {
+        console.log('Testing API connectivity...');
+        fetch(ENDPOINTS.test)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`API test failed: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('API test response:', data);
+                alert(`API test result: ${data.success ? 'Success' : 'Failed'}\nMessage: ${data.message}`);
+            })
+            .catch(error => {
+                console.error('Error testing API:', error);
+                alert(`API test error: ${error.message}`);
+            });
+    };
+});
