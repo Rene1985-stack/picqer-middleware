@@ -1,578 +1,562 @@
-// Updated dashboard-api.js with correct environment variable names and file paths
+// dashboard.js - Fixed API paths for dashboard frontend
 
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const nodemailer = require('nodemailer');
-const sql = require('mssql');
-const router = express.Router();
-
-// Import services
-const PicqerService = require('../picqer-service');
-const PicklistService = require('../picklist-service');
-const WarehouseService = require('../warehouse_service');
-const UserService = require('../user_service');
-const SupplierService = require('../supplier_service');
-
-// In-memory storage for logs and sync history (replace with database in production)
-let logs = [];
-let syncHistory = [];
-let emailSettings = {
-    email: '',
-    notifyErrors: false,
-    notifySync: false
+// API endpoints
+const API_BASE_URL = ''; // Empty string for relative paths from current domain
+const API_ENDPOINTS = {
+    status: '/api/status',
+    stats: '/api/stats',
+    logs: '/api/logs',
+    history: '/api/history',
+    email: '/api/email',
+    sync: '/api/sync',
+    syncEntity: (entity) => `/api/sync/${entity}`,
+    retrySyncById: (syncId) => `/api/sync/retry/${syncId}`,
+    test: '/api/test'
 };
 
-// Constants
-const MAX_LOGS = 100;
-const LOGS_FILE = path.join(__dirname, 'logs.json');
-const HISTORY_FILE = path.join(__dirname, 'history.json');
-const EMAIL_SETTINGS_FILE = path.join(__dirname, 'email-settings.json');
+// DOM elements
+const statusIndicator = document.getElementById('status-indicator');
+const statusText = document.getElementById('status-text');
+const syncBtn = document.getElementById('sync-btn');
+const fullSyncBtn = document.getElementById('full-sync-btn');
+const syncProgressBar = document.getElementById('sync-progress-bar');
+const entityTabs = document.querySelectorAll('.entity-tab');
+const entityContents = document.querySelectorAll('.entity-content');
+const filterOptions = document.querySelectorAll('.filter-option');
 
-// Initialize data from files if they exist
-try {
-    if (fs.existsSync(LOGS_FILE)) {
-        logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
-    }
-    if (fs.existsSync(HISTORY_FILE)) {
-        syncHistory = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-    }
-    if (fs.existsSync(EMAIL_SETTINGS_FILE)) {
-        emailSettings = JSON.parse(fs.readFileSync(EMAIL_SETTINGS_FILE, 'utf8'));
-    }
-} catch (error) {
-    console.error('Error loading dashboard data:', error);
-}
+// Stats elements
+const totalProductsEl = document.getElementById('total-products');
+const totalPicklistsEl = document.getElementById('total-picklists');
+const totalWarehousesEl = document.getElementById('total-warehouses');
+const totalUsersEl = document.getElementById('total-users');
+const totalSuppliersEl = document.getElementById('total-suppliers');
+const lastSyncEl = document.getElementById('last-sync');
 
-// Save data to files
-function saveLogs() {
-    fs.writeFileSync(LOGS_FILE, JSON.stringify(logs), 'utf8');
-}
+// Entity-specific elements
+const productsCountEl = document.getElementById('products-count');
+const productsLastSyncEl = document.getElementById('products-last-sync');
+const productsSyncStatusEl = document.getElementById('products-sync-status');
+const productsLastSyncCountEl = document.getElementById('products-last-sync-count');
+const syncProductsBtn = document.getElementById('sync-products-btn');
+const fullSyncProductsBtn = document.getElementById('full-sync-products-btn');
 
-function saveHistory() {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(syncHistory), 'utf8');
-}
+// Initialize dashboard
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Dashboard initializing...');
+    
+    // Check middleware status
+    checkStatus();
+    
+    // Load initial data
+    fetchStats();
+    fetchLogs();
+    fetchHistory();
+    fetchEmailSettings();
+    
+    // Set up refresh intervals
+    setInterval(checkStatus, 30000); // Check status every 30 seconds
+    setInterval(fetchStats, 60000); // Refresh stats every minute
+    setInterval(fetchLogs, 10000); // Refresh logs every 10 seconds
+    
+    // Set up event listeners
+    setupEventListeners();
+});
 
-function saveEmailSettings() {
-    fs.writeFileSync(EMAIL_SETTINGS_FILE, JSON.stringify(emailSettings), 'utf8');
-}
-
-// Logging functions
-function addLog(level, message) {
-    const log = {
-        timestamp: new Date().toISOString(),
-        level,
-        message
-    };
-    
-    logs.unshift(log); // Add to beginning for newest first
-    
-    // Limit log size
-    if (logs.length > MAX_LOGS) {
-        logs = logs.slice(0, MAX_LOGS);
-    }
-    
-    saveLogs();
-    
-    // Send email notification for errors if enabled
-    if (level === 'error' && emailSettings.notifyErrors && emailSettings.email) {
-        sendEmailNotification(
-            'Picqer Middleware Error Alert',
-            `An error occurred in your Picqer middleware:\n\n${message}\n\nTimestamp: ${log.timestamp}`
-        );
-    }
-    
-    return log;
-}
-
-// Add sync record to history
-function addSyncRecord(success, entity_type = 'all', count = null, message = null, sync_id = null) {
-    const record = {
-        timestamp: new Date().toISOString(),
-        success,
-        entity_type,
-        count,
-        message,
-        sync_id
-    };
-    
-    syncHistory.unshift(record); // Add to beginning for newest first
-    
-    // Limit history size
-    if (syncHistory.length > 50) {
-        syncHistory = syncHistory.slice(0, 50);
-    }
-    
-    saveHistory();
-    
-    // Send email notification for successful syncs if enabled
-    if (success && emailSettings.notifySync && emailSettings.email) {
-        sendEmailNotification(
-            `Picqer Middleware ${entity_type.charAt(0).toUpperCase() + entity_type.slice(1)} Sync Completed`,
-            `A ${entity_type} synchronization has completed successfully:\n\n${count ? `${count} items synchronized` : 'Synchronization completed'}\n\nTimestamp: ${record.timestamp}`
-        );
-    }
-    
-    return record;
-}
-
-// Email notification function
-function sendEmailNotification(subject, body) {
-    // This is a simple implementation. In production, use a proper email service.
-    // For Railway, you might want to use a service like SendGrid, Mailgun, etc.
-    
-    // Create a test account at ethereal.email for development
-    nodemailer.createTestAccount().then(account => {
-        // Create a transporter
-        const transporter = nodemailer.createTransport({
-            host: account.smtp.host,
-            port: account.smtp.port,
-            secure: account.smtp.secure,
-            auth: {
-                user: account.user,
-                pass: account.pass
+// Check middleware status
+function checkStatus() {
+    console.log('Checking middleware status...');
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.status}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Status check failed: ${response.status}`);
             }
-        });
-        
-        // Setup email data
-        const mailOptions = {
-            from: '"Picqer Middleware" <middleware@example.com>',
-            to: emailSettings.email,
-            subject: subject,
-            text: body
-        };
-        
-        // Send mail
-        transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                addLog('error', `Failed to send email notification: ${error.message}`);
-                return;
+            return response.json();
+        })
+        .then(data => {
+            console.log('Status response:', data);
+            if (data.online) {
+                setStatusOnline();
+            } else {
+                setStatusOffline();
             }
-            
-            addLog('info', `Email notification sent: ${info.messageId}`);
-            console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
+        })
+        .catch(error => {
+            console.error('Error checking status:', error);
+            setStatusOffline();
         });
-    }).catch(error => {
-        addLog('error', `Failed to create email test account: ${error.message}`);
-    });
 }
 
-// Initialize services with configuration
-function initializeServices(config) {
-    const apiKey = process.env.PICQER_API_KEY;
-    // Use PICQER_BASE_URL instead of PICQER_API_URL to match Railway environment variables
-    const baseUrl = process.env.PICQER_BASE_URL || 'https://skapa-global.picqer.com/api/v1';
+// Set status to online
+function setStatusOnline() {
+    statusIndicator.classList.remove('status-offline');
+    statusIndicator.classList.add('status-online');
+    statusText.textContent = 'Online';
+    statusText.style.color = 'var(--success)';
+}
+
+// Set status to offline
+function setStatusOffline() {
+    statusIndicator.classList.remove('status-online');
+    statusIndicator.classList.add('status-offline');
+    statusText.textContent = 'Offline';
+    statusText.style.color = 'var(--danger)';
+}
+
+// Fetch middleware stats
+function fetchStats() {
+    console.log('Fetching middleware stats...');
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.stats}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Stats fetch failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Stats response:', data);
+            updateStats(data);
+        })
+        .catch(error => {
+            console.error('Error fetching stats:', error);
+        });
+}
+
+// Update stats in the UI
+function updateStats(data) {
+    // Update all entities stats
+    totalProductsEl.textContent = data.totalProducts || 0;
+    totalPicklistsEl.textContent = data.totalPicklists || 0;
+    totalWarehousesEl.textContent = data.totalWarehouses || 0;
+    totalUsersEl.textContent = data.totalUsers || 0;
+    totalSuppliersEl.textContent = data.totalSuppliers || 0;
     
-    const sqlConfig = {
-        // Use SQL_SERVER instead of DB_SERVER to match Railway environment variables
-        server: process.env.SQL_SERVER,
-        database: process.env.SQL_DATABASE,
-        user: process.env.SQL_USER,
-        password: process.env.SQL_PASSWORD,
-        options: {
-            encrypt: true,
-            trustServerCertificate: false
+    // Format last sync date
+    const lastSyncDate = data.lastSync ? new Date(data.lastSync) : null;
+    lastSyncEl.textContent = lastSyncDate ? formatDate(lastSyncDate) : 'Never';
+    
+    // Update entity-specific stats if available
+    if (data.entities) {
+        // Products
+        if (data.entities.products) {
+            productsCountEl.textContent = data.entities.products.count || 0;
+            productsLastSyncEl.textContent = data.entities.products.lastSync ? formatDate(new Date(data.entities.products.lastSync)) : 'Never';
+            productsSyncStatusEl.textContent = data.entities.products.status || 'Ready';
+            productsLastSyncCountEl.textContent = data.entities.products.lastSyncCount || 0;
         }
-    };
+        
+        // Add similar updates for other entities
+    }
     
-    return {
-        products: new PicqerService(apiKey, baseUrl, sqlConfig),
-        picklists: new PicklistService(apiKey, baseUrl, sqlConfig),
-        warehouses: new WarehouseService(apiKey, baseUrl, sqlConfig),
-        users: new UserService(apiKey, baseUrl, sqlConfig),
-        suppliers: new SupplierService(apiKey, baseUrl, sqlConfig)
-    };
-}
-
-// Routes
-
-// Serve the dashboard HTML - use dashboard.html instead of enhanced-dashboard-with-entities.html
-router.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dashboard.html'));
-});
-
-// Get middleware status
-router.get('/status', (req, res) => {
-    // In a real implementation, you would check if the middleware is actually running
-    res.json({
-        online: true,
-        version: '1.0.0',
-        uptime: process.uptime()
-    });
-});
-
-// Get logs
-router.get('/logs', (req, res) => {
-    res.json({
-        logs: logs
-    });
-});
-
-// Clear logs
-router.post('/logs/clear', (req, res) => {
-    logs = [];
-    saveLogs();
-    addLog('info', 'Logs cleared by user');
-    res.json({ success: true, message: 'Logs cleared' });
-});
-
-// Get sync statistics
-router.get('/stats', async (req, res) => {
-    try {
-        // Initialize services
-        const services = initializeServices();
+    // Update sync progress if a sync is running
+    if (data.syncStatus === 'Running' && data.syncProgress) {
+        const progress = data.syncProgress;
+        const percent = progress.totalItems > 0 ? Math.round((progress.itemsProcessed / progress.totalItems) * 100) : 0;
         
-        // Get database connection
-        const sqlConfig = {
-            // Use SQL_SERVER instead of DB_SERVER to match Railway environment variables
-            server: process.env.SQL_SERVER,
-            database: process.env.SQL_DATABASE,
-            user: process.env.SQL_USER,
-            password: process.env.SQL_PASSWORD,
-            options: {
-                encrypt: true,
-                trustServerCertificate: false
-            }
-        };
+        syncProgressBar.style.width = `${percent}%`;
         
-        const pool = await sql.connect(sqlConfig);
-        
-        // Get counts for each entity
-        const productsResult = await pool.request().query('SELECT COUNT(*) AS count FROM Products');
-        const picklistsResult = await pool.request().query('SELECT COUNT(*) AS count FROM Picklists');
-        const warehousesResult = await pool.request().query('SELECT COUNT(*) AS count FROM Warehouses');
-        const usersResult = await pool.request().query('SELECT COUNT(*) AS count FROM Users');
-        const suppliersResult = await pool.request().query('SELECT COUNT(*) AS count FROM Suppliers');
-        
-        // Get last sync dates and counts
-        const syncStatusResult = await pool.request().query('SELECT * FROM SyncStatus');
-        
-        // Create entity-specific stats
-        const entityStats = {};
-        
-        // Process sync status records
-        if (syncStatusResult.recordset) {
-            syncStatusResult.recordset.forEach(record => {
-                const entityType = record.entity_type;
-                if (entityType) {
-                    entityStats[entityType] = {
-                        count: 0,
-                        lastSync: record.last_sync_date,
-                        status: 'Ready',
-                        lastSyncCount: record.last_sync_count || 0
-                    };
+        // Highlight the tab of the entity being synced
+        if (progress.entityType) {
+            entityTabs.forEach(tab => {
+                if (tab.dataset.entity === progress.entityType) {
+                    tab.classList.add('syncing');
+                } else {
+                    tab.classList.remove('syncing');
                 }
             });
         }
-        
-        // Set counts from database queries
-        entityStats.products = entityStats.products || {};
-        entityStats.products.count = productsResult.recordset[0].count;
-        
-        entityStats.picklists = entityStats.picklists || {};
-        entityStats.picklists.count = picklistsResult.recordset[0].count;
-        
-        entityStats.warehouses = entityStats.warehouses || {};
-        entityStats.warehouses.count = warehousesResult.recordset[0].count;
-        
-        entityStats.users = entityStats.users || {};
-        entityStats.users.count = usersResult.recordset[0].count;
-        
-        entityStats.suppliers = entityStats.suppliers || {};
-        entityStats.suppliers.count = suppliersResult.recordset[0].count;
-        
-        // Get sync progress if any sync is in progress
-        const syncProgressResult = await pool.request().query(`
-            SELECT * FROM SyncProgress 
-            WHERE status = 'in_progress' 
-            ORDER BY last_updated DESC
-        `);
-        
-        let syncProgress = null;
-        if (syncProgressResult.recordset && syncProgressResult.recordset.length > 0) {
-            const progressRecord = syncProgressResult.recordset[0];
-            syncProgress = {
-                entityType: progressRecord.entity_type,
-                syncId: progressRecord.sync_id,
-                itemsProcessed: progressRecord.items_processed,
-                totalItems: progressRecord.total_items || 0,
-                batchNumber: progressRecord.batch_number,
-                totalBatches: progressRecord.total_batches || 0,
-                startedAt: progressRecord.started_at,
-                lastUpdated: progressRecord.last_updated
-            };
-            
-            // Update status of the entity that's currently syncing
-            if (entityStats[progressRecord.entity_type]) {
-                entityStats[progressRecord.entity_type].status = 'Syncing';
-            }
-        }
-        
-        // Get the most recent sync timestamp
-        const lastSync = syncHistory.length > 0 ? syncHistory[0].timestamp : null;
-        
-        // Calculate next sync time (1 hour after last sync)
-        let nextSync = null;
-        if (lastSync) {
-            const lastSyncDate = new Date(lastSync);
-            nextSync = new Date(lastSyncDate.getTime() + 60 * 60 * 1000).toISOString();
-        }
-        
-        res.json({
-            totalProducts: entityStats.products.count,
-            totalPicklists: entityStats.picklists.count,
-            totalWarehouses: entityStats.warehouses.count,
-            totalUsers: entityStats.users.count,
-            totalSuppliers: entityStats.suppliers.count,
-            lastSync,
-            nextSync,
-            syncStatus: syncProgress ? 'Running' : 'Ready',
-            syncProgress,
-            entities: entityStats
-        });
-    } catch (error) {
-        console.error('Error getting stats:', error);
-        addLog('error', `Error getting stats: ${error.message}`);
-        
-        res.json({
-            totalProducts: 0,
-            totalPicklists: 0,
-            totalWarehouses: 0,
-            totalUsers: 0,
-            totalSuppliers: 0,
-            lastSync: null,
-            nextSync: null,
-            syncStatus: 'Error',
-            error: error.message
-        });
-    }
-});
-
-// Get sync history
-router.get('/history', (req, res) => {
-    res.json({
-        history: syncHistory
-    });
-});
-
-// Get email settings
-router.get('/email', (req, res) => {
-    res.json(emailSettings);
-});
-
-// Update email settings
-router.post('/email', (req, res) => {
-    const { email, notifyErrors, notifySync } = req.body;
-    
-    emailSettings = {
-        email: email || '',
-        notifyErrors: !!notifyErrors,
-        notifySync: !!notifySync
-    };
-    
-    saveEmailSettings();
-    addLog('info', `Email notification settings updated: ${email}`);
-    
-    res.json({
-        success: true,
-        message: 'Email settings updated',
-        settings: emailSettings
-    });
-});
-
-// Sync all entities
-router.post('/sync', async (req, res) => {
-    const fullSync = req.query.full === 'true';
-    
-    try {
-        // Initialize services
-        const services = initializeServices();
-        
-        // Log sync start
-        addLog('info', `Starting ${fullSync ? 'full' : 'incremental'} sync for all entities`);
-        
-        // Send immediate response to prevent timeout
-        res.json({
-            success: true,
-            message: `${fullSync ? 'Full' : 'Incremental'} sync started for all entities`
-        });
-        
-        // Start sync processes for each entity
-        syncEntity(services.products, 'products', fullSync);
-        syncEntity(services.picklists, 'picklists', fullSync);
-        syncEntity(services.warehouses, 'warehouses', fullSync);
-        syncEntity(services.users, 'users', fullSync);
-        syncEntity(services.suppliers, 'suppliers', fullSync);
-    } catch (error) {
-        console.error('Error starting sync:', error);
-        addLog('error', `Error starting sync: ${error.message}`);
-        
-        res.status(500).json({
-            success: false,
-            message: `Error starting sync: ${error.message}`
-        });
-    }
-});
-
-// Sync specific entity
-router.post('/sync/:entity', async (req, res) => {
-    const entityType = req.params.entity;
-    const fullSync = req.query.full === 'true';
-    
-    try {
-        // Initialize services
-        const services = initializeServices();
-        
-        // Check if entity type is valid
-        if (!services[entityType]) {
-            throw new Error(`Invalid entity type: ${entityType}`);
-        }
-        
-        // Log sync start
-        addLog('info', `Starting ${fullSync ? 'full' : 'incremental'} sync for ${entityType}`);
-        
-        // Send immediate response to prevent timeout
-        res.json({
-            success: true,
-            message: `${fullSync ? 'Full' : 'Incremental'} sync started for ${entityType}`
-        });
-        
-        // Start sync process for the entity
-        syncEntity(services[entityType], entityType, fullSync);
-    } catch (error) {
-        console.error(`Error starting ${entityType} sync:`, error);
-        addLog('error', `Error starting ${entityType} sync: ${error.message}`);
-        
-        res.status(500).json({
-            success: false,
-            message: `Error starting ${entityType} sync: ${error.message}`
-        });
-    }
-});
-
-// Helper function to sync an entity
-async function syncEntity(service, entityType, fullSync) {
-    try {
-        // Start sync
-        const result = await (fullSync ? service.fullSync() : service.incrementalSync());
-        
-        // Add sync record
-        addSyncRecord(true, entityType, result.count, result.message, result.syncId);
-        
-        // Log success
-        addLog('success', `${entityType} sync completed: ${result.count} items synchronized`);
-    } catch (error) {
-        // Add sync record
-        addSyncRecord(false, entityType, null, error.message);
-        
-        // Log error
-        addLog('error', `${entityType} sync failed: ${error.message}`);
+    } else {
+        syncProgressBar.style.width = '0%';
+        entityTabs.forEach(tab => tab.classList.remove('syncing'));
     }
 }
 
-// Retry failed sync
-router.post('/sync/retry/:syncId', async (req, res) => {
-    const syncId = req.params.syncId;
-    
-    try {
-        // Initialize services
-        const services = initializeServices();
-        
-        // Get sync record from database
-        const sqlConfig = {
-            // Use SQL_SERVER instead of DB_SERVER to match Railway environment variables
-            server: process.env.SQL_SERVER,
-            database: process.env.SQL_DATABASE,
-            user: process.env.SQL_USER,
-            password: process.env.SQL_PASSWORD,
-            options: {
-                encrypt: true,
-                trustServerCertificate: false
+// Fetch logs
+function fetchLogs() {
+    console.log('Fetching logs...');
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.logs}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Logs fetch failed: ${response.status}`);
             }
-        };
-        
-        const pool = await sql.connect(sqlConfig);
-        
-        const syncResult = await pool.request()
-            .input('syncId', sql.NVarChar, syncId)
-            .query(`
-                SELECT * FROM SyncProgress 
-                WHERE sync_id = @syncId
-            `);
-        
-        if (syncResult.recordset.length === 0) {
-            throw new Error(`No sync record found with ID: ${syncId}`);
-        }
-        
-        const syncRecord = syncResult.recordset[0];
-        const entityType = syncRecord.entity_type;
-        
-        // Check if entity type is valid
-        if (!services[entityType]) {
-            throw new Error(`Invalid entity type: ${entityType}`);
-        }
-        
-        // Log retry start
-        addLog('info', `Retrying sync for ${entityType} with ID: ${syncId}`);
-        
-        // Send immediate response to prevent timeout
-        res.json({
-            success: true,
-            message: `Retry started for ${entityType} sync with ID: ${syncId}`
+            return response.json();
+        })
+        .then(data => {
+            console.log('Logs response:', data);
+            updateLogs(data.logs);
+        })
+        .catch(error => {
+            console.error('Error fetching logs:', error);
         });
+}
+
+// Update logs in the UI
+function updateLogs(logs) {
+    const logContainer = document.querySelector('.log-container');
+    if (!logContainer) return;
+    
+    logContainer.innerHTML = '';
+    
+    if (!logs || logs.length === 0) {
+        logContainer.innerHTML = '<div class="log-entry">No logs available</div>';
+        return;
+    }
+    
+    logs.forEach(log => {
+        const logEntry = document.createElement('div');
+        logEntry.className = `log-entry log-${log.level}`;
         
-        // Start retry process
-        const result = await services[entityType].retrySyncFromId(syncId);
+        const timestamp = new Date(log.timestamp);
+        const formattedTime = formatTime(timestamp);
         
-        // Add sync record
-        addSyncRecord(true, entityType, result.count, result.message, result.syncId);
+        logEntry.innerHTML = `[${formattedTime}] ${log.message}`;
+        logContainer.appendChild(logEntry);
+    });
+}
+
+// Fetch sync history
+function fetchHistory() {
+    console.log('Fetching sync history...');
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.history}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`History fetch failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('History response:', data);
+            updateHistory(data.history);
+        })
+        .catch(error => {
+            console.error('Error fetching history:', error);
+        });
+}
+
+// Update sync history in the UI
+function updateHistory(history) {
+    const historyContainer = document.querySelector('.sync-history');
+    if (!historyContainer) return;
+    
+    historyContainer.innerHTML = '';
+    
+    if (!history || history.length === 0) {
+        historyContainer.innerHTML = '<div class="sync-item">No sync history available</div>';
+        return;
+    }
+    
+    // Get current filter
+    const activeFilter = document.querySelector('.filter-option.active').dataset.filter;
+    
+    history.forEach(item => {
+        // Apply filter
+        if (activeFilter === 'success' && !item.success) return;
+        if (activeFilter === 'error' && item.success) return;
         
-        // Log success
-        addLog('success', `${entityType} sync retry completed: ${result.count} items synchronized`);
-    } catch (error) {
-        console.error(`Error retrying sync:`, error);
-        addLog('error', `Error retrying sync: ${error.message}`);
+        const syncItem = document.createElement('div');
+        syncItem.className = 'sync-item';
         
-        res.status(500).json({
-            success: false,
-            message: `Error retrying sync: ${error.message}`
+        const timestamp = new Date(item.timestamp);
+        const formattedTime = formatDate(timestamp);
+        
+        let entityType = item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1);
+        
+        let statusHtml = item.success 
+            ? `<span class="sync-status sync-success">Success</span>` 
+            : `<span class="sync-status sync-error">Error ${item.sync_id ? `<button class="retry-btn" data-sync-id="${item.sync_id}">Retry</button>` : ''}</span>`;
+        
+        let countHtml = item.count ? `<span class="sync-count">${item.count}</span>` : '';
+        
+        syncItem.innerHTML = `
+            <div>
+                <div>${entityType}</div>
+                <div class="sync-time">${formattedTime}</div>
+            </div>
+            <div>
+                ${statusHtml}
+                ${countHtml}
+            </div>
+        `;
+        
+        historyContainer.appendChild(syncItem);
+    });
+    
+    // Add event listeners to retry buttons
+    document.querySelectorAll('.retry-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const syncId = btn.dataset.syncId;
+            retrySync(syncId);
+        });
+    });
+}
+
+// Fetch email settings
+function fetchEmailSettings() {
+    console.log('Fetching email settings...');
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.email}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Email settings fetch failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Email settings response:', data);
+            updateEmailSettings(data);
+        })
+        .catch(error => {
+            console.error('Error loading email settings:', error);
+        });
+}
+
+// Update email settings in the UI
+function updateEmailSettings(settings) {
+    const emailInput = document.querySelector('input[type="email"]');
+    const notifyErrorsCheckbox = document.getElementById('notify-errors');
+    const notifySyncCheckbox = document.getElementById('notify-sync');
+    
+    if (emailInput) emailInput.value = settings.email || '';
+    if (notifyErrorsCheckbox) notifyErrorsCheckbox.checked = settings.notifyErrors || false;
+    if (notifySyncCheckbox) notifySyncCheckbox.checked = settings.notifySync || false;
+}
+
+// Start sync
+function startSync(fullSync = false, entityType = null) {
+    let url = `${API_BASE_URL}${API_ENDPOINTS.sync}`;
+    
+    if (entityType && entityType !== 'all') {
+        url = `${API_BASE_URL}${API_ENDPOINTS.syncEntity(entityType)}`;
+    }
+    
+    if (fullSync) {
+        url += '?full=true';
+    }
+    
+    console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync for ${entityType || 'all entities'}...`);
+    
+    fetch(url, { method: 'POST' })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Sync request failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Sync response:', data);
+            alert(data.message);
+            
+            // Refresh stats and history after a short delay
+            setTimeout(() => {
+                fetchStats();
+                fetchHistory();
+            }, 2000);
+        })
+        .catch(error => {
+            console.error('Error starting sync:', error);
+            alert(`Error starting sync: ${error.message}`);
+        });
+}
+
+// Retry sync
+function retrySync(syncId) {
+    console.log(`Retrying sync with ID: ${syncId}...`);
+    
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.retrySyncById(syncId)}`, { method: 'POST' })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Retry request failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Retry response:', data);
+            alert(data.message);
+            
+            // Refresh stats and history after a short delay
+            setTimeout(() => {
+                fetchStats();
+                fetchHistory();
+            }, 2000);
+        })
+        .catch(error => {
+            console.error('Error retrying sync:', error);
+            alert(`Error retrying sync: ${error.message}`);
+        });
+}
+
+// Save email settings
+function saveEmailSettings() {
+    const emailInput = document.querySelector('input[type="email"]');
+    const notifyErrorsCheckbox = document.getElementById('notify-errors');
+    const notifySyncCheckbox = document.getElementById('notify-sync');
+    
+    const settings = {
+        email: emailInput.value,
+        notifyErrors: notifyErrorsCheckbox.checked,
+        notifySync: notifySyncCheckbox.checked
+    };
+    
+    console.log('Saving email settings:', settings);
+    
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.email}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Save settings request failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Save settings response:', data);
+            alert('Email notification settings saved');
+        })
+        .catch(error => {
+            console.error('Error saving email settings:', error);
+            alert(`Error saving email settings: ${error.message}`);
+        });
+}
+
+// Set up event listeners
+function setupEventListeners() {
+    // Sync buttons
+    if (syncBtn) {
+        syncBtn.addEventListener('click', () => {
+            const activeTab = document.querySelector('.entity-tab.active');
+            const entityType = activeTab.dataset.entity;
+            startSync(false, entityType);
         });
     }
-});
+    
+    if (fullSyncBtn) {
+        fullSyncBtn.addEventListener('click', () => {
+            const activeTab = document.querySelector('.entity-tab.active');
+            const entityType = activeTab.dataset.entity;
+            startSync(true, entityType);
+        });
+    }
+    
+    // Entity tabs
+    entityTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            // Update active tab
+            entityTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            // Show corresponding content
+            const entityType = tab.dataset.entity;
+            entityContents.forEach(content => {
+                if (content.id === `${entityType}-content`) {
+                    content.classList.add('active');
+                } else {
+                    content.classList.remove('active');
+                }
+            });
+        });
+    });
+    
+    // Filter options
+    filterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Update active filter
+            filterOptions.forEach(o => o.classList.remove('active'));
+            option.classList.add('active');
+            
+            // Refresh history with new filter
+            fetchHistory();
+        });
+    });
+    
+    // Entity-specific sync buttons
+    if (syncProductsBtn) {
+        syncProductsBtn.addEventListener('click', () => {
+            startSync(false, 'products');
+        });
+    }
+    
+    if (fullSyncProductsBtn) {
+        fullSyncProductsBtn.addEventListener('click', () => {
+            startSync(true, 'products');
+        });
+    }
+    
+    // Add similar event listeners for other entity-specific buttons
+    
+    // Email settings form
+    const saveSettingsBtn = document.getElementById('save-settings-btn');
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            saveEmailSettings();
+        });
+    }
+    
+    // Clear logs button
+    const clearLogsBtn = document.getElementById('clear-logs-btn');
+    if (clearLogsBtn) {
+        clearLogsBtn.addEventListener('click', () => {
+            fetch(`${API_BASE_URL}${API_ENDPOINTS.logs}/clear`, { method: 'POST' })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Clear logs request failed: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Clear logs response:', data);
+                    fetchLogs();
+                })
+                .catch(error => {
+                    console.error('Error clearing logs:', error);
+                    alert(`Error clearing logs: ${error.message}`);
+                });
+        });
+    }
+}
+
+// Helper function to format date
+function formatDate(date) {
+    return date.toLocaleString();
+}
+
+// Helper function to format time
+function formatTime(date) {
+    return date.toLocaleTimeString();
+}
 
 // Test API connection
-router.get('/test', async (req, res) => {
-    try {
-        // Initialize services
-        const services = initializeServices();
-        
-        // Test Picqer API connection
-        const apiKey = process.env.PICQER_API_KEY;
-        // Use PICQER_BASE_URL instead of PICQER_API_URL to match Railway environment variables
-        const baseUrl = process.env.PICQER_BASE_URL || 'https://skapa-global.picqer.com/api/v1';
-        
-        // Simple test request
-        const response = await fetch(`${baseUrl}/products?api_key=${apiKey}&perpage=1`);
-        
-        if (!response.ok) {
-            throw new Error(`API request failed with status: ${response.status}`);
-        }
-        
-        res.json({
-            success: true,
-            message: 'API connection successful',
-            data: true
+function testApiConnection() {
+    console.log('Testing API connection...');
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.test}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`API test failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('API test response:', data);
+            if (data.success) {
+                alert('API connection successful!');
+                setStatusOnline();
+            } else {
+                alert(`API connection failed: ${data.message}`);
+                setStatusOffline();
+            }
+        })
+        .catch(error => {
+            console.error('Error testing API connection:', error);
+            alert(`Error testing API connection: ${error.message}`);
+            setStatusOffline();
         });
-    } catch (error) {
-        console.error('API test failed:', error);
-        addLog('error', `API test failed: ${error.message}`);
-        
-        res.json({
-            success: false,
-            message: `API test failed: ${error.message}`,
-            data: false
-        });
-    }
-});
+}
 
-module.exports = router;
+// Add a global test function that can be called from the console for debugging
+window.testApiConnection = testApiConnection;
+
+// Log initialization complete
+console.log('Dashboard initialization complete');
