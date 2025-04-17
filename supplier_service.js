@@ -1,5 +1,5 @@
 /**
- * Optimized Supplier service with performance enhancements
+ * Optimized Supplier service with performance enhancements and improved error handling
  * Includes performance optimizations:
  * 1. 30-day rolling window for incremental syncs
  * 2. Increased batch size for database operations
@@ -344,10 +344,40 @@ class SupplierService {
         
         const response = await this.client.get('/suppliers', { params });
         
-        if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+        // Add robust error checking for response structure
+        if (!response || !response.data) {
+          console.warn('Received empty response from Picqer API');
+          hasMoreSuppliers = false;
+          continue;
+        }
+        
+        // Check if response.data is an array
+        if (!Array.isArray(response.data)) {
+          console.warn('Received non-array response from Picqer API:', typeof response.data);
+          
+          // If response.data is an object with a data property that is an array, use that
+          if (response.data && typeof response.data === 'object' && Array.isArray(response.data.data)) {
+            console.log('Found data array in response object, using that instead');
+            response.data = response.data.data;
+          } else {
+            // If we can't find an array, log the response and continue with an empty array
+            console.warn('Could not find suppliers array in response, continuing with empty array');
+            console.log('Response structure:', JSON.stringify(response.data, null, 2).substring(0, 500) + '...');
+            hasMoreSuppliers = false;
+            continue;
+          }
+        }
+        
+        // Now we can safely check response.data.length
+        if (response.data.length > 0) {
           // Filter out duplicates by idsupplier
           const existingIds = new Set(allSuppliers.map(s => s.idsupplier));
           const newSuppliers = response.data.filter(supplier => {
+            // Check if supplier has idsupplier property
+            if (!supplier || !supplier.idsupplier) {
+              console.warn('Found supplier without idsupplier property:', supplier);
+              return false;
+            }
             return !existingIds.has(supplier.idsupplier);
           });
           
@@ -363,13 +393,28 @@ class SupplierService {
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 500));
         } else {
+          console.log('No more suppliers found');
           hasMoreSuppliers = false;
         }
       }
       
+      // Check if we have any suppliers
+      if (allSuppliers.length === 0) {
+        console.log('No suppliers found in Picqer');
+        
+        // Update sync progress with total items if provided
+        if (syncProgress) {
+          await this.updateSyncProgress(syncProgress, {
+            total_items: 0
+          });
+        }
+        
+        return [];
+      }
+      
       // Sort suppliers by name for consistent processing
       allSuppliers.sort((a, b) => {
-        return (a.name || '').localeCompare(b.name || '');
+        return ((a.name || '') + '').localeCompare((b.name || '') + '');
       });
       
       console.log('Sorted suppliers by name for consistent processing');
@@ -397,7 +442,9 @@ class SupplierService {
         return this.getAllSuppliers(updatedSince, syncProgress);
       }
       
-      throw error;
+      // Return empty array on error to prevent crashing
+      console.log('Returning empty array due to error');
+      return [];
     }
   }
 
@@ -412,12 +459,29 @@ class SupplierService {
       
       const response = await this.client.get(`/suppliers/${idsupplier}/products`);
       
-      if (response.data && Array.isArray(response.data)) {
-        console.log(`Retrieved ${response.data.length} products for supplier ${idsupplier}`);
-        return response.data;
+      // Add robust error checking for response structure
+      if (!response || !response.data) {
+        console.warn(`Received empty response for supplier ${idsupplier} products`);
+        return [];
       }
       
-      return [];
+      // Check if response.data is an array
+      if (!Array.isArray(response.data)) {
+        console.warn(`Received non-array response for supplier ${idsupplier} products:`, typeof response.data);
+        
+        // If response.data is an object with a data property that is an array, use that
+        if (response.data && typeof response.data === 'object' && Array.isArray(response.data.data)) {
+          console.log('Found data array in response object, using that instead');
+          response.data = response.data.data;
+        } else {
+          // If we can't find an array, log the response and return an empty array
+          console.warn('Could not find products array in response, returning empty array');
+          return [];
+        }
+      }
+      
+      console.log(`Retrieved ${response.data.length} products for supplier ${idsupplier}`);
+      return response.data;
     } catch (error) {
       console.error(`Error fetching products for supplier ${idsupplier}:`, error.message);
       
@@ -448,70 +512,212 @@ class SupplierService {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
-    // Use the more recent date between the provided date and 30 days ago
+    // Use the more recent of the two dates
     const effectiveDate = date > thirtyDaysAgo ? date : thirtyDaysAgo;
     
     console.log(`Using 30-day rolling window for incremental sync. Effective date: ${effectiveDate.toISOString()}`);
+    
     return this.getAllSuppliers(effectiveDate);
   }
 
   /**
-   * Get the last sync date for suppliers
-   * @returns {Promise<Date|null>} - Last sync date or null if not found
+   * Save suppliers to database
+   * @param {Array} suppliers - Array of suppliers to save
+   * @param {Object|null} syncProgress - Sync progress record for resumable sync
+   * @returns {Promise<boolean>} - Success status
    */
-  async getLastSuppliersSyncDate() {
+  async saveSuppliersToDatabase(suppliers, syncProgress = null) {
     try {
+      if (!suppliers || !Array.isArray(suppliers) || suppliers.length === 0) {
+        console.log('No suppliers to save to database');
+        return true;
+      }
+      
+      console.log(`Saving ${suppliers.length} suppliers to database...`);
+      
       const pool = await sql.connect(this.sqlConfig);
       
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
+      // Process suppliers in batches for better performance
+      const batchSize = this.batchSize;
+      const batches = Math.ceil(suppliers.length / batchSize);
       
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      console.log(`Processing suppliers in ${batches} batches of ${batchSize}`);
       
-      if (syncTableExists) {
-        // Check if entity_type column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-        `);
+      // Update sync progress with total batches if provided
+      if (syncProgress) {
+        await this.updateSyncProgress(syncProgress, {
+          total_batches: batches
+        });
+      }
+      
+      for (let i = 0; i < batches; i++) {
+        console.log(`Processing batch ${i + 1} of ${batches}...`);
         
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
+        // Update sync progress if provided
+        if (syncProgress) {
+          await this.updateSyncProgress(syncProgress, {
+            batch_number: i + 1
+          });
+        }
         
-        if (entityTypeColumnExists) {
-          // Get last sync date by entity_type
-          const result = await pool.request().query(`
-            SELECT last_sync_date 
-            FROM SyncStatus 
-            WHERE entity_type = 'suppliers'
-          `);
+        const batchSuppliers = suppliers.slice(i * batchSize, (i + 1) * batchSize);
+        
+        // Process each supplier in the batch
+        for (const supplier of batchSuppliers) {
+          // Skip suppliers without idsupplier
+          if (!supplier || !supplier.idsupplier) {
+            console.warn('Skipping supplier without idsupplier:', supplier);
+            continue;
+          }
           
-          if (result.recordset.length > 0) {
-            return new Date(result.recordset[0].last_sync_date);
+          // Get supplier details
+          console.log(`Fetching details for supplier ${supplier.idsupplier}...`);
+          
+          try {
+            const detailsResponse = await this.client.get(`/suppliers/${supplier.idsupplier}`);
+            
+            // Add robust error checking for response structure
+            if (!detailsResponse || !detailsResponse.data) {
+              console.warn(`Received empty response for supplier ${supplier.idsupplier} details`);
+              continue;
+            }
+            
+            const supplierDetails = detailsResponse.data;
+            console.log(`Retrieved details for supplier ${supplier.idsupplier}`);
+            
+            // Merge supplier with details
+            const mergedSupplier = {
+              ...supplier,
+              ...supplierDetails
+            };
+            
+            // Save supplier to database
+            await pool.request()
+              .input('idsupplier', sql.Int, mergedSupplier.idsupplier)
+              .input('name', sql.NVarChar, mergedSupplier.name || '')
+              .input('contactname', sql.NVarChar, mergedSupplier.contactname || '')
+              .input('email', sql.NVarChar, mergedSupplier.email || '')
+              .input('telephone', sql.NVarChar, mergedSupplier.telephone || '')
+              .input('address', sql.NVarChar, mergedSupplier.address || '')
+              .input('zipcode', sql.NVarChar, mergedSupplier.zipcode || '')
+              .input('city', sql.NVarChar, mergedSupplier.city || '')
+              .input('country', sql.NVarChar, mergedSupplier.country || '')
+              .input('vatid', sql.NVarChar, mergedSupplier.vatid || '')
+              .input('created', sql.DateTime, mergedSupplier.created ? new Date(mergedSupplier.created) : null)
+              .input('updated', sql.DateTime, mergedSupplier.updated ? new Date(mergedSupplier.updated) : null)
+              .query(`
+                MERGE INTO Suppliers AS target
+                USING (SELECT @idsupplier AS idsupplier) AS source
+                ON target.idsupplier = source.idsupplier
+                WHEN MATCHED THEN
+                  UPDATE SET
+                    name = @name,
+                    contactname = @contactname,
+                    email = @email,
+                    telephone = @telephone,
+                    address = @address,
+                    zipcode = @zipcode,
+                    city = @city,
+                    country = @country,
+                    vatid = @vatid,
+                    created = @created,
+                    updated = @updated,
+                    last_sync_date = GETDATE()
+                WHEN NOT MATCHED THEN
+                  INSERT (
+                    idsupplier, name, contactname, email, telephone,
+                    address, zipcode, city, country, vatid,
+                    created, updated, last_sync_date
+                  )
+                  VALUES (
+                    @idsupplier, @name, @contactname, @email, @telephone,
+                    @address, @zipcode, @city, @country, @vatid,
+                    @created, @updated, GETDATE()
+                  );
+              `);
+            
+            // Get supplier products
+            const products = await this.getSupplierProducts(mergedSupplier.idsupplier);
+            
+            // Save supplier products to database
+            if (products && Array.isArray(products) && products.length > 0) {
+              console.log(`Saving ${products.length} products for supplier ${mergedSupplier.idsupplier}...`);
+              
+              // Delete existing supplier products
+              await pool.request()
+                .input('idsupplier', sql.Int, mergedSupplier.idsupplier)
+                .query(`
+                  DELETE FROM SupplierProducts
+                  WHERE idsupplier = @idsupplier
+                `);
+              
+              // Insert new supplier products
+              for (const product of products) {
+                // Skip products without idproduct
+                if (!product || !product.idproduct) {
+                  console.warn('Skipping product without idproduct:', product);
+                  continue;
+                }
+                
+                await pool.request()
+                  .input('idsupplier', sql.Int, mergedSupplier.idsupplier)
+                  .input('idproduct', sql.Int, product.idproduct)
+                  .input('productcode', sql.NVarChar, product.productcode || '')
+                  .input('name', sql.NVarChar, product.name || '')
+                  .input('price', sql.Decimal(18, 2), product.price || 0)
+                  .input('created', sql.DateTime, product.created ? new Date(product.created) : null)
+                  .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null)
+                  .query(`
+                    INSERT INTO SupplierProducts (
+                      idsupplier, idproduct, productcode, name, price,
+                      created, updated, last_sync_date
+                    )
+                    VALUES (
+                      @idsupplier, @idproduct, @productcode, @name, @price,
+                      @created, @updated, GETDATE()
+                    )
+                  `);
+              }
+            }
+            
+            // Update sync progress if provided
+            if (syncProgress) {
+              await this.updateSyncProgress(syncProgress, {
+                items_processed: (syncProgress.items_processed || 0) + 1
+              });
+            }
+          } catch (error) {
+            console.error(`Error processing supplier ${supplier.idsupplier}:`, error.message);
+            
+            // Handle rate limiting (429 Too Many Requests)
+            if (error.response && error.response.status === 429) {
+              console.log('Rate limit hit, waiting before continuing...');
+              
+              // Wait for 20 seconds before continuing
+              await new Promise(resolve => setTimeout(resolve, 20000));
+            }
+            
+            // Continue with next supplier
+            continue;
           }
         }
       }
       
-      // Default to January 1, 2025 if no sync date found
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.log(`✅ Saved ${suppliers.length} suppliers to database`);
+      return true;
     } catch (error) {
-      console.error('Error getting last suppliers sync date:', error.message);
-      // Default to January 1, 2025 if error occurs
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.error('Error saving suppliers to database:', error.message);
+      throw error;
     }
   }
 
   /**
-   * Update the last sync date for suppliers
-   * @param {Date} date - The new sync date
-   * @param {number} count - The number of suppliers synced
+   * Update sync status
+   * @param {string} entityType - Entity type (e.g., 'suppliers')
+   * @param {number} count - Number of items synced
    * @returns {Promise<boolean>} - Success status
    */
-  async updateLastSuppliersSyncDate(date = new Date(), count = 0) {
+  async updateSyncStatus(entityType = 'suppliers', count = 0) {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
@@ -524,66 +730,189 @@ class SupplierService {
       
       const syncTableExists = tableResult.recordset[0].tableExists > 0;
       
-      if (syncTableExists) {
-        // Check if entity_type column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-        `);
-        
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityTypeColumnExists) {
-          // Check if suppliers record exists
-          const recordResult = await pool.request().query(`
-            SELECT COUNT(*) AS recordExists 
-            FROM SyncStatus 
-            WHERE entity_type = 'suppliers'
-          `);
-          
-          const recordExists = recordResult.recordset[0].recordExists > 0;
-          
-          if (recordExists) {
-            // Update existing record
-            await pool.request()
-              .input('lastSyncDate', sql.DateTime, date)
-              .input('lastSyncCount', sql.Int, count)
-              .query(`
-                UPDATE SyncStatus 
-                SET last_sync_date = @lastSyncDate, 
-                    last_sync_count = @lastSyncCount,
-                    entity_name = 'suppliers'
-                WHERE entity_type = 'suppliers'
-              `);
-          } else {
-            // Insert new record
-            await pool.request()
-              .input('lastSyncDate', sql.DateTime, date)
-              .input('lastSyncCount', sql.Int, count)
-              .query(`
-                INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count)
-                VALUES ('suppliers', 'suppliers', @lastSyncDate, @lastSyncCount)
-              `);
-          }
-        }
+      if (!syncTableExists) {
+        console.warn('SyncStatus table does not exist');
+        return false;
       }
+      
+      // Check if entity_type column exists
+      const columnResult = await pool.request().query(`
+        SELECT COUNT(*) AS columnExists 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
+      `);
+      
+      const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
+      
+      if (!entityTypeColumnExists) {
+        console.warn('entity_type column does not exist in SyncStatus table');
+        return false;
+      }
+      
+      // Update sync status
+      await pool.request()
+        .input('entityType', sql.NVarChar, entityType)
+        .input('count', sql.Int, count)
+        .input('now', sql.DateTime, new Date().toISOString())
+        .query(`
+          MERGE INTO SyncStatus AS target
+          USING (SELECT @entityType AS entity_type) AS source
+          ON target.entity_type = source.entity_type
+          WHEN MATCHED THEN
+            UPDATE SET
+              entity_name = @entityType,
+              last_sync_date = @now,
+              last_sync_count = @count,
+              total_count = ISNULL(total_count, 0) + @count
+          WHEN NOT MATCHED THEN
+            INSERT (entity_name, entity_type, last_sync_date, total_count, last_sync_count)
+            VALUES (@entityType, @entityType, @now, @count, @count);
+        `);
       
       return true;
     } catch (error) {
-      console.error('Error updating last suppliers sync date:', error.message);
+      console.error('Error updating sync status:', error.message);
       return false;
     }
   }
 
   /**
-   * Get the count of suppliers in the database
+   * Perform incremental sync of suppliers
+   * @returns {Promise<boolean>} - Success status
+   */
+  async performIncrementalSync() {
+    try {
+      console.log('Starting incremental supplier sync...');
+      
+      // Create sync progress record
+      const syncProgress = await this.createOrGetSyncProgress('suppliers', false);
+      
+      // Get last sync date from database
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT TOP 1 last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'suppliers'
+      `);
+      
+      let lastSyncDate = new Date('2025-01-01T00:00:00.000Z');
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        lastSyncDate = new Date(result.recordset[0].last_sync_date);
+      }
+      
+      console.log(`Last sync date: ${lastSyncDate.toISOString()}`);
+      
+      // Get suppliers updated since last sync
+      const suppliers = await this.getSuppliersUpdatedSince(lastSyncDate);
+      
+      if (!suppliers || suppliers.length === 0) {
+        console.log('No suppliers updated since last sync');
+        await this.completeSyncProgress(syncProgress, true);
+        return true;
+      }
+      
+      console.log(`Retrieved ${suppliers.length} suppliers updated since last sync`);
+      
+      // Save suppliers to database
+      const success = await this.saveSuppliersToDatabase(suppliers, syncProgress);
+      
+      if (success) {
+        // Update sync status
+        await this.updateSyncStatus('suppliers', suppliers.length);
+        
+        // Complete sync progress
+        await this.completeSyncProgress(syncProgress, true);
+        
+        console.log(`✅ Incremental supplier sync completed successfully`);
+        return true;
+      } else {
+        // Complete sync progress with failure
+        await this.completeSyncProgress(syncProgress, false);
+        
+        console.error('❌ Incremental supplier sync failed');
+        return false;
+      }
+    } catch (error) {
+      console.error('Error performing incremental supplier sync:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Perform full sync of suppliers
+   * @returns {Promise<boolean>} - Success status
+   */
+  async performFullSync() {
+    try {
+      console.log('Starting full supplier sync...');
+      
+      // Create sync progress record
+      const syncProgress = await this.createOrGetSyncProgress('suppliers', true);
+      
+      // Get all suppliers
+      const suppliers = await this.getAllSuppliers(new Date('2025-01-01T00:00:00.000Z'), syncProgress);
+      
+      if (!suppliers || suppliers.length === 0) {
+        console.log('No suppliers found');
+        await this.completeSyncProgress(syncProgress, true);
+        return true;
+      }
+      
+      console.log(`Retrieved ${suppliers.length} suppliers from Picqer`);
+      
+      // Save suppliers to database
+      const success = await this.saveSuppliersToDatabase(suppliers, syncProgress);
+      
+      if (success) {
+        // Update sync status
+        await this.updateSyncStatus('suppliers', suppliers.length);
+        
+        // Complete sync progress
+        await this.completeSyncProgress(syncProgress, true);
+        
+        console.log(`✅ Full supplier sync completed successfully`);
+        return true;
+      } else {
+        // Complete sync progress with failure
+        await this.completeSyncProgress(syncProgress, false);
+        
+        console.error('❌ Full supplier sync failed');
+        return false;
+      }
+    } catch (error) {
+      console.error('Error performing full supplier sync:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Get supplier count from database
    * @returns {Promise<number>} - Supplier count
    */
-  async getSupplierCountFromDatabase() {
+  async getSupplierCount() {
     try {
       const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Suppliers');
+      
+      // Check if Suppliers table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'Suppliers'
+      `);
+      
+      const suppliersTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (!suppliersTableExists) {
+        console.warn('Suppliers table does not exist');
+        return 0;
+      }
+      
+      // Get supplier count
+      const result = await pool.request().query(`
+        SELECT COUNT(*) AS count FROM Suppliers
+      `);
+      
       return result.recordset[0].count;
     } catch (error) {
       console.error('Error getting supplier count:', error.message);
@@ -592,354 +921,84 @@ class SupplierService {
   }
 
   /**
-   * Save suppliers to database with optimized batch processing
-   * @param {Array} suppliers - Array of suppliers to save
-   * @param {Object|null} syncProgress - Sync progress record for resumable sync
-   * @returns {Promise<Object>} - Result with success status and count
+   * Get last sync date from database
+   * @returns {Promise<Date|null>} - Last sync date
    */
-  async saveSuppliersToDatabase(suppliers, syncProgress = null) {
+  async getLastSyncDate() {
     try {
-      console.log(`Saving ${suppliers.length} suppliers to database...`);
-      
       const pool = await sql.connect(this.sqlConfig);
       
-      // Calculate number of batches
-      const totalBatches = Math.ceil(suppliers.length / this.batchSize);
-      console.log(`Processing suppliers in ${totalBatches} batches of ${this.batchSize}`);
+      // Check if SyncStatus table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
       
-      // Update sync progress with total batches if provided
-      if (syncProgress) {
-        await this.updateSyncProgress(syncProgress, {
-          total_batches: totalBatches
-        });
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (!syncTableExists) {
+        console.warn('SyncStatus table does not exist');
+        return null;
       }
-      
-      // Start from the batch number in sync progress if resuming
-      const startBatch = syncProgress ? syncProgress.batch_number : 0;
-      let savedCount = syncProgress ? syncProgress.items_processed : 0;
-      let errorCount = 0;
-      
-      // Process suppliers in batches
-      for (let batchNum = startBatch; batchNum < totalBatches; batchNum++) {
-        console.log(`Processing batch ${batchNum + 1} of ${totalBatches}...`);
-        
-        // Update sync progress if provided
-        if (syncProgress) {
-          await this.updateSyncProgress(syncProgress, {
-            batch_number: batchNum
-          });
-        }
-        
-        const batchStart = batchNum * this.batchSize;
-        const batchEnd = Math.min(batchStart + this.batchSize, suppliers.length);
-        const batch = suppliers.slice(batchStart, batchEnd);
-        
-        // Process each supplier in the batch
-        const transaction = new sql.Transaction(pool);
-        
-        try {
-          await transaction.begin();
-          
-          for (const supplier of batch) {
-            try {
-              // Check if supplier already exists
-              const checkResult = await new sql.Request(transaction)
-                .input('idsupplier', sql.Int, supplier.idsupplier)
-                .query('SELECT id FROM Suppliers WHERE idsupplier = @idsupplier');
-              
-              const supplierExists = checkResult.recordset.length > 0;
-              
-              // Prepare request for insert/update
-              const request = new sql.Request(transaction);
-              
-              // Add standard fields
-              request.input('idsupplier', sql.Int, supplier.idsupplier);
-              request.input('name', sql.NVarChar, supplier.name || '');
-              request.input('contactname', sql.NVarChar, supplier.contactname || null);
-              request.input('contactemail', sql.NVarChar, supplier.contactemail || null);
-              request.input('telephone', sql.NVarChar, supplier.telephone || null);
-              request.input('address', sql.NVarChar, supplier.address || null);
-              request.input('address2', sql.NVarChar, supplier.address2 || null);
-              request.input('zipcode', sql.NVarChar, supplier.zipcode || null);
-              request.input('city', sql.NVarChar, supplier.city || null);
-              request.input('region', sql.NVarChar, supplier.region || null);
-              request.input('country', sql.NVarChar, supplier.country || null);
-              request.input('vatid', sql.NVarChar, supplier.vatid || null);
-              request.input('cocid', sql.NVarChar, supplier.cocid || null);
-              request.input('notes', sql.NVarChar, supplier.notes || null);
-              request.input('created', sql.DateTime, supplier.created ? new Date(supplier.created) : null);
-              request.input('updated', sql.DateTime, supplier.updated ? new Date(supplier.updated) : null);
-              request.input('lastSyncDate', sql.DateTime, new Date());
-              
-              if (supplierExists) {
-                // Update existing supplier
-                await request.query(`
-                  UPDATE Suppliers 
-                  SET name = @name,
-                      contactname = @contactname,
-                      contactemail = @contactemail,
-                      telephone = @telephone,
-                      address = @address,
-                      address2 = @address2,
-                      zipcode = @zipcode,
-                      city = @city,
-                      region = @region,
-                      country = @country,
-                      vatid = @vatid,
-                      cocid = @cocid,
-                      notes = @notes,
-                      created = @created,
-                      updated = @updated,
-                      last_sync_date = @lastSyncDate
-                  WHERE idsupplier = @idsupplier
-                `);
-              } else {
-                // Insert new supplier
-                await request.query(`
-                  INSERT INTO Suppliers (
-                    idsupplier, name, contactname, contactemail, telephone,
-                    address, address2, zipcode, city, region, country,
-                    vatid, cocid, notes, created, updated, last_sync_date
-                  )
-                  VALUES (
-                    @idsupplier, @name, @contactname, @contactemail, @telephone,
-                    @address, @address2, @zipcode, @city, @region, @country,
-                    @vatid, @cocid, @notes, @created, @updated, @lastSyncDate
-                  )
-                `);
-              }
-              
-              // Fetch and save supplier products
-              try {
-                const products = await this.getSupplierProducts(supplier.idsupplier);
-                
-                if (products.length > 0) {
-                  // Delete existing products for this supplier
-                  await new sql.Request(transaction)
-                    .input('idsupplier', sql.Int, supplier.idsupplier)
-                    .query('DELETE FROM SupplierProducts WHERE idsupplier = @idsupplier');
-                  
-                  // Insert new products
-                  for (const product of products) {
-                    const productRequest = new sql.Request(transaction);
-                    productRequest.input('idsupplier', sql.Int, supplier.idsupplier);
-                    productRequest.input('idproduct', sql.Int, product.idproduct);
-                    productRequest.input('productcode', sql.NVarChar, product.productcode || '');
-                    productRequest.input('productcode_supplier', sql.NVarChar, product.productcode_supplier || '');
-                    productRequest.input('name', sql.NVarChar, product.name || '');
-                    productRequest.input('purchase_price', sql.Decimal, product.purchase_price || 0);
-                    productRequest.input('purchase_price_currency', sql.NVarChar, product.purchase_price_currency || null);
-                    productRequest.input('minimum_purchase_quantity', sql.Int, product.minimum_purchase_quantity || 0);
-                    productRequest.input('purchase_in_quantities_of', sql.Int, product.purchase_in_quantities_of || 0);
-                    productRequest.input('deliverytime', sql.Int, product.deliverytime || 0);
-                    productRequest.input('lastSyncDate', sql.DateTime, new Date());
-                    
-                    await productRequest.query(`
-                      INSERT INTO SupplierProducts (
-                        idsupplier, idproduct, productcode, productcode_supplier, name,
-                        purchase_price, purchase_price_currency, minimum_purchase_quantity,
-                        purchase_in_quantities_of, deliverytime, last_sync_date
-                      )
-                      VALUES (
-                        @idsupplier, @idproduct, @productcode, @productcode_supplier, @name,
-                        @purchase_price, @purchase_price_currency, @minimum_purchase_quantity,
-                        @purchase_in_quantities_of, @deliverytime, @lastSyncDate
-                      )
-                    `);
-                  }
-                  
-                  console.log(`Saved ${products.length} products for supplier ${supplier.idsupplier}`);
-                }
-              } catch (productsError) {
-                console.error(`Error saving products for supplier ${supplier.idsupplier}:`, productsError.message);
-                // Continue with other suppliers even if products sync fails
-              }
-              
-              savedCount++;
-            } catch (supplierError) {
-              console.error(`Error saving supplier ${supplier.idsupplier}:`, supplierError.message);
-              errorCount++;
-            }
-          }
-          
-          await transaction.commit();
-          
-          // Update sync progress if provided
-          if (syncProgress) {
-            await this.updateSyncProgress(syncProgress, {
-              items_processed: savedCount
-            });
-          }
-        } catch (batchError) {
-          console.error(`Error processing batch ${batchNum + 1}:`, batchError.message);
-          await transaction.rollback();
-          errorCount += batch.length;
-        }
-      }
-      
-      console.log(`✅ Saved ${savedCount} suppliers to database (${errorCount} errors)`);
-      
-      // Complete sync progress if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, true);
-      }
-      
-      return {
-        success: true,
-        savedCount,
-        errorCount,
-        message: `Saved ${savedCount} suppliers to database (${errorCount} errors)`
-      };
-    } catch (error) {
-      console.error('Error saving suppliers to database:', error.message);
-      
-      // Complete sync progress with failure if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, false);
-      }
-      
-      return {
-        success: false,
-        savedCount: 0,
-        errorCount: suppliers.length,
-        message: `Error saving suppliers to database: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform a full sync of all suppliers
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performFullSuppliersSync() {
-    try {
-      console.log('Starting full suppliers sync...');
-      
-      // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('suppliers', true);
-      
-      // Get all suppliers from Picqer
-      const suppliers = await this.getAllSuppliers(null, syncProgress);
-      console.log(`Retrieved ${suppliers.length} suppliers from Picqer`);
-      
-      // Save suppliers to database
-      const result = await this.saveSuppliersToDatabase(suppliers, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastSuppliersSyncDate(new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing full suppliers sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing full suppliers sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform an incremental sync of suppliers updated since last sync
-   * Uses 30-day rolling window for better performance
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performIncrementalSuppliersSync() {
-    try {
-      console.log('Starting incremental suppliers sync...');
       
       // Get last sync date
-      const lastSyncDate = await this.getLastSuppliersSyncDate();
-      console.log('Last suppliers sync date:', lastSyncDate.toISOString());
+      const result = await pool.request().query(`
+        SELECT TOP 1 last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'suppliers'
+      `);
       
-      // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('suppliers', false);
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
       
-      // Get suppliers updated since last sync (with 30-day rolling window)
-      const suppliers = await this.getSuppliersUpdatedSince(lastSyncDate, syncProgress);
-      console.log(`Retrieved ${suppliers.length} updated suppliers from Picqer`);
-      
-      // Save suppliers to database
-      const result = await this.saveSuppliersToDatabase(suppliers, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastSuppliersSyncDate(new Date(), result.savedCount);
-      
-      return result;
+      return null;
     } catch (error) {
-      console.error('Error performing incremental suppliers sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing incremental suppliers sync: ${error.message}`
-      };
+      console.error('Error getting last sync date:', error.message);
+      return null;
     }
   }
 
   /**
-   * Retry a failed suppliers sync
-   * @param {string} syncId - The ID of the failed sync to retry
-   * @returns {Promise<Object>} - Result with success status and count
+   * Retry failed sync
+   * @param {string} syncId - Sync ID to retry
+   * @returns {Promise<boolean>} - Success status
    */
-  async retryFailedSuppliersSync(syncId) {
+  async retryFailedSync(syncId) {
     try {
-      console.log(`Retrying failed suppliers sync with ID: ${syncId}`);
+      console.log(`Retrying failed sync ${syncId}...`);
       
       const pool = await sql.connect(this.sqlConfig);
       
-      // Get the failed sync record
-      const syncResult = await pool.request()
+      // Get sync progress record
+      const result = await pool.request()
         .input('syncId', sql.NVarChar, syncId)
         .query(`
           SELECT * FROM SyncProgress 
-          WHERE sync_id = @syncId AND entity_type = 'suppliers'
-        `);
-      
-      if (syncResult.recordset.length === 0) {
-        return {
-          success: false,
-          message: `No suppliers sync record found with ID: ${syncId}`
-        };
-      }
-      
-      const syncRecord = syncResult.recordset[0];
-      
-      // Reset sync status to in_progress
-      await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .input('now', sql.DateTime, new Date().toISOString())
-        .query(`
-          UPDATE SyncProgress 
-          SET status = 'in_progress', 
-              last_updated = @now,
-              completed_at = NULL
           WHERE sync_id = @syncId
         `);
       
-      // Get last sync date
-      const lastSyncDate = await this.getLastSuppliersSyncDate();
+      if (result.recordset.length === 0) {
+        console.error(`Sync progress record not found for ID ${syncId}`);
+        return false;
+      }
       
-      // Get suppliers updated since last sync
-      const suppliers = await this.getAllSuppliers(lastSyncDate, syncRecord);
+      const syncProgress = result.recordset[0];
       
-      // Save suppliers to database
-      const result = await this.saveSuppliersToDatabase(suppliers, syncRecord);
+      // Reset sync progress
+      await this.updateSyncProgress(syncProgress, {
+        status: 'in_progress',
+        current_offset: 0,
+        batch_number: 0,
+        items_processed: 0
+      });
       
-      // Update last sync date
-      await this.updateLastSuppliersSyncDate(new Date(), result.savedCount);
-      
-      return {
-        success: true,
-        savedCount: result.savedCount,
-        message: `Successfully retried suppliers sync: ${result.message}`
-      };
+      // Perform full sync
+      return await this.performFullSync();
     } catch (error) {
-      console.error(`Error retrying suppliers sync ${syncId}:`, error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error retrying suppliers sync: ${error.message}`
-      };
+      console.error('Error retrying failed sync:', error.message);
+      return false;
     }
   }
 }
