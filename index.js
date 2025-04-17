@@ -1,34 +1,37 @@
 /**
- * Updated index.js with integrated API adapter for actual data syncing
+ * Final Index.js with Integrated Data Sync Implementation
  * 
- * This file integrates the API adapter with the actual sync services
- * to ensure data is properly synced from Picqer.
+ * This file integrates the actual data sync implementation with the API adapter,
+ * ensuring that when sync buttons are clicked in the dashboard, real data is
+ * synced from Picqer to the database.
  */
 
+// Import required modules
 const express = require('express');
 const path = require('path');
-const cron = require('node-cron');
+const cors = require('cors');
+const sql = require('mssql');
 require('dotenv').config();
 
-// Import all services
-const ProductService = require('./picqer-service');
+// Import service classes
+const PicqerService = require('./picqer-service');
 const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
 
-// Import integrated API adapter middleware
-const { router: apiAdapter, initializeServices } = require('./api-adapter');
+// Import API adapter with actual data sync implementation
+const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
 
-// Initialize Express app
+// Create Express app
 const app = express();
-const port = process.env.PORT || 8080;
 
 // Configure middleware
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Database configuration - using existing environment variable names
+// Database configuration
 const dbConfig = {
   server: process.env.SQL_SERVER,
   database: process.env.SQL_DATABASE,
@@ -40,42 +43,55 @@ const dbConfig = {
   }
 };
 
-// Picqer API configuration - using existing environment variable names
+// Picqer API configuration
 const apiKey = process.env.PICQER_API_KEY;
 const baseUrl = process.env.PICQER_BASE_URL;
 
-// Create service instances
-const productService = new ProductService(apiKey, baseUrl, dbConfig);
+// Initialize services
+const picqerService = new PicqerService(apiKey, baseUrl, dbConfig);
 const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
 const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
 const userService = new UserService(apiKey, baseUrl, dbConfig);
 const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
 
-// Initialize the API adapter with service instances
+// Initialize API adapter with service instances
 initializeServices({
-  ProductService: productService,
+  ProductService: picqerService,
   PicklistService: picklistService,
   WarehouseService: warehouseService,
   UserService: userService,
   SupplierService: supplierService
 });
 
-// Mount API adapter middleware to handle dashboard API requests
+// API routes
 app.use('/api', apiAdapter);
 
-// Serve static dashboard files
-app.use(express.static(path.join(__dirname, 'dashboard')));
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
+});
+
+// Serve static files from dashboard directory
+app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
 
 // Initialize database
 async function initializeDatabase() {
   try {
     console.log('Initializing database...');
     
-    // Initialize all entity databases
-    await productService.initializeDatabase();
+    // Initialize product schema
+    await picqerService.initializeDatabase();
+    
+    // Initialize picklists schema
     await picklistService.initializePicklistsDatabase();
+    
+    // Initialize warehouses schema
     await warehouseService.initializeWarehousesDatabase();
+    
+    // Initialize users schema
     await userService.initializeUsersDatabase();
+    
+    // Initialize suppliers schema
     await supplierService.initializeSuppliersDatabase();
     
     console.log('Database initialized successfully');
@@ -84,86 +100,42 @@ async function initializeDatabase() {
   }
 }
 
-// Initialize database on startup
-initializeDatabase();
-
-// Dashboard route
-app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
+// Start server
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+  console.log(`Picqer middleware server running on port ${PORT}`);
+  
+  // Initialize database after server starts
+  await initializeDatabase();
 });
 
-// Schedule syncs
-// Products - every hour
-cron.schedule('0 * * * *', async () => {
-  console.log('Running scheduled product sync...');
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  
+  // Close database connection
   try {
-    await productService.performIncrementalSync();
-    console.log('Scheduled product sync completed successfully');
-  } catch (error) {
-    console.error('Scheduled product sync failed:', error.message);
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
   }
+  
+  process.exit(0);
 });
 
-// Picklists - every 30 minutes
-cron.schedule('*/30 * * * *', async () => {
-  console.log('Running scheduled picklist sync...');
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  
+  // Close database connection
   try {
-    await picklistService.performIncrementalSync();
-    console.log('Scheduled picklist sync completed successfully');
-  } catch (error) {
-    console.error('Scheduled picklist sync failed:', error.message);
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
   }
+  
+  process.exit(0);
 });
 
-// Warehouses - once daily at 1 AM
-cron.schedule('0 1 * * *', async () => {
-  console.log('Running scheduled warehouse sync...');
-  try {
-    await warehouseService.performIncrementalSync();
-    console.log('Scheduled warehouse sync completed successfully');
-  } catch (error) {
-    console.error('Scheduled warehouse sync failed:', error.message);
-  }
-});
-
-// Users - once daily at 2 AM
-cron.schedule('0 2 * * *', async () => {
-  console.log('Running scheduled user sync...');
-  try {
-    await userService.performIncrementalSync();
-    console.log('Scheduled user sync completed successfully');
-  } catch (error) {
-    console.error('Scheduled user sync failed:', error.message);
-  }
-});
-
-// Suppliers - once daily at 3 AM
-cron.schedule('0 3 * * *', async () => {
-  console.log('Running scheduled supplier sync...');
-  try {
-    await supplierService.performIncrementalSync();
-    console.log('Scheduled supplier sync completed successfully');
-  } catch (error) {
-    console.error('Scheduled supplier sync failed:', error.message);
-  }
-});
-
-// Full sync for all entities - once weekly on Sunday at 4 AM
-cron.schedule('0 4 * * 0', async () => {
-  console.log('Running weekly full sync of all entities...');
-  try {
-    await productService.performFullSync();
-    await picklistService.performFullSync();
-    await warehouseService.performFullSync();
-    await userService.performFullSync();
-    await supplierService.performFullSync();
-    console.log('Weekly full sync completed successfully');
-  } catch (error) {
-    console.error('Weekly full sync failed:', error.message);
-  }
-});
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Picqer middleware server running on port ${port}`);
-});
+module.exports = app;
