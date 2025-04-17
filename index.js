@@ -4,7 +4,7 @@ const cron = require('node-cron');
 require('dotenv').config();
 
 // Import all services
-const ProductService = require('./optimized_product_service');
+const ProductService = require('./picqer-service');
 const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
@@ -48,7 +48,7 @@ async function initializeDatabase() {
     console.log('Initializing database...');
     
     // Initialize all entity databases
-    await productService.initializeProductsDatabase();
+    await productService.initializeDatabase();
     await picklistService.initializePicklistsDatabase();
     await warehouseService.initializeWarehousesDatabase();
     await userService.initializeUsersDatabase();
@@ -233,7 +233,7 @@ app.get('/api/stats', async (req, res) => {
     const stats = {
       products: {
         totalCount: await productService.getProductCountFromDatabase(),
-        lastSyncDate: await productService.getLastProductsSyncDate()
+        lastSyncDate: await productService.getLastSyncDate('products')
       },
       picklists: {
         totalCount: await picklistService.getPicklistCountFromDatabase(),
@@ -371,7 +371,7 @@ app.get('/api/sync/stats', async (req, res) => {
 
 // Dashboard route
 app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard/enhanced-dashboard-with-entities.html'));
+  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
 });
 
 // Schedule syncs
