@@ -521,6 +521,31 @@ class SupplierService {
   }
 
   /**
+   * Check if a column exists in a table
+   * @param {string} tableName - Table name
+   * @param {string} columnName - Column name
+   * @returns {Promise<boolean>} - Whether column exists
+   */
+  async columnExists(tableName, columnName) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request()
+        .input('tableName', sql.NVarChar, tableName)
+        .input('columnName', sql.NVarChar, columnName)
+        .query(`
+          SELECT COUNT(*) AS columnExists 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_NAME = @tableName AND COLUMN_NAME = @columnName
+        `);
+      
+      return result.recordset[0].columnExists > 0;
+    } catch (error) {
+      console.error(`Error checking if column ${columnName} exists in table ${tableName}:`, error.message);
+      return false;
+    }
+  }
+
+  /**
    * Save suppliers to database
    * @param {Array} suppliers - Array of suppliers to save
    * @param {Object|null} syncProgress - Sync progress record for resumable sync
@@ -536,6 +561,14 @@ class SupplierService {
       console.log(`Saving ${suppliers.length} suppliers to database...`);
       
       const pool = await sql.connect(this.sqlConfig);
+      
+      // Check which columns exist in the Suppliers table
+      const createdColumnExists = await this.columnExists('Suppliers', 'created');
+      const updatedColumnExists = await this.columnExists('Suppliers', 'updated');
+      const emailColumnExists = await this.columnExists('Suppliers', 'email');
+      const emailaddressColumnExists = await this.columnExists('Suppliers', 'emailaddress');
+      
+      console.log(`Column existence check: created=${createdColumnExists}, updated=${updatedColumnExists}, email=${emailColumnExists}, emailaddress=${emailaddressColumnExists}`);
       
       // Process suppliers in batches for better performance
       const batchSize = this.batchSize;
@@ -591,50 +624,105 @@ class SupplierService {
               ...supplierDetails
             };
             
-            // Save supplier to database
-            await pool.request()
+            // Create a request with common parameters
+            const request = new sql.Request(pool)
               .input('idsupplier', sql.Int, mergedSupplier.idsupplier)
               .input('name', sql.NVarChar, mergedSupplier.name || '')
               .input('contactname', sql.NVarChar, mergedSupplier.contactname || '')
-              .input('email', sql.NVarChar, mergedSupplier.email || '')
               .input('telephone', sql.NVarChar, mergedSupplier.telephone || '')
               .input('address', sql.NVarChar, mergedSupplier.address || '')
               .input('zipcode', sql.NVarChar, mergedSupplier.zipcode || '')
               .input('city', sql.NVarChar, mergedSupplier.city || '')
-              .input('country', sql.NVarChar, mergedSupplier.country || '')
-              .input('vatid', sql.NVarChar, mergedSupplier.vatid || '')
-              .input('created', sql.DateTime, mergedSupplier.created ? new Date(mergedSupplier.created) : null)
-              .input('updated', sql.DateTime, mergedSupplier.updated ? new Date(mergedSupplier.updated) : null)
-              .query(`
-                MERGE INTO Suppliers AS target
-                USING (SELECT @idsupplier AS idsupplier) AS source
-                ON target.idsupplier = source.idsupplier
-                WHEN MATCHED THEN
-                  UPDATE SET
-                    name = @name,
-                    contactname = @contactname,
-                    email = @email,
-                    telephone = @telephone,
-                    address = @address,
-                    zipcode = @zipcode,
-                    city = @city,
-                    country = @country,
-                    vatid = @vatid,
-                    created = @created,
-                    updated = @updated,
-                    last_sync_date = GETDATE()
-                WHEN NOT MATCHED THEN
-                  INSERT (
-                    idsupplier, name, contactname, email, telephone,
-                    address, zipcode, city, country, vatid,
-                    created, updated, last_sync_date
-                  )
-                  VALUES (
-                    @idsupplier, @name, @contactname, @email, @telephone,
-                    @address, @zipcode, @city, @country, @vatid,
-                    @created, @updated, GETDATE()
-                  );
-              `);
+              .input('country', sql.NVarChar, mergedSupplier.country || '');
+            
+            // Add email parameter based on which column exists
+            if (emailColumnExists) {
+              request.input('email', sql.NVarChar, mergedSupplier.email || '');
+            } else if (emailaddressColumnExists) {
+              request.input('emailaddress', sql.NVarChar, mergedSupplier.email || '');
+            }
+            
+            // Add created and updated parameters if columns exist
+            if (createdColumnExists && mergedSupplier.created) {
+              request.input('created', sql.DateTime, new Date(mergedSupplier.created));
+            }
+            
+            if (updatedColumnExists && mergedSupplier.updated) {
+              request.input('updated', sql.DateTime, new Date(mergedSupplier.updated));
+            }
+            
+            // Build dynamic SQL query based on which columns exist
+            let updateColumns = [
+              'name = @name',
+              'contactname = @contactname',
+              'telephone = @telephone',
+              'address = @address',
+              'zipcode = @zipcode',
+              'city = @city',
+              'country = @country',
+              'last_sync_date = GETDATE()'
+            ];
+            
+            if (emailColumnExists) {
+              updateColumns.push('email = @email');
+            } else if (emailaddressColumnExists) {
+              updateColumns.push('emailaddress = @emailaddress');
+            }
+            
+            if (createdColumnExists) {
+              updateColumns.push('created = @created');
+            }
+            
+            if (updatedColumnExists) {
+              updateColumns.push('updated = @updated');
+            }
+            
+            let insertColumns = [
+              'idsupplier', 'name', 'contactname', 'telephone',
+              'address', 'zipcode', 'city', 'country', 'last_sync_date'
+            ];
+            
+            let insertValues = [
+              '@idsupplier', '@name', '@contactname', '@telephone',
+              '@address', '@zipcode', '@city', '@country', 'GETDATE()'
+            ];
+            
+            if (emailColumnExists) {
+              insertColumns.push('email');
+              insertValues.push('@email');
+            } else if (emailaddressColumnExists) {
+              insertColumns.push('emailaddress');
+              insertValues.push('@emailaddress');
+            }
+            
+            if (createdColumnExists) {
+              insertColumns.push('created');
+              insertValues.push('@created');
+            }
+            
+            if (updatedColumnExists) {
+              insertColumns.push('updated');
+              insertValues.push('@updated');
+            }
+            
+            // Execute the dynamic MERGE query
+            const mergeQuery = `
+              MERGE INTO Suppliers AS target
+              USING (SELECT @idsupplier AS idsupplier) AS source
+              ON target.idsupplier = source.idsupplier
+              WHEN MATCHED THEN
+                UPDATE SET
+                  ${updateColumns.join(',\n                  ')}
+              WHEN NOT MATCHED THEN
+                INSERT (
+                  ${insertColumns.join(', ')}
+                )
+                VALUES (
+                  ${insertValues.join(', ')}
+                );
+            `;
+            
+            await request.query(mergeQuery);
             
             // Get supplier products
             const products = await this.getSupplierProducts(mergedSupplier.idsupplier);
@@ -651,6 +739,12 @@ class SupplierService {
                   WHERE idsupplier = @idsupplier
                 `);
               
+              // Check which columns exist in the SupplierProducts table
+              const productCodeColumnExists = await this.columnExists('SupplierProducts', 'productcode');
+              const supplierProductCodeColumnExists = await this.columnExists('SupplierProducts', 'supplier_productcode');
+              const priceColumnExists = await this.columnExists('SupplierProducts', 'price');
+              const purchasePriceColumnExists = await this.columnExists('SupplierProducts', 'purchase_price');
+              
               // Insert new supplier products
               for (const product of products) {
                 // Skip products without idproduct
@@ -659,24 +753,74 @@ class SupplierService {
                   continue;
                 }
                 
-                await pool.request()
+                // Create a request with common parameters
+                const productRequest = new sql.Request(pool)
                   .input('idsupplier', sql.Int, mergedSupplier.idsupplier)
-                  .input('idproduct', sql.Int, product.idproduct)
-                  .input('productcode', sql.NVarChar, product.productcode || '')
-                  .input('name', sql.NVarChar, product.name || '')
-                  .input('price', sql.Decimal(18, 2), product.price || 0)
-                  .input('created', sql.DateTime, product.created ? new Date(product.created) : null)
-                  .input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null)
-                  .query(`
-                    INSERT INTO SupplierProducts (
-                      idsupplier, idproduct, productcode, name, price,
-                      created, updated, last_sync_date
-                    )
-                    VALUES (
-                      @idsupplier, @idproduct, @productcode, @name, @price,
-                      @created, @updated, GETDATE()
-                    )
-                  `);
+                  .input('idproduct', sql.Int, product.idproduct);
+                
+                // Add parameters based on which columns exist
+                if (productCodeColumnExists || supplierProductCodeColumnExists) {
+                  const productCode = product.productcode || '';
+                  if (productCodeColumnExists) {
+                    productRequest.input('productcode', sql.NVarChar, productCode);
+                  }
+                  if (supplierProductCodeColumnExists) {
+                    productRequest.input('supplier_productcode', sql.NVarChar, productCode);
+                  }
+                }
+                
+                if (priceColumnExists || purchasePriceColumnExists) {
+                  const price = product.price || 0;
+                  if (priceColumnExists) {
+                    productRequest.input('price', sql.Decimal(18, 2), price);
+                  }
+                  if (purchasePriceColumnExists) {
+                    productRequest.input('purchase_price', sql.Decimal(18, 2), price);
+                  }
+                }
+                
+                // Add name parameter
+                productRequest.input('name', sql.NVarChar, product.name || '');
+                
+                // Build dynamic SQL query based on which columns exist
+                let productInsertColumns = ['idsupplier', 'idproduct', 'last_sync_date'];
+                let productInsertValues = ['@idsupplier', '@idproduct', 'GETDATE()'];
+                
+                if (productCodeColumnExists) {
+                  productInsertColumns.push('productcode');
+                  productInsertValues.push('@productcode');
+                }
+                
+                if (supplierProductCodeColumnExists) {
+                  productInsertColumns.push('supplier_productcode');
+                  productInsertValues.push('@supplier_productcode');
+                }
+                
+                if (priceColumnExists) {
+                  productInsertColumns.push('price');
+                  productInsertValues.push('@price');
+                }
+                
+                if (purchasePriceColumnExists) {
+                  productInsertColumns.push('purchase_price');
+                  productInsertValues.push('@purchase_price');
+                }
+                
+                // Add name column
+                productInsertColumns.push('name');
+                productInsertValues.push('@name');
+                
+                // Execute the dynamic INSERT query
+                const insertQuery = `
+                  INSERT INTO SupplierProducts (
+                    ${productInsertColumns.join(', ')}
+                  )
+                  VALUES (
+                    ${productInsertValues.join(', ')}
+                  )
+                `;
+                
+                await productRequest.query(insertQuery);
               }
             }
             
