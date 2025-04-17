@@ -19,21 +19,21 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'dashboard')));
 
-// Database configuration
+// Database configuration - using existing environment variable names
 const dbConfig = {
-  server: process.env.DB_SERVER,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  server: process.env.SQL_SERVER,
+  database: process.env.SQL_DATABASE,
+  user: process.env.SQL_USER,
+  password: process.env.SQL_PASSWORD,
   options: {
     encrypt: true,
     trustServerCertificate: false
   }
 };
 
-// Picqer API configuration
+// Picqer API configuration - using existing environment variable names
 const apiKey = process.env.PICQER_API_KEY;
-const baseUrl = process.env.PICQER_API_URL;
+const baseUrl = process.env.PICQER_BASE_URL;
 
 // Create service instances
 const productService = new ProductService(apiKey, baseUrl, dbConfig);
