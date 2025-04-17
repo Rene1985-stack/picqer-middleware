@@ -10,6 +10,9 @@ const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
 
+// Import API adapter middleware
+const apiAdapter = require('./api-adapter');
+
 // Initialize Express app
 const app = express();
 const port = process.env.PORT || 8080;
@@ -17,6 +20,11 @@ const port = process.env.PORT || 8080;
 // Configure middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Mount API adapter middleware to handle dashboard API requests
+app.use('/api', apiAdapter);
+
+// Serve static dashboard files
 app.use(express.static(path.join(__dirname, 'dashboard')));
 
 // Database configuration - using existing environment variable names
@@ -228,7 +236,7 @@ async function getSyncInfo(syncId) {
 }
 
 // Stats endpoint
-app.get('/api/stats', async (req, res) => {
+app.get('/api/metrics', async (req, res) => {
   try {
     const stats = {
       products: {
@@ -529,8 +537,8 @@ async function getEntityMetrics(entity) {
       productCoverage: 85.0,
       syncHistory: [
         { timestamp: '2025-04-16T03:00:00Z', success: true, count: 25 },
-        { timestamp: '2025-04-15T03:00:00Z', success: false, count: 1 },
-        { timestamp: '2025-04-14T03:00:00Z', success: true, count: 24 }
+        { timestamp: '2025-04-15T03:00:00Z', success: true, count: 24 },
+        { timestamp: '2025-04-14T03:00:00Z', success: false, count: 1 }
       ]
     }
   };
@@ -541,70 +549,45 @@ async function getEntityMetrics(entity) {
 async function getAllErrors() {
   // Placeholder errors
   return [
-    {
-      id: 'err_001',
-      syncId: 'products_1650123456789',
-      timestamp: '2025-04-15T12:15:00Z',
-      type: 'api',
-      message: 'API rate limit exceeded'
-    },
-    {
-      id: 'err_002',
-      syncId: 'picklists_1650123456790',
-      timestamp: '2025-04-15T12:45:00Z',
-      type: 'database',
-      message: 'Database connection timeout'
-    },
-    {
-      id: 'err_003',
-      syncId: 'suppliers_1650123456791',
-      timestamp: '2025-04-15T03:15:00Z',
-      type: 'validation',
-      message: 'Invalid supplier data received'
-    }
+    { id: 'err001', entity: 'products', timestamp: '2025-04-14T12:00:00Z', message: 'API rate limit exceeded' },
+    { id: 'err002', entity: 'picklists', timestamp: '2025-04-15T12:30:00Z', message: 'Database connection timeout' },
+    { id: 'err003', entity: 'suppliers', timestamp: '2025-04-14T03:00:00Z', message: 'Invalid supplier data format' }
   ];
 }
 
 async function getErrorCountsByEntity() {
   // Placeholder error counts
   return {
-    products: 5,
-    picklists: 8,
+    products: 1,
+    picklists: 1,
     warehouses: 0,
     users: 0,
-    suppliers: 2
+    suppliers: 1
   };
 }
 
 async function getErrorsByEntity(entity) {
-  // Filter placeholder errors by entity
+  // Placeholder entity-specific errors
   const allErrors = await getAllErrors();
-  return allErrors.filter(error => error.syncId.startsWith(entity));
+  return allErrors.filter(err => err.entity === entity);
 }
 
 async function getErrorDetails(errorId) {
   // Placeholder error details
   const allErrors = await getAllErrors();
-  const error = allErrors.find(e => e.id === errorId);
+  const error = allErrors.find(err => err.id === errorId);
   
   if (!error) return null;
   
-  // Add additional details
   return {
     ...error,
-    entityType: error.syncId.split('_')[0],
-    stack: 'Error: API rate limit exceeded\n    at PicqerService.makeApiRequest (/app/picqer-service.js:125:15)\n    at async PicqerService.getProducts (/app/picqer-service.js:78:20)',
-    context: {
-      requestUrl: 'https://skapa-global.picqer.com/api/v1/products',
-      requestMethod: 'GET',
-      responseStatus: 429,
-      responseBody: '{"error":"Too Many Requests","message":"API rate limit exceeded"}'
-    }
+    details: 'Detailed error information would be here',
+    stackTrace: 'Stack trace would be here',
+    resolution: 'Suggested resolution steps would be here'
   };
 }
 
-// Start server
+// Start the server
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-  console.log(`Dashboard available at http://localhost:${port}/dashboard`);
+  console.log(`Picqer middleware server running on port ${port}`);
 });
