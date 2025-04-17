@@ -18,7 +18,7 @@ const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
 
 // Import integrated API adapter middleware
-const { router: apiAdapter, initializeServices } = require('./integrated_api_adapter');
+const { router: apiAdapter, initializeServices } = require('./api-adapter');
 
 // Initialize Express app
 const app = express();
