@@ -1,4 +1,4 @@
-// enhanced-dashboard-api.js - Enhanced backend API for the middleware dashboard with entity-specific functionality
+// Updated dashboard-api.js with correct environment variable names and file paths
 
 const express = require('express');
 const path = require('path');
@@ -8,8 +8,8 @@ const sql = require('mssql');
 const router = express.Router();
 
 // Import services
-const PicqerService = require('../optimized_product_service');
-const PicklistService = require('../resumable_picklist-service');
+const PicqerService = require('../picqer-service');
+const PicklistService = require('../picklist-service');
 const WarehouseService = require('../warehouse_service');
 const UserService = require('../user_service');
 const SupplierService = require('../supplier_service');
@@ -160,13 +160,15 @@ function sendEmailNotification(subject, body) {
 // Initialize services with configuration
 function initializeServices(config) {
     const apiKey = process.env.PICQER_API_KEY;
-    const baseUrl = process.env.PICQER_API_URL || 'https://skapa-global.picqer.com/api/v1';
+    // Use PICQER_BASE_URL instead of PICQER_API_URL to match Railway environment variables
+    const baseUrl = process.env.PICQER_BASE_URL || 'https://skapa-global.picqer.com/api/v1';
     
     const sqlConfig = {
-        server: process.env.DB_SERVER,
-        database: process.env.DB_NAME,
-        user: process.env.DB_USER,
-        password: process.env.DB_PASSWORD,
+        // Use SQL_SERVER instead of DB_SERVER to match Railway environment variables
+        server: process.env.SQL_SERVER,
+        database: process.env.SQL_DATABASE,
+        user: process.env.SQL_USER,
+        password: process.env.SQL_PASSWORD,
         options: {
             encrypt: true,
             trustServerCertificate: false
@@ -184,9 +186,9 @@ function initializeServices(config) {
 
 // Routes
 
-// Serve the enhanced dashboard HTML
+// Serve the dashboard HTML - use dashboard.html instead of enhanced-dashboard-with-entities.html
 router.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'enhanced-dashboard-with-entities.html'));
+    res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
 
 // Get middleware status
@@ -222,10 +224,11 @@ router.get('/stats', async (req, res) => {
         
         // Get database connection
         const sqlConfig = {
-            server: process.env.DB_SERVER,
-            database: process.env.DB_NAME,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASSWORD,
+            // Use SQL_SERVER instead of DB_SERVER to match Railway environment variables
+            server: process.env.SQL_SERVER,
+            database: process.env.SQL_DATABASE,
+            user: process.env.SQL_USER,
+            password: process.env.SQL_PASSWORD,
             options: {
                 encrypt: true,
                 trustServerCertificate: false
@@ -447,6 +450,26 @@ router.post('/sync/:entity', async (req, res) => {
     }
 });
 
+// Helper function to sync an entity
+async function syncEntity(service, entityType, fullSync) {
+    try {
+        // Start sync
+        const result = await (fullSync ? service.fullSync() : service.incrementalSync());
+        
+        // Add sync record
+        addSyncRecord(true, entityType, result.count, result.message, result.syncId);
+        
+        // Log success
+        addLog('success', `${entityType} sync completed: ${result.count} items synchronized`);
+    } catch (error) {
+        // Add sync record
+        addSyncRecord(false, entityType, null, error.message);
+        
+        // Log error
+        addLog('error', `${entityType} sync failed: ${error.message}`);
+    }
+}
+
 // Retry failed sync
 router.post('/sync/retry/:syncId', async (req, res) => {
     const syncId = req.params.syncId;
@@ -457,10 +480,11 @@ router.post('/sync/retry/:syncId', async (req, res) => {
         
         // Get sync record from database
         const sqlConfig = {
-            server: process.env.DB_SERVER,
-            database: process.env.DB_NAME,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASSWORD,
+            // Use SQL_SERVER instead of DB_SERVER to match Railway environment variables
+            server: process.env.SQL_SERVER,
+            database: process.env.SQL_DATABASE,
+            user: process.env.SQL_USER,
+            password: process.env.SQL_PASSWORD,
             options: {
                 encrypt: true,
                 trustServerCertificate: false
@@ -489,7 +513,7 @@ router.post('/sync/retry/:syncId', async (req, res) => {
         }
         
         // Log retry start
-        addLog('info', `Retrying failed sync for ${entityType} with ID: ${syncId}`);
+        addLog('info', `Retrying sync for ${entityType} with ID: ${syncId}`);
         
         // Send immediate response to prevent timeout
         res.json({
@@ -498,9 +522,15 @@ router.post('/sync/retry/:syncId', async (req, res) => {
         });
         
         // Start retry process
-        retrySync(services[entityType], entityType, syncId);
+        const result = await services[entityType].retrySyncFromId(syncId);
+        
+        // Add sync record
+        addSyncRecord(true, entityType, result.count, result.message, result.syncId);
+        
+        // Log success
+        addLog('success', `${entityType} sync retry completed: ${result.count} items synchronized`);
     } catch (error) {
-        console.error(`Error retrying sync ${syncId}:`, error);
+        console.error(`Error retrying sync:`, error);
         addLog('error', `Error retrying sync: ${error.message}`);
         
         res.status(500).json({
@@ -510,124 +540,39 @@ router.post('/sync/retry/:syncId', async (req, res) => {
     }
 });
 
-// Helper function to sync an entity
-async function syncEntity(service, entityType, fullSync) {
+// Test API connection
+router.get('/test', async (req, res) => {
     try {
-        // Initialize database if needed
-        switch (entityType) {
-            case 'products':
-                await service.initializeProductsDatabase();
-                break;
-            case 'picklists':
-                await service.initializePicklistsDatabase();
-                break;
-            case 'warehouses':
-                await service.initializeWarehousesDatabase();
-                break;
-            case 'users':
-                await service.initializeUsersDatabase();
-                break;
-            case 'suppliers':
-                await service.initializeSuppliersDatabase();
-                break;
+        // Initialize services
+        const services = initializeServices();
+        
+        // Test Picqer API connection
+        const apiKey = process.env.PICQER_API_KEY;
+        // Use PICQER_BASE_URL instead of PICQER_API_URL to match Railway environment variables
+        const baseUrl = process.env.PICQER_BASE_URL || 'https://skapa-global.picqer.com/api/v1';
+        
+        // Simple test request
+        const response = await fetch(`${baseUrl}/products?api_key=${apiKey}&perpage=1`);
+        
+        if (!response.ok) {
+            throw new Error(`API request failed with status: ${response.status}`);
         }
         
-        // Perform sync
-        let result;
-        if (fullSync) {
-            switch (entityType) {
-                case 'products':
-                    result = await service.performFullProductsSync();
-                    break;
-                case 'picklists':
-                    result = await service.performFullPicklistsSync();
-                    break;
-                case 'warehouses':
-                    result = await service.performFullWarehousesSync();
-                    break;
-                case 'users':
-                    result = await service.performFullUsersSync();
-                    break;
-                case 'suppliers':
-                    result = await service.performFullSuppliersSync();
-                    break;
-            }
-        } else {
-            switch (entityType) {
-                case 'products':
-                    result = await service.performIncrementalProductsSync();
-                    break;
-                case 'picklists':
-                    result = await service.performIncrementalPicklistsSync();
-                    break;
-                case 'warehouses':
-                    result = await service.performIncrementalWarehousesSync();
-                    break;
-                case 'users':
-                    result = await service.performIncrementalUsersSync();
-                    break;
-                case 'suppliers':
-                    result = await service.performIncrementalSuppliersSync();
-                    break;
-            }
-        }
-        
-        // Log result
-        if (result.success) {
-            addLog('success', `${entityType} sync completed: ${result.message}`);
-            addSyncRecord(true, entityType, result.savedCount, result.message);
-        } else {
-            addLog('error', `${entityType} sync failed: ${result.message}`);
-            addSyncRecord(false, entityType, 0, result.message, result.syncId);
-        }
+        res.json({
+            success: true,
+            message: 'API connection successful',
+            data: true
+        });
     } catch (error) {
-        console.error(`Error in ${entityType} sync:`, error);
-        addLog('error', `Error in ${entityType} sync: ${error.message}`);
-        addSyncRecord(false, entityType, 0, `Error: ${error.message}`);
-    }
-}
-
-// Helper function to retry a failed sync
-async function retrySync(service, entityType, syncId) {
-    try {
-        // Perform retry
-        let result;
-        switch (entityType) {
-            case 'products':
-                result = await service.retryFailedProductsSync(syncId);
-                break;
-            case 'picklists':
-                result = await service.retryFailedPicklistsSync(syncId);
-                break;
-            case 'warehouses':
-                result = await service.retryFailedWarehousesSync(syncId);
-                break;
-            case 'users':
-                result = await service.retryFailedUsersSync(syncId);
-                break;
-            case 'suppliers':
-                result = await service.retryFailedSuppliersSync(syncId);
-                break;
-        }
+        console.error('API test failed:', error);
+        addLog('error', `API test failed: ${error.message}`);
         
-        // Log result
-        if (result.success) {
-            addLog('success', `${entityType} sync retry completed: ${result.message}`);
-            addSyncRecord(true, entityType, result.savedCount, `Retry successful: ${result.message}`);
-        } else {
-            addLog('error', `${entityType} sync retry failed: ${result.message}`);
-            addSyncRecord(false, entityType, 0, `Retry failed: ${result.message}`, syncId);
-        }
-    } catch (error) {
-        console.error(`Error in ${entityType} sync retry:`, error);
-        addLog('error', `Error in ${entityType} sync retry: ${error.message}`);
-        addSyncRecord(false, entityType, 0, `Retry error: ${error.message}`, syncId);
+        res.json({
+            success: false,
+            message: `API test failed: ${error.message}`,
+            data: false
+        });
     }
-}
+});
 
-// Export the router and utility functions
-module.exports = {
-    router,
-    addLog,
-    addSyncRecord
-};
+module.exports = router;
