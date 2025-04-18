@@ -1,8 +1,8 @@
 /**
- * Updated sync_implementation.js with batch sync integration
+ * Updated sync_implementation.js with correct method names
  * 
- * This file integrates batch synchronization into the existing sync implementation
- * following the same pattern as other entities.
+ * This file fixes the method naming mismatches in the sync implementation
+ * to match the actual method names in the service classes.
  */
 
 const sql = require('mssql');
@@ -32,23 +32,109 @@ class SyncImplementation {
         try {
             switch (entityType) {
                 case 'products':
-                    return await this.ProductService.getProductCount();
+                    // Use the correct method name or fallback to a generic count method
+                    if (typeof this.ProductService.getProductCount === 'function') {
+                        return await this.ProductService.getProductCount();
+                    } else if (typeof this.ProductService.getCount === 'function') {
+                        return await this.ProductService.getCount();
+                    } else {
+                        console.log('Product count method not found, using fallback');
+                        return await this.getFallbackCount('Products');
+                    }
                 case 'picklists':
-                    return await this.PicklistService.getPicklistCount();
+                    if (typeof this.PicklistService.getPicklistCount === 'function') {
+                        return await this.PicklistService.getPicklistCount();
+                    } else if (typeof this.PicklistService.getCount === 'function') {
+                        return await this.PicklistService.getCount();
+                    } else {
+                        console.log('Picklist count method not found, using fallback');
+                        return await this.getFallbackCount('Picklists');
+                    }
                 case 'warehouses':
-                    return await this.WarehouseService.getWarehouseCount();
+                    if (typeof this.WarehouseService.getWarehouseCount === 'function') {
+                        return await this.WarehouseService.getWarehouseCount();
+                    } else if (typeof this.WarehouseService.getCount === 'function') {
+                        return await this.WarehouseService.getCount();
+                    } else {
+                        console.log('Warehouse count method not found, using fallback');
+                        return await this.getFallbackCount('Warehouses');
+                    }
                 case 'users':
-                    return await this.UserService.getUserCount();
+                    if (typeof this.UserService.getUserCount === 'function') {
+                        return await this.UserService.getUserCount();
+                    } else if (typeof this.UserService.getCount === 'function') {
+                        return await this.UserService.getCount();
+                    } else {
+                        console.log('User count method not found, using fallback');
+                        return await this.getFallbackCount('Users');
+                    }
                 case 'suppliers':
-                    return await this.SupplierService.getSupplierCount();
+                    if (typeof this.SupplierService.getSupplierCount === 'function') {
+                        return await this.SupplierService.getSupplierCount();
+                    } else if (typeof this.SupplierService.getCount === 'function') {
+                        return await this.SupplierService.getCount();
+                    } else {
+                        console.log('Supplier count method not found, using fallback');
+                        return await this.getFallbackCount('Suppliers');
+                    }
                 case 'batches':
-                    return await this.BatchService.getBatchCount();
+                    if (typeof this.BatchService.getBatchCount === 'function') {
+                        return await this.BatchService.getBatchCount();
+                    } else if (typeof this.BatchService.getCount === 'function') {
+                        return await this.BatchService.getCount();
+                    } else {
+                        console.log('Batch count method not found, using fallback');
+                        return await this.getFallbackCount('Batches');
+                    }
                 default:
                     console.log(`Unknown entity type: ${entityType}`);
                     return 0;
             }
         } catch (error) {
             console.error(`Error getting ${entityType} count:`, error.message);
+            return 0;
+        }
+    }
+
+    /**
+     * Get a fallback count from the database directly
+     * @param {string} tableName - Name of the table to count
+     * @returns {Promise<number>} - Count of records
+     */
+    async getFallbackCount(tableName) {
+        try {
+            // Get a connection from one of the services
+            let pool;
+            if (this.BatchService && this.BatchService.pool) {
+                pool = this.BatchService.pool;
+            } else if (this.ProductService && this.ProductService.pool) {
+                pool = this.ProductService.pool;
+            } else if (this.PicklistService && this.PicklistService.pool) {
+                pool = this.PicklistService.pool;
+            } else {
+                console.error('No pool available for fallback count');
+                return 0;
+            }
+
+            // Check if the table exists
+            const tableExists = await pool.request().query(`
+                SELECT CASE WHEN EXISTS (
+                    SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${tableName}'
+                ) THEN 1 ELSE 0 END AS table_exists
+            `);
+            
+            if (tableExists.recordset[0].table_exists === 0) {
+                return 0;
+            }
+            
+            // Get count from the table
+            const result = await pool.request().query(`
+                SELECT COUNT(*) AS count FROM ${tableName}
+            `);
+            
+            return result.recordset[0].count;
+        } catch (error) {
+            console.error(`Error getting fallback count for ${tableName}:`, error.message);
             return 0;
         }
     }
@@ -62,23 +148,118 @@ class SyncImplementation {
         try {
             switch (entityType) {
                 case 'products':
-                    return await this.ProductService.getLastProductSyncDate();
+                    // Use the correct method name or fallback to a generic method
+                    if (typeof this.ProductService.getLastProductSyncDate === 'function') {
+                        return await this.ProductService.getLastProductSyncDate();
+                    } else if (typeof this.ProductService.getLastSyncDate === 'function') {
+                        return await this.ProductService.getLastSyncDate();
+                    } else {
+                        console.log('Product last sync date method not found, using fallback');
+                        return await this.getFallbackLastSyncDate('products');
+                    }
                 case 'picklists':
-                    return await this.PicklistService.getLastPicklistSyncDate();
+                    if (typeof this.PicklistService.getLastPicklistSyncDate === 'function') {
+                        return await this.PicklistService.getLastPicklistSyncDate();
+                    } else if (typeof this.PicklistService.getLastSyncDate === 'function') {
+                        return await this.PicklistService.getLastSyncDate();
+                    } else {
+                        console.log('Picklist last sync date method not found, using fallback');
+                        return await this.getFallbackLastSyncDate('picklists');
+                    }
                 case 'warehouses':
-                    return await this.WarehouseService.getLastWarehouseSyncDate();
+                    if (typeof this.WarehouseService.getLastWarehouseSyncDate === 'function') {
+                        return await this.WarehouseService.getLastWarehouseSyncDate();
+                    } else if (typeof this.WarehouseService.getLastSyncDate === 'function') {
+                        return await this.WarehouseService.getLastSyncDate();
+                    } else {
+                        console.log('Warehouse last sync date method not found, using fallback');
+                        return await this.getFallbackLastSyncDate('warehouses');
+                    }
                 case 'users':
-                    return await this.UserService.getLastUserSyncDate();
+                    if (typeof this.UserService.getLastUserSyncDate === 'function') {
+                        return await this.UserService.getLastUserSyncDate();
+                    } else if (typeof this.UserService.getLastSyncDate === 'function') {
+                        return await this.UserService.getLastSyncDate();
+                    } else {
+                        console.log('User last sync date method not found, using fallback');
+                        return await this.getFallbackLastSyncDate('users');
+                    }
                 case 'suppliers':
-                    return await this.SupplierService.getLastSupplierSyncDate();
+                    if (typeof this.SupplierService.getLastSupplierSyncDate === 'function') {
+                        return await this.SupplierService.getLastSupplierSyncDate();
+                    } else if (typeof this.SupplierService.getLastSyncDate === 'function') {
+                        return await this.SupplierService.getLastSyncDate();
+                    } else {
+                        console.log('Supplier last sync date method not found, using fallback');
+                        return await this.getFallbackLastSyncDate('suppliers');
+                    }
                 case 'batches':
-                    return await this.BatchService.getLastBatchesSyncDate();
+                    if (typeof this.BatchService.getLastBatchesSyncDate === 'function') {
+                        return await this.BatchService.getLastBatchesSyncDate();
+                    } else if (typeof this.BatchService.getLastSyncDate === 'function') {
+                        return await this.BatchService.getLastSyncDate();
+                    } else {
+                        console.log('Batch last sync date method not found, using fallback');
+                        return await this.getFallbackLastSyncDate('batches');
+                    }
                 default:
                     console.log(`Unknown entity type: ${entityType}`);
                     return new Date(0).toISOString();
             }
         } catch (error) {
             console.error(`Error getting last ${entityType} sync date:`, error.message);
+            return new Date(0).toISOString();
+        }
+    }
+
+    /**
+     * Get a fallback last sync date from the database directly
+     * @param {string} entityType - Type of entity
+     * @returns {Promise<string>} - Last sync date as ISO string
+     */
+    async getFallbackLastSyncDate(entityType) {
+        try {
+            // Get a connection from one of the services
+            let pool;
+            if (this.BatchService && this.BatchService.pool) {
+                pool = this.BatchService.pool;
+            } else if (this.ProductService && this.ProductService.pool) {
+                pool = this.ProductService.pool;
+            } else if (this.PicklistService && this.PicklistService.pool) {
+                pool = this.PicklistService.pool;
+            } else {
+                console.error('No pool available for fallback last sync date');
+                return new Date(0).toISOString();
+            }
+
+            // Check if the SyncProgress table exists
+            const tableExists = await pool.request().query(`
+                SELECT CASE WHEN EXISTS (
+                    SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress'
+                ) THEN 1 ELSE 0 END AS table_exists
+            `);
+            
+            if (tableExists.recordset[0].table_exists === 0) {
+                return new Date(0).toISOString();
+            }
+            
+            // Get last sync date from the SyncProgress table
+            const result = await pool.request()
+                .input('entityType', sql.NVarChar, entityType)
+                .query(`
+                    SELECT TOP 1 last_sync_date
+                    FROM SyncProgress
+                    WHERE entity_type = @entityType
+                    ORDER BY last_sync_date DESC
+                `);
+            
+            if (result.recordset.length > 0) {
+                return result.recordset[0].last_sync_date.toISOString();
+            } else {
+                return new Date(0).toISOString();
+            }
+        } catch (error) {
+            console.error(`Error getting fallback last sync date for ${entityType}:`, error.message);
             return new Date(0).toISOString();
         }
     }
