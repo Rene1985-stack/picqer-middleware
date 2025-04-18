@@ -1,12 +1,13 @@
 /**
- * Batch API Endpoints for Dashboard
+ * Enhanced Batch Dashboard API
  * 
  * This file provides the necessary API endpoints for the dashboard to display batch data.
- * It integrates with the standard batch service implementation.
+ * It integrates with the enhanced batch service implementation that properly connects to Picqer.
  */
 
 const express = require('express');
 const router = express.Router();
+const sql = require('mssql');
 
 // Initialize batch endpoints
 let batchService;
@@ -38,16 +39,22 @@ function initialize(dbPool, services) {
         .input('limit', sql.Int, pageSize)
         .query(`
           SELECT 
-            b.id,
-            b.idbatch,
-            b.batch_number,
-            b.created_at,
-            b.status,
-            b.total_products,
-            b.total_picklists,
-            b.last_sync_date
-          FROM Batches b
-          ORDER BY b.created_at DESC
+            id,
+            idpicklist_batch,
+            picklist_batchid,
+            idwarehouse,
+            type,
+            status,
+            assigned_to_iduser,
+            assigned_to_name,
+            total_products,
+            total_picklists,
+            created_at,
+            updated_at,
+            completed_at,
+            last_sync_date
+          FROM Batches
+          ORDER BY created_at DESC
           OFFSET @offset ROWS
           FETCH NEXT @limit ROWS ONLY
         `);
@@ -100,32 +107,10 @@ function initialize(dbPool, services) {
       
       console.log(`Batch details requested for ID: ${batchId}`);
       
-      // Get batch details
-      const result = await pool.request()
-        .input('batchId', sql.Int, batchId)
-        .query(`
-          SELECT 
-            b.id,
-            b.idbatch,
-            b.batch_number,
-            b.created_at,
-            b.assigned_to_iduser,
-            b.picking_started_at,
-            b.picking_completed_at,
-            b.closed_by_iduser,
-            b.packing_started_at,
-            b.closed_at,
-            b.status,
-            b.warehouse_id,
-            b.total_products,
-            b.total_picklists,
-            b.notes,
-            b.last_sync_date
-          FROM Batches b
-          WHERE b.id = @batchId
-        `);
+      // Get batch details from service
+      const batch = await batchService.getBatch(batchId);
       
-      if (result.recordset.length === 0) {
+      if (!batch) {
         return res.status(404).json({
           success: false,
           error: 'Batch not found',
@@ -139,19 +124,19 @@ function initialize(dbPool, services) {
         .input('batchId', sql.Int, batchId)
         .query(`
           SELECT 
-            p.id,
-            p.idpicklist,
-            p.reference,
-            p.status
-          FROM Picklists p
-          WHERE p.idpicklist_batch = @batchId
+            id,
+            idpicklist,
+            reference,
+            status
+          FROM Picklists
+          WHERE idpicklist_batch = @batchId
         `);
       
       // Return batch details with picklists
       res.json({
         success: true,
         data: {
-          ...result.recordset[0],
+          ...batch,
           picklists: picklistsResult.recordset
         },
         timestamp: new Date().toISOString()
@@ -167,7 +152,7 @@ function initialize(dbPool, services) {
     }
   });
 
-  // Batch productivity endpoint (simplified version with mock data)
+  // Batch productivity endpoint
   router.get('/batches/productivity', async (req, res) => {
     try {
       console.log('Batch productivity requested');
@@ -175,33 +160,13 @@ function initialize(dbPool, services) {
       // Get days parameter for time range
       const days = parseInt(req.query.days) || 30;
       
-      // Get actual batch count from database
-      const batchCountResult = await pool.request()
-        .query(`
-          SELECT COUNT(*) AS count
-          FROM Batches
-          WHERE created_at >= DATEADD(day, -${days}, GETDATE())
-        `);
+      // Get productivity data from service
+      const productivityData = await batchService.getProductivity(days);
       
-      const batchCount = batchCountResult.recordset[0].count;
-      
-      // Return simplified productivity data
+      // Return productivity data
       res.json({
         success: true,
-        data: {
-          picker_productivity: {
-            average_items_per_hour: 45,
-            average_batches_per_day: Math.max(1, Math.round(batchCount / days)),
-            total_items_picked: batchCount * 15,
-            total_batches_completed: batchCount
-          },
-          packer_productivity: {
-            average_items_per_hour: 60,
-            average_batches_per_day: Math.max(1, Math.round(batchCount / days)),
-            total_items_packed: batchCount * 15,
-            total_batches_completed: batchCount
-          }
-        },
+        data: productivityData,
         timestamp: new Date().toISOString()
       });
     } catch (error) {
@@ -215,7 +180,7 @@ function initialize(dbPool, services) {
     }
   });
 
-  // Batch trends endpoint (simplified version with mock data)
+  // Batch trends endpoint
   router.get('/batches/trends', async (req, res) => {
     try {
       console.log('Batch trends requested');
@@ -223,54 +188,13 @@ function initialize(dbPool, services) {
       // Get days parameter for time range
       const days = parseInt(req.query.days) || 30;
       
-      // Generate dates for the past N days
-      const dates = [];
-      const today = new Date();
-      for (let i = days - 1; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(today.getDate() - i);
-        dates.push(date.toISOString().split('T')[0]);
-      }
-      
-      // Get actual batch counts by day from database
-      const batchCountsResult = await pool.request()
-        .query(`
-          SELECT 
-            CONVERT(date, created_at) AS date,
-            COUNT(*) AS count
-          FROM Batches
-          WHERE created_at >= DATEADD(day, -${days}, GETDATE())
-          GROUP BY CONVERT(date, created_at)
-          ORDER BY CONVERT(date, created_at)
-        `);
-      
-      // Create a map of date to count
-      const batchCountsByDate = {};
-      batchCountsResult.recordset.forEach(row => {
-        const dateStr = new Date(row.date).toISOString().split('T')[0];
-        batchCountsByDate[dateStr] = row.count;
-      });
-      
-      // Generate trend data with actual counts where available
-      const pickerData = dates.map(date => ({
-        date,
-        count: batchCountsByDate[date] || 0,
-        items_per_hour: 40 + Math.floor(Math.random() * 10)
-      }));
-      
-      const packerData = dates.map(date => ({
-        date,
-        count: batchCountsByDate[date] || 0,
-        items_per_hour: 55 + Math.floor(Math.random() * 10)
-      }));
+      // Get trend data from service
+      const trendsData = await batchService.getTrends(days);
       
       // Return trend data
       res.json({
         success: true,
-        data: {
-          picker_trends: pickerData,
-          packer_trends: packerData
-        },
+        data: trendsData,
         timestamp: new Date().toISOString()
       });
     } catch (error) {
@@ -318,6 +242,6 @@ function initialize(dbPool, services) {
 }
 
 module.exports = {
-  router,
+  router: express.Router(),
   initialize
 };
