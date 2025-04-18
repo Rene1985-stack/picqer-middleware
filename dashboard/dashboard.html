@@ -3,59 +3,76 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Picqer Middleware Dashboard</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <title>Skapa Picqer <-> SQL Middleware</title>
     <style>
         :root {
-            --primary: #007bff;
-            --secondary: #6c757d;
+            --primary: #00c853; /* Skapa green */
+            --primary-light: #5efc82;
+            --primary-dark: #009624;
+            --secondary: #002654; /* Skapa dark blue */
+            --secondary-light: #335781;
+            --secondary-dark: #00002c;
+            --accent: #4fc3f7; /* Light blue accent */
             --success: #28a745;
-            --danger: #dc3545;
             --warning: #ffc107;
-            --info: #17a2b8;
+            --danger: #dc3545;
             --light: #f8f9fa;
-            --dark: #343a40;
-            --background: #f5f7fb;
-            --card-bg: #ffffff;
-            --border-color: #e9ecef;
+            --dark: #002654;
+            --gray: #6c757d;
+            --light-gray: #e9ecef;
+            --white: #ffffff;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: var(--background);
-            color: var(--dark);
-            margin: 0;
-            padding: 0;
+            background-color: #f5f5f5;
+            color: var(--secondary);
+            line-height: 1.6;
         }
         
-        .dashboard-container {
-            max-width: 1400px;
+        .container {
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
         }
         
-        .dashboard-header {
+        header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
             padding-bottom: 20px;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--light-gray);
         }
         
-        .dashboard-title {
-            font-size: 24px;
-            font-weight: 600;
-            margin: 0;
-        }
-        
-        .status-indicator {
+        .logo {
             display: flex;
             align-items: center;
         }
         
-        .status-dot {
+        .logo h1 {
+            font-size: 24px;
+            color: var(--secondary);
+            font-weight: 700;
+        }
+        
+        .logo span {
+            color: var(--primary);
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            font-weight: 500;
+        }
+        
+        .status-indicator {
             width: 12px;
             height: 12px;
             border-radius: 50%;
@@ -63,7 +80,7 @@
         }
         
         .status-online {
-            background-color: var(--success);
+            background-color: var(--primary);
         }
         
         .status-offline {
@@ -72,47 +89,53 @@
         
         .dashboard-grid {
             display: grid;
-            grid-template-columns: 2fr 1fr;
+            grid-template-columns: 1fr 1fr;
             gap: 20px;
         }
         
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
         .card {
-            background-color: var(--card-bg);
+            background-color: white;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            padding: 20px;
             margin-bottom: 20px;
-            overflow: hidden;
+            border-top: 4px solid var(--primary);
         }
         
         .card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 15px 20px;
-            background-color: var(--light);
-            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--light-gray);
         }
         
         .card-title {
             font-size: 18px;
             font-weight: 600;
-            margin: 0;
+            color: var(--secondary);
         }
         
-        .card-content {
-            padding: 20px;
+        .card-actions {
+            display: flex;
+            gap: 10px;
         }
         
         .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
             padding: 8px 16px;
             border-radius: 4px;
+            border: none;
+            font-size: 14px;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s;
-            border: none;
         }
         
         .btn-primary {
@@ -121,17 +144,18 @@
         }
         
         .btn-primary:hover {
-            background-color: #0069d9;
+            background-color: var(--primary-dark);
         }
         
         .btn-outline {
             background-color: transparent;
-            border: 1px solid var(--border-color);
-            color: var(--dark);
+            border: 1px solid var(--primary);
+            color: var(--primary);
         }
         
         .btn-outline:hover {
-            background-color: var(--light);
+            background-color: var(--primary);
+            color: white;
         }
         
         .btn-danger {
@@ -140,63 +164,32 @@
         }
         
         .btn-danger:hover {
-            background-color: #c82333;
-        }
-        
-        .btn i {
-            margin-right: 6px;
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .stat-card {
-            background-color: var(--card-bg);
-            border-radius: 8px;
-            padding: 15px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-            text-align: center;
-        }
-        
-        .stat-value {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 5px;
-            color: var(--primary);
-        }
-        
-        .stat-label {
-            font-size: 14px;
-            color: var(--secondary);
+            background-color: #bd2130;
         }
         
         .log-container {
             height: 300px;
             overflow-y: auto;
-            background-color: var(--dark);
-            color: var(--light);
-            padding: 10px;
+            background-color: var(--secondary);
             border-radius: 4px;
+            padding: 10px;
             font-family: monospace;
+            font-size: 14px;
+            color: var(--light);
         }
         
         .log-entry {
-            padding: 5px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            white-space: pre-wrap;
-            word-break: break-all;
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 3px;
         }
         
         .log-info {
-            color: var(--info);
+            color: var(--accent);
         }
         
         .log-success {
-            color: var(--success);
+            color: var(--primary);
         }
         
         .log-warning {
@@ -205,55 +198,37 @@
         
         .log-error {
             color: var(--danger);
+            font-weight: bold;
         }
         
-        .progress-container {
-            margin: 20px 0;
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
         }
         
-        .progress {
-            height: 8px;
-            background-color: var(--light);
-            border-radius: 4px;
-            overflow: hidden;
+        .stat-card {
+            background-color: var(--light-gray);
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
         }
         
-        .progress-bar {
-            height: 100%;
-            background-color: var(--primary);
-            transition: width 0.3s ease;
-        }
-        
-        .entity-tabs {
-            display: flex;
-            border-bottom: 1px solid var(--border-color);
-            margin-bottom: 20px;
-        }
-        
-        .entity-tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            font-weight: 500;
-        }
-        
-        .entity-tab.active {
-            border-bottom-color: var(--primary);
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
             color: var(--primary);
+            margin-bottom: 5px;
         }
         
-        .entity-content {
-            display: none;
-        }
-        
-        .entity-content.active {
-            display: block;
+        .stat-label {
+            font-size: 14px;
+            color: var(--secondary);
+            font-weight: 500;
         }
         
         .sync-history {
             list-style: none;
-            padding: 0;
-            margin: 0;
         }
         
         .sync-item {
@@ -261,25 +236,23 @@
             justify-content: space-between;
             align-items: center;
             padding: 10px 0;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--light-gray);
         }
         
-        .sync-info {
-            flex: 1;
-        }
-        
-        .sync-entity {
-            font-weight: 500;
+        .sync-item:last-child {
+            border-bottom: none;
         }
         
         .sync-time {
-            color: var(--secondary);
             font-size: 14px;
+            color: var(--gray);
         }
         
         .sync-status {
             display: flex;
             align-items: center;
+            font-size: 14px;
+            font-weight: 500;
         }
         
         .sync-success {
@@ -291,62 +264,35 @@
         }
         
         .sync-count {
-            background-color: var(--light);
+            background-color: var(--light-gray);
             border-radius: 20px;
             padding: 2px 8px;
             margin-left: 8px;
             font-size: 12px;
+            color: var(--secondary);
         }
         
-        .retry-btn {
-            background-color: var(--light);
-            border: none;
-            border-radius: 4px;
-            padding: 2px 8px;
-            margin-left: 8px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        
-        .retry-btn:hover {
-            background-color: var(--border-color);
-        }
-        
-        .filter-options {
-            display: flex;
-            margin-bottom: 15px;
-        }
-        
-        .filter-option {
-            padding: 5px 10px;
-            margin-right: 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            background-color: var(--light);
-        }
-        
-        .filter-option.active {
-            background-color: var(--primary);
-            color: white;
+        .email-form {
+            margin-top: 15px;
         }
         
         .form-group {
             margin-bottom: 15px;
         }
         
-        .form-label {
+        .form-group label {
             display: block;
             margin-bottom: 5px;
             font-weight: 500;
+            color: var(--secondary);
         }
         
         .form-control {
             width: 100%;
             padding: 8px 12px;
-            border: 1px solid var(--border-color);
             border-radius: 4px;
-            font-size: 16px;
+            border: 1px solid var(--light-gray);
+            font-size: 14px;
         }
         
         .form-check {
@@ -359,234 +305,190 @@
             margin-right: 8px;
         }
         
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--light-gray);
+            color: var(--gray);
+            font-size: 14px;
+        }
+        
+        /* Progress bar styles */
+        .progress-container {
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .progress {
+            height: 8px;
+            background-color: var(--light-gray);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background-color: var(--primary);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        /* Notification badge */
+        .notification-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background-color: var(--danger);
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Entity tabs */
+        .entity-tabs {
+            display: flex;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--light-gray);
+            overflow-x: auto;
+        }
+        
+        .entity-tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--gray);
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        
+        .entity-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+        
+        .entity-tab:hover {
+            color: var(--primary-dark);
+        }
+
+        /* Entity content */
+        .entity-content {
+            display: none;
+        }
+        
+        .entity-content.active {
+            display: block;
+        }
+
+        /* Filter dropdown */
         .filter-dropdown {
             position: relative;
             display: inline-block;
+            margin-right: 10px;
         }
         
         .filter-dropdown-content {
             display: none;
             position: absolute;
-            right: 0;
-            background-color: var(--card-bg);
+            background-color: white;
             min-width: 160px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
             z-index: 1;
             border-radius: 4px;
+            padding: 5px 0;
         }
         
         .filter-dropdown:hover .filter-dropdown-content {
             display: block;
         }
         
-        .filter-dropdown-content .filter-option {
-            display: block;
-            width: 100%;
-            text-align: left;
-            margin: 0;
-            border-radius: 0;
+        .filter-option {
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
         }
         
-        .filter-dropdown-content .filter-option:first-child {
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
+        .filter-option:hover {
+            background-color: var(--light-gray);
         }
         
-        .filter-dropdown-content .filter-option:last-child {
-            border-bottom-left-radius: 4px;
-            border-bottom-right-radius: 4px;
-        }
-        
-        .metrics-container {
-            margin-top: 20px;
-        }
-        
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-        }
-        
-        .metric-card {
-            background-color: var(--card-bg);
-            border-radius: 8px;
-            padding: 15px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-            text-align: center;
-        }
-        
-        .metric-value {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 5px;
-            color: var(--primary);
-        }
-        
-        .metric-label {
-            font-size: 14px;
+        .filter-option.active {
+            background-color: var(--primary-light);
             color: var(--secondary);
         }
-        
-        .chart-container {
-            margin-top: 20px;
-            height: 300px;
+
+        /* Retry button */
+        .retry-btn {
+            padding: 2px 8px;
+            font-size: 12px;
+            margin-left: 8px;
+            background-color: var(--warning);
+            color: var(--dark);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
         }
         
-        .loading-metrics {
-            text-align: center;
-            padding: 20px;
-            color: var(--secondary);
-        }
-        
-        .metrics-error {
-            text-align: center;
-            padding: 20px;
-            color: var(--danger);
-        }
-        
-        /* Batch-specific styles */
-        .productivity-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 15px;
-            margin: 20px 0;
-        }
-        
-        .productivity-card {
-            background-color: var(--card-bg);
-            border-radius: 8px;
-            padding: 15px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-            text-align: center;
-        }
-        
-        .productivity-value {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 5px;
-            color: var(--primary);
-        }
-        
-        .productivity-label {
-            font-size: 14px;
-            color: var(--secondary);
-        }
-        
-        .batch-list-container {
-            margin: 20px 0;
-            overflow-x: auto;
-        }
-        
-        .batch-list {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .batch-list th,
-        .batch-list td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .batch-list th {
-            background-color: var(--light);
-            font-weight: 600;
-        }
-        
-        .batch-list tr:hover {
-            background-color: var(--light);
-        }
-        
-        .status-open {
-            color: var(--info);
-        }
-        
-        .status-picking {
-            color: var(--warning);
-        }
-        
-        .status-packing {
-            color: var(--primary);
-        }
-        
-        .status-closed {
-            color: var(--success);
-        }
-        
-        .loading-message,
-        .empty-message,
-        .error-message {
-            text-align: center;
-            padding: 20px;
-        }
-        
-        .error-message {
-            color: var(--danger);
-        }
-        
-        .productivity-charts {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin: 20px 0;
-        }
-        
-        @media (max-width: 992px) {
-            .dashboard-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .stats-grid,
-            .metrics-grid,
-            .productivity-grid {
-                grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-            }
-            
-            .productivity-charts {
-                grid-template-columns: 1fr;
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .entity-tabs {
-                flex-wrap: wrap;
-            }
-            
-            .entity-tab {
-                flex: 1 0 auto;
-                text-align: center;
-            }
+        .retry-btn:hover {
+            background-color: #e0a800;
         }
     </style>
 </head>
 <body>
-    <div class="dashboard-container">
-        <div class="dashboard-header">
-            <h1 class="dashboard-title">Picqer Middleware Dashboard</h1>
-            <div class="status-indicator">
-                <div class="status-dot" id="status-indicator"></div>
-                <span id="status-text">Checking status...</span>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <h1>Skapa <span>Picqer &lt;-&gt; SQL</span> Middleware</h1>
             </div>
-        </div>
+            <div class="status">
+                <div class="status-indicator status-online" id="status-indicator"></div>
+                <span id="status-text">Online</span>
+            </div>
+        </header>
         
         <div class="dashboard-grid">
             <div>
                 <div class="card">
                     <div class="card-header">
-                        <h3 class="card-title">Overview</h3>
+                        <h2 class="card-title">Synchronization</h2>
                         <div class="card-actions">
-                            <button class="btn btn-primary" id="sync-btn">
-                                <i class="bi bi-arrow-repeat"></i> Sync
-                            </button>
-                            <button class="btn btn-outline" id="full-sync-btn">
-                                <i class="bi bi-arrow-repeat"></i> Full Sync
-                            </button>
+                            <div class="filter-dropdown">
+                                <button class="btn btn-outline" id="filter-btn">Filter</button>
+                                <div class="filter-dropdown-content" id="filter-options">
+                                    <div class="filter-option active" data-filter="all">All</div>
+                                    <div class="filter-option" data-filter="success">Success</div>
+                                    <div class="filter-option" data-filter="error">Error</div>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" id="sync-btn">Sync Now</button>
+                            <button class="btn btn-outline" id="full-sync-btn">Full Sync</button>
                         </div>
                     </div>
                     
-                    <div class="card-content">
+                    <div class="entity-tabs">
+                        <div class="entity-tab active" data-entity="all">All Entities</div>
+                        <div class="entity-tab" data-entity="products">Products</div>
+                        <div class="entity-tab" data-entity="picklists">Picklists</div>
+                        <div class="entity-tab" data-entity="warehouses">Warehouses</div>
+                        <div class="entity-tab" data-entity="users">Users</div>
+                        <div class="entity-tab" data-entity="suppliers">Suppliers</div>
+                        <div class="entity-tab" data-entity="batches">Batches</div>
+                    </div>
+                    
+                    <div class="progress-container">
+                        <div class="progress">
+                            <div class="progress-bar" id="sync-progress-bar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- All Entities Stats -->
+                    <div class="entity-content active" id="all-content">
                         <div class="stats-grid">
                             <div class="stat-card">
                                 <div class="stat-value" id="total-products">--</div>
@@ -616,208 +518,200 @@
                                 <div class="stat-value" id="last-sync">--</div>
                                 <div class="stat-label">Last Sync</div>
                             </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Products Stats -->
+                    <div class="entity-content" id="products-content">
+                        <div class="stats-grid">
                             <div class="stat-card">
-                                <div class="stat-value" id="sync-status">--</div>
+                                <div class="stat-value" id="products-count">--</div>
+                                <div class="stat-label">Total Products</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-sync-status">--</div>
                                 <div class="stat-label">Status</div>
                             </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="products-last-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
                         </div>
-                        
-                        <div class="progress-container">
-                            <div class="progress">
-                                <div class="progress-bar" id="sync-progress-bar" style="width: 0%"></div>
+                    </div>
+                    
+                    <!-- Picklists Stats -->
+                    <div class="entity-content" id="picklists-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-count">--</div>
+                                <div class="stat-label">Total Picklists</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="picklists-last-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Warehouses Stats -->
+                    <div class="entity-content" id="warehouses-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-count">--</div>
+                                <div class="stat-label">Total Warehouses</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="warehouses-last-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Users Stats -->
+                    <div class="entity-content" id="users-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-count">--</div>
+                                <div class="stat-label">Total Users</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="users-last-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Suppliers Stats -->
+                    <div class="entity-content" id="suppliers-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-count">--</div>
+                                <div class="stat-label">Total Suppliers</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="suppliers-last-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Batches Stats -->
+                    <div class="entity-content" id="batches-content">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="batches-count">--</div>
+                                <div class="stat-label">Total Batches</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="batches-last-sync">--</div>
+                                <div class="stat-label">Last Sync</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="batches-sync-status">--</div>
+                                <div class="stat-label">Status</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="batches-last-sync-count">--</div>
+                                <div class="stat-label">Last Sync Count</div>
                             </div>
                         </div>
                         
-                        <div class="entity-tabs">
-                            <div class="entity-tab active" data-entity="all">All Entities</div>
-                            <div class="entity-tab" data-entity="products">Products</div>
-                            <div class="entity-tab" data-entity="picklists">Picklists</div>
-                            <div class="entity-tab" data-entity="warehouses">Warehouses</div>
-                            <div class="entity-tab" data-entity="users">Users</div>
-                            <div class="entity-tab" data-entity="suppliers">Suppliers</div>
-                            <div class="entity-tab" data-entity="batches">Batches</div>
-                        </div>
-                        
-                        <div class="entity-content active" id="all-content">
-                            <!-- All entities content will be added here by metrics-display.js -->
-                        </div>
-                        
-                        <div class="entity-content" id="products-content">
+                        <div class="card" style="margin-top: 20px;">
+                            <div class="card-header">
+                                <h2 class="card-title">Batch Productivity</h2>
+                            </div>
                             <div class="stats-grid">
                                 <div class="stat-card">
-                                    <div class="stat-value" id="products-count">--</div>
-                                    <div class="stat-label">Total Products</div>
+                                    <div class="stat-value" id="picker-productivity">--</div>
+                                    <div class="stat-label">Picker Items/Hour</div>
                                 </div>
                                 <div class="stat-card">
-                                    <div class="stat-value" id="products-last-sync">--</div>
-                                    <div class="stat-label">Last Sync</div>
+                                    <div class="stat-value" id="packer-productivity">--</div>
+                                    <div class="stat-label">Packer Items/Hour</div>
                                 </div>
                                 <div class="stat-card">
-                                    <div class="stat-value" id="products-sync-status">--</div>
-                                    <div class="stat-label">Status</div>
+                                    <div class="stat-value" id="avg-picking-time">--</div>
+                                    <div class="stat-label">Avg. Picking Time (min)</div>
                                 </div>
                                 <div class="stat-card">
-                                    <div class="stat-value" id="products-sync-count">--</div>
-                                    <div class="stat-label">Last Sync Count</div>
-                                </div>
-                            </div>
-                            
-                            <div class="card-header">
-                                <h3 class="card-title">Product Actions</h3>
-                                <div class="card-actions">
-                                    <button class="btn btn-primary" id="sync-products-btn">Sync Products</button>
-                                    <button class="btn btn-outline" id="full-sync-products-btn">Full Sync</button>
-                                </div>
-                            </div>
-                            
-                            <div class="progress-container">
-                                <div class="progress">
-                                    <div class="progress-bar" id="products-progress-bar" style="width: 0%"></div>
+                                    <div class="stat-value" id="avg-packing-time">--</div>
+                                    <div class="stat-label">Avg. Packing Time (min)</div>
                                 </div>
                             </div>
                         </div>
                         
-                        <div class="entity-content" id="picklists-content">
-                            <div class="stats-grid">
-                                <div class="stat-card">
-                                    <div class="stat-value" id="picklists-count">--</div>
-                                    <div class="stat-label">Total Picklists</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="picklists-last-sync">--</div>
-                                    <div class="stat-label">Last Sync</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="picklists-sync-status">--</div>
-                                    <div class="stat-label">Status</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="picklists-sync-count">--</div>
-                                    <div class="stat-label">Last Sync Count</div>
-                                </div>
-                            </div>
-                            
+                        <div class="card" style="margin-top: 20px;">
                             <div class="card-header">
-                                <h3 class="card-title">Picklist Actions</h3>
+                                <h2 class="card-title">Batch List</h2>
                                 <div class="card-actions">
-                                    <button class="btn btn-primary" id="sync-picklists-btn">Sync Picklists</button>
-                                    <button class="btn btn-outline" id="full-sync-picklists-btn">Full Sync</button>
+                                    <div class="filter-dropdown">
+                                        <button class="btn btn-outline" id="batch-status-filter-btn">Status</button>
+                                        <div class="filter-dropdown-content" id="batch-status-filter-options">
+                                            <div class="filter-option active" data-filter="all">All</div>
+                                            <div class="filter-option" data-filter="open">Open</div>
+                                            <div class="filter-option" data-filter="picking">Picking</div>
+                                            <div class="filter-option" data-filter="packing">Packing</div>
+                                            <div class="filter-option" data-filter="closed">Closed</div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div class="progress-container">
-                                <div class="progress">
-                                    <div class="progress-bar" id="picklists-progress-bar" style="width: 0%"></div>
-                                </div>
+                            <div id="batch-list-container" style="max-height: 400px; overflow-y: auto;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <thead>
+                                        <tr style="background-color: var(--light-gray);">
+                                            <th style="padding: 10px; text-align: left;">ID</th>
+                                            <th style="padding: 10px; text-align: left;">Status</th>
+                                            <th style="padding: 10px; text-align: left;">Picker</th>
+                                            <th style="padding: 10px; text-align: left;">Packer</th>
+                                            <th style="padding: 10px; text-align: left;">Created</th>
+                                            <th style="padding: 10px; text-align: left;">Items</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="batch-list">
+                                        <tr>
+                                            <td colspan="6" style="padding: 20px; text-align: center;">Loading batches...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
-                        
-                        <div class="entity-content" id="warehouses-content">
-                            <div class="stats-grid">
-                                <div class="stat-card">
-                                    <div class="stat-value" id="warehouses-count">--</div>
-                                    <div class="stat-label">Total Warehouses</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="warehouses-last-sync">--</div>
-                                    <div class="stat-label">Last Sync</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="warehouses-sync-status">--</div>
-                                    <div class="stat-label">Status</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="warehouses-sync-count">--</div>
-                                    <div class="stat-label">Last Sync Count</div>
-                                </div>
-                            </div>
-                            
-                            <div class="card-header">
-                                <h3 class="card-title">Warehouse Actions</h3>
-                                <div class="card-actions">
-                                    <button class="btn btn-primary" id="sync-warehouses-btn">Sync Warehouses</button>
-                                    <button class="btn btn-outline" id="full-sync-warehouses-btn">Full Sync</button>
-                                </div>
-                            </div>
-                            
-                            <div class="progress-container">
-                                <div class="progress">
-                                    <div class="progress-bar" id="warehouses-progress-bar" style="width: 0%"></div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="entity-content" id="users-content">
-                            <div class="stats-grid">
-                                <div class="stat-card">
-                                    <div class="stat-value" id="users-count">--</div>
-                                    <div class="stat-label">Total Users</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="users-last-sync">--</div>
-                                    <div class="stat-label">Last Sync</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="users-sync-status">--</div>
-                                    <div class="stat-label">Status</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="users-sync-count">--</div>
-                                    <div class="stat-label">Last Sync Count</div>
-                                </div>
-                            </div>
-                            
-                            <div class="card-header">
-                                <h3 class="card-title">User Actions</h3>
-                                <div class="card-actions">
-                                    <button class="btn btn-primary" id="sync-users-btn">Sync Users</button>
-                                    <button class="btn btn-outline" id="full-sync-users-btn">Full Sync</button>
-                                </div>
-                            </div>
-                            
-                            <div class="progress-container">
-                                <div class="progress">
-                                    <div class="progress-bar" id="users-progress-bar" style="width: 0%"></div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="entity-content" id="suppliers-content">
-                            <div class="stats-grid">
-                                <div class="stat-card">
-                                    <div class="stat-value" id="suppliers-count">--</div>
-                                    <div class="stat-label">Total Suppliers</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="suppliers-last-sync">--</div>
-                                    <div class="stat-label">Last Sync</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="suppliers-sync-status">--</div>
-                                    <div class="stat-label">Status</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-value" id="suppliers-sync-count">--</div>
-                                    <div class="stat-label">Last Sync Count</div>
-                                </div>
-                            </div>
-                            
-                            <div class="card-header">
-                                <h3 class="card-title">Supplier Actions</h3>
-                                <div class="card-actions">
-                                    <button class="btn btn-primary" id="sync-suppliers-btn">Sync Suppliers</button>
-                                    <button class="btn btn-outline" id="full-sync-suppliers-btn">Full Sync</button>
-                                </div>
-                            </div>
-                            
-                            <div class="progress-container">
-                                <div class="progress">
-                                    <div class="progress-bar" id="suppliers-progress-bar" style="width: 0%"></div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Batches content will be added dynamically by batch-ui-components.js -->
                     </div>
                 </div>
             </div>
@@ -825,105 +719,90 @@
             <div>
                 <div class="card">
                     <div class="card-header">
-                        <h3 class="card-title">Logs</h3>
-                        <div class="card-actions">
-                            <button class="btn btn-danger" id="clear-logs-btn">
-                                <i class="bi bi-trash"></i> Clear Logs
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="card-content">
-                        <div class="filter-options" id="logs-filter-options">
-                            <div class="filter-option active" data-filter="all">All</div>
-                            <div class="filter-option" data-filter="info">Info</div>
-                            <div class="filter-option" data-filter="success">Success</div>
-                            <div class="filter-option" data-filter="warning">Warning</div>
-                            <div class="filter-option" data-filter="error">Error</div>
-                        </div>
-                        
-                        <div class="log-container" id="log-container">
-                            <div class="log-entry log-info">Loading logs...</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">Sync History</h3>
+                        <h2 class="card-title">Sync History</h2>
                         <div class="card-actions">
                             <div class="filter-dropdown">
-                                <button class="btn btn-outline" id="filter-btn">Filter</button>
-                                <div class="filter-dropdown-content" id="filter-options">
+                                <button class="btn btn-outline" id="history-filter-btn">Filter</button>
+                                <div class="filter-dropdown-content" id="history-filter-options">
                                     <div class="filter-option active" data-filter="all">All</div>
-                                    <div class="filter-option" data-filter="success">Success</div>
-                                    <div class="filter-option" data-filter="error">Error</div>
+                                    <div class="filter-option" data-filter="products">Products</div>
+                                    <div class="filter-option" data-filter="picklists">Picklists</div>
+                                    <div class="filter-option" data-filter="warehouses">Warehouses</div>
+                                    <div class="filter-option" data-filter="users">Users</div>
+                                    <div class="filter-option" data-filter="suppliers">Suppliers</div>
+                                    <div class="filter-option" data-filter="batches">Batches</div>
                                 </div>
                             </div>
                         </div>
                     </div>
                     
-                    <div class="card-content">
-                        <div class="filter-options" id="history-filter-options">
-                            <div class="filter-option active" data-filter="all">All</div>
-                            <div class="filter-option" data-filter="products">Products</div>
-                            <div class="filter-option" data-filter="picklists">Picklists</div>
-                            <div class="filter-option" data-filter="warehouses">Warehouses</div>
-                            <div class="filter-option" data-filter="users">Users</div>
-                            <div class="filter-option" data-filter="suppliers">Suppliers</div>
-                            <div class="filter-option" data-filter="batches">Batches</div>
+                    <ul class="sync-history" id="sync-history">
+                        <li class="sync-item">
+                            <div class="sync-time">Loading sync history...</div>
+                            <div class="sync-status"></div>
+                        </li>
+                    </ul>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Logs</h2>
+                        <div class="card-actions">
+                            <button class="btn btn-outline" id="clear-logs-btn">Clear</button>
                         </div>
-                        
-                        <ul class="sync-history" id="sync-history">
-                            <li class="sync-item">Loading history...</li>
-                        </ul>
+                    </div>
+                    
+                    <div class="log-container" id="log-container">
+                        <div class="log-entry log-info">Initializing dashboard...</div>
                     </div>
                 </div>
                 
                 <div class="card">
                     <div class="card-header">
-                        <h3 class="card-title">Email Notifications</h3>
+                        <h2 class="card-title">Email Notifications</h2>
                     </div>
                     
-                    <div class="card-content">
-                        <form id="email-form">
+                    <form class="email-form" id="email-form">
+                        <div class="form-group">
+                            <label for="email">Email Address</label>
+                            <input type="email" class="form-control" id="email" placeholder="Enter email">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Notification Types</label>
                             <div class="form-check">
-                                <input type="checkbox" class="form-check-input" id="email-enabled">
-                                <label class="form-check-label" for="email-enabled">Enable email notifications</label>
+                                <input class="form-check-input" type="checkbox" id="sync-success">
+                                <label class="form-check-label" for="sync-success">Sync Success</label>
                             </div>
-                            
-                            <div class="form-group">
-                                <label class="form-label" for="email-address">Email address</label>
-                                <input type="email" class="form-control" id="email-address" placeholder="Enter email address">
-                            </div>
-                            
-                            <div class="form-group">
-                                <label class="form-label" for="email-frequency">Frequency</label>
-                                <select class="form-control" id="email-frequency">
-                                    <option value="daily">Daily</option>
-                                    <option value="weekly">Weekly</option>
-                                    <option value="monthly">Monthly</option>
-                                </select>
-                            </div>
-                            
                             <div class="form-check">
-                                <input type="checkbox" class="form-check-input" id="email-errors-only">
-                                <label class="form-check-label" for="email-errors-only">Only send on errors</label>
+                                <input class="form-check-input" type="checkbox" id="sync-error" checked>
+                                <label class="form-check-label" for="sync-error">Sync Error</label>
                             </div>
-                            
-                            <button type="submit" class="btn btn-primary">Save Settings</button>
-                        </form>
-                    </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="api-error" checked>
+                                <label class="form-check-label" for="api-error">API Error</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="system-status">
+                                <label class="form-check-label" for="system-status">System Status</label>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">Save Preferences</button>
+                    </form>
                 </div>
             </div>
         </div>
+        
+        <footer>
+            <p>&copy; 2025 Skapa Picqer <-> SQL Middleware | Version 1.0.0</p>
+        </footer>
     </div>
     
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
-    <script src="error-handling.js"></script>
-    <script src="updated_dashboard-api.js"></script>
+    <!-- JavaScript -->
+    <script src="dashboard-api.js"></script>
     <script src="metrics-display.js"></script>
-    <script src="batch-ui-components.js"></script>
-    <script src="batch-metrics-display.js"></script>
+    <script src="error-handling.js"></script>
+    <script src="fixed_batch-ui-components.js"></script>
 </body>
 </html>
