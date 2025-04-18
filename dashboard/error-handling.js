@@ -1,4 +1,4 @@
-// error-handling.js - Enhanced error filtering and retry functionality for the middleware dashboard
+// Fixed error-handling.js - Removed problematic CSS selector
 
 document.addEventListener('DOMContentLoaded', function() {
     // API endpoints
@@ -33,8 +33,19 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Create error filter UI
     function createErrorFilterUI() {
-        // Add error filter dropdown to sync history section
-        const syncHistoryHeader = document.querySelector('.card-header:has(h2.card-title:contains("Sync History"))');
+        // Add error filter dropdown to sync history section - FIXED SELECTOR
+        const syncHistoryHeaders = document.querySelectorAll('.card-header');
+        let syncHistoryHeader = null;
+        
+        // Find the sync history header by looking for the card title text
+        for (const header of syncHistoryHeaders) {
+            const cardTitle = header.querySelector('.card-title');
+            if (cardTitle && cardTitle.textContent.includes('Sync History')) {
+                syncHistoryHeader = header;
+                break;
+            }
+        }
+        
         if (syncHistoryHeader) {
             const filterDropdown = document.createElement('div');
             filterDropdown.className = 'filter-dropdown';
@@ -167,6 +178,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 justify-content: flex-end;
                 gap: 10px;
                 margin-top: 20px;
+            }
+            
+            .error-badge {
+                display: inline-block;
+                background-color: var(--danger);
+                color: white;
+                border-radius: 50%;
+                width: 18px;
+                height: 18px;
+                font-size: 12px;
+                text-align: center;
+                line-height: 18px;
+                margin-left: 5px;
             }
         `;
         
