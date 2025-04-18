@@ -13,7 +13,7 @@ const sql = require('mssql');
 require('dotenv').config();
 
 // Import service classes with rate limiting
-const PicqerService = require('./updated-picqer-service');
+const PicqerService = require('./picqer-service');  // Using original filename
 const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
