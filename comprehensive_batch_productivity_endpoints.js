@@ -1,18 +1,96 @@
 /**
- * Comprehensive Batch Productivity Endpoints
+ * Comprehensive Batch Productivity Endpoints with Schema Management
  * 
  * This file provides a complete implementation of batch productivity endpoints
  * with advanced features, filtering, pagination, and robust error handling.
+ * It also ensures the Batches table exists before performing any operations.
  */
 
 const express = require('express');
 const router = express.Router();
 const sql = require('mssql');
 const BatchProductivityTracker = require('./batch_productivity_tracker');
+const { SchemaManager } = require('./schema_manager');
 
 // Initialize batch productivity tracker
 let batchProductivityTracker;
 let pool;
+let schemaManager;
+
+/**
+ * Ensure the Batches table exists in the database
+ * @param {sql.ConnectionPool} dbPool - SQL connection pool
+ * @returns {Promise<boolean>} - True if table exists or was created
+ */
+async function ensureBatchesTableExists(dbPool) {
+  try {
+    console.log('Ensuring Batches table exists...');
+    
+    // Create the Batches table if it doesn't exist
+    await schemaManager.ensureTableExists('Batches', {
+      id: { type: 'INT', primaryKey: true, identity: true },
+      batch_number: { type: 'NVARCHAR(50)', nullable: false },
+      created_at: { type: 'DATETIME', nullable: false, defaultValue: 'GETDATE()' },
+      assigned_to_iduser: { type: 'INT', nullable: true },
+      picking_started_at: { type: 'DATETIME', nullable: true },
+      picking_completed_at: { type: 'DATETIME', nullable: true },
+      closed_by_iduser: { type: 'INT', nullable: true },
+      packing_started_at: { type: 'DATETIME', nullable: true },
+      closed_at: { type: 'DATETIME', nullable: true },
+      status: { type: 'NVARCHAR(50)', nullable: false, defaultValue: "'open'" },
+      warehouse_id: { type: 'INT', nullable: true },
+      total_products: { type: 'INT', nullable: true },
+      total_picklists: { type: 'INT', nullable: true },
+      notes: { type: 'NVARCHAR(MAX)', nullable: true },
+      last_sync_date: { type: 'DATETIME', nullable: false, defaultValue: 'GETDATE()' }
+    });
+    
+    // Ensure the Picklists table has the batch relationship column
+    await schemaManager.ensureColumnExists('Picklists', 'idpicklist_batch', { type: 'INT', nullable: true });
+    
+    // Create indexes if they don't exist
+    await dbPool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_batch_number' AND object_id = OBJECT_ID('Batches'))
+      BEGIN
+        CREATE INDEX idx_batches_batch_number ON Batches(batch_number);
+      END
+    `);
+    
+    await dbPool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_assigned_to_iduser' AND object_id = OBJECT_ID('Batches'))
+      BEGIN
+        CREATE INDEX idx_batches_assigned_to_iduser ON Batches(assigned_to_iduser);
+      END
+    `);
+    
+    await dbPool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_closed_by_iduser' AND object_id = OBJECT_ID('Batches'))
+      BEGIN
+        CREATE INDEX idx_batches_closed_by_iduser ON Batches(closed_by_iduser);
+      END
+    `);
+    
+    await dbPool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_status' AND object_id = OBJECT_ID('Batches'))
+      BEGIN
+        CREATE INDEX idx_batches_status ON Batches(status);
+      END
+    `);
+    
+    await dbPool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_warehouse_id' AND object_id = OBJECT_ID('Batches'))
+      BEGIN
+        CREATE INDEX idx_batches_warehouse_id ON Batches(warehouse_id);
+      END
+    `);
+    
+    console.log('Batches table and indexes are ready');
+    return true;
+  } catch (error) {
+    console.error('Error ensuring Batches table exists:', error);
+    throw error;
+  }
+}
 
 /**
  * Initialize the router with a database connection pool
@@ -22,6 +100,7 @@ let pool;
  */
 function initialize(dbPool, options = {}) {
   pool = dbPool;
+  schemaManager = new SchemaManager(pool);
   batchProductivityTracker = new BatchProductivityTracker(pool);
   
   // Apply configuration options
@@ -105,8 +184,18 @@ function initialize(dbPool, options = {}) {
     });
   };
 
+  // Middleware to ensure Batches table exists before processing requests
+  const ensureBatchesTableMiddleware = async (req, res, next) => {
+    try {
+      await ensureBatchesTableExists(pool);
+      next();
+    } catch (error) {
+      handleError(res, error, 'Failed to ensure Batches table exists');
+    }
+  };
+
   // Main productivity endpoint with filtering and pagination
-  router.get('/batches/productivity', cacheMiddleware, async (req, res) => {
+  router.get('/batches/productivity', cacheMiddleware, ensureBatchesTableMiddleware, async (req, res) => {
     try {
       // Get date range from query parameters or use default
       const endDate = parseDateParam(req.query.endDate, new Date());
@@ -149,7 +238,7 @@ function initialize(dbPool, options = {}) {
   });
 
   // Productivity trends endpoint with date range filtering
-  router.get('/batches/trends', cacheMiddleware, async (req, res) => {
+  router.get('/batches/trends', cacheMiddleware, ensureBatchesTableMiddleware, async (req, res) => {
     try {
       // Get date range from query parameters or use default
       const endDate = parseDateParam(req.query.endDate, new Date());
@@ -187,7 +276,7 @@ function initialize(dbPool, options = {}) {
   });
 
   // Batch details endpoint
-  router.get('/batches/:id', cacheMiddleware, async (req, res) => {
+  router.get('/batches/:id', cacheMiddleware, ensureBatchesTableMiddleware, async (req, res) => {
     try {
       const batchId = parseInt(req.params.id);
       
@@ -215,7 +304,7 @@ function initialize(dbPool, options = {}) {
   });
 
   // Batches list endpoint with filtering and pagination
-  router.get('/batches', cacheMiddleware, async (req, res) => {
+  router.get('/batches', cacheMiddleware, ensureBatchesTableMiddleware, async (req, res) => {
     try {
       // Parse pagination parameters
       const { page, limit } = parsePaginationParams(req);
@@ -318,7 +407,7 @@ function initialize(dbPool, options = {}) {
   });
 
   // User productivity comparison endpoint
-  router.get('/batches/users/comparison', cacheMiddleware, async (req, res) => {
+  router.get('/batches/users/comparison', cacheMiddleware, ensureBatchesTableMiddleware, async (req, res) => {
     try {
       // Get date range from query parameters or use default
       const endDate = parseDateParam(req.query.endDate, new Date());
@@ -387,7 +476,16 @@ function initialize(dbPool, options = {}) {
     }
   });
 
-  console.log('Comprehensive batch productivity endpoints initialized');
+  // Initialize the Batches table when the router is created
+  ensureBatchesTableExists(pool)
+    .then(() => {
+      console.log('Batches table initialized successfully');
+    })
+    .catch(error => {
+      console.error('Failed to initialize Batches table:', error);
+    });
+
+  console.log('Comprehensive batch productivity endpoints initialized with schema management');
   return router;
 }
 
