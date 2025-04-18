@@ -1,9 +1,8 @@
 /**
- * Final Index.js with Integrated Data Sync Implementation
+ * Updated Index.js with Batch Productivity Endpoint Integration
  * 
- * This file integrates the actual data sync implementation with the API adapter,
- * ensuring that when sync buttons are clicked in the dashboard, real data is
- * synced from Picqer to the database.
+ * This file integrates the batch productivity endpoints with the existing
+ * Picqer middleware implementation.
  */
 
 // Import required modules
@@ -19,9 +18,16 @@ const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
+const BatchProductivityTracker = require('./batch_productivity_tracker');
 
 // Import API adapter with actual data sync implementation
 const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
+
+// Import batch productivity endpoints
+// Option 1: Simple implementation
+const batchProductivityEndpoints = require('./simple_batch_productivity_endpoint');
+// Option 2: Comprehensive implementation (uncomment to use)
+// const batchProductivityEndpoints = require('./comprehensive_batch_productivity_endpoints');
 
 // Create Express app
 const app = express();
@@ -63,8 +69,48 @@ initializeServices({
   SupplierService: supplierService
 });
 
+// Initialize database connection pool
+let pool;
+
+// Function to initialize the database connection pool
+async function initializePool() {
+  try {
+    pool = await new sql.ConnectionPool(dbConfig).connect();
+    console.log('Database connection pool initialized');
+    return pool;
+  } catch (error) {
+    console.error('Error initializing database connection pool:', error.message);
+    throw error;
+  }
+}
+
 // API routes
 app.use('/api', apiAdapter);
+
+// Initialize and use batch productivity endpoints
+async function initializeBatchEndpoints() {
+  try {
+    // Initialize batch productivity endpoints with the connection pool
+    const batchRouter = batchProductivityEndpoints.initialize(pool);
+    
+    // Option 1: Simple implementation
+    app.use('/api', batchRouter);
+    
+    // Option 2: Comprehensive implementation with configuration (uncomment to use)
+    /*
+    const comprehensiveBatchRouter = batchProductivityEndpoints.initialize(pool, {
+      cacheEnabled: true,
+      cacheTTL: 300, // 5 minutes
+      defaultDateRange: 30 // 30 days
+    });
+    app.use('/api/v2', comprehensiveBatchRouter);
+    */
+    
+    console.log('Batch productivity endpoints initialized');
+  } catch (error) {
+    console.error('Error initializing batch productivity endpoints:', error.message);
+  }
+}
 
 // Dashboard route
 app.get('/dashboard', (req, res) => {
@@ -104,6 +150,12 @@ async function initializeDatabase() {
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
   console.log(`Picqer middleware server running on port ${PORT}`);
+  
+  // Initialize database connection pool
+  await initializePool();
+  
+  // Initialize batch productivity endpoints
+  await initializeBatchEndpoints();
   
   // Initialize database after server starts
   await initializeDatabase();
