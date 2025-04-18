@@ -1,80 +1,164 @@
 /**
- * Updated index.js with simplified batch sync integration
+ * Updated index.js with standard batch service integration
  * 
- * This file integrates the simplified batch sync functionality
- * without any productivity tracking features.
+ * This file integrates the standard batch service following the same pattern
+ * as other entity services in the project.
  */
 
-require('dotenv').config();
+// Import required modules
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const sql = require('mssql');
-const path = require('path');
-const { initialize: initializeDataSync } = require('./data_sync_api_adapter');
-const { initialize: initializeDashboardApi } = require('./dashboard-api');
-const { initialize: initializeBatchSync } = require('./simplified_batch_sync');
+require('dotenv').config();
+
+// Import service classes
+const PicqerService = require('./picqer-service');
+const PicklistService = require('./picklist-service');
+const WarehouseService = require('./warehouse_service');
+const UserService = require('./user_service');
+const SupplierService = require('./supplier_service');
+const BatchService = require('./standard_batch_service');
+
+// Import API adapter with actual data sync implementation
+const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
 
 // Create Express app
 const app = express();
-const port = process.env.PORT || 3000;
 
-// Middleware
+// Configure middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from the dashboard directory
-app.use(express.static(path.join(__dirname, 'dashboard')));
-
 // Database configuration
 const dbConfig = {
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  server: process.env.DB_SERVER,
-  database: process.env.DB_DATABASE,
+  server: process.env.SQL_SERVER,
+  database: process.env.SQL_DATABASE,
+  user: process.env.SQL_USER,
+  password: process.env.SQL_PASSWORD,
   options: {
     encrypt: true,
-    trustServerCertificate: true,
-    enableArithAbort: true
+    trustServerCertificate: false
   }
 };
 
 // Picqer API configuration
-const picqerConfig = {
-  apiUrl: process.env.PICQER_API_URL,
-  apiKey: process.env.PICQER_API_KEY,
-  subdomain: process.env.PICQER_SUBDOMAIN
-};
+const apiKey = process.env.PICQER_API_KEY;
+const baseUrl = process.env.PICQER_BASE_URL;
+
+// Initialize services
+const picqerService = new PicqerService(apiKey, baseUrl, dbConfig);
+const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
+const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
+const userService = new UserService(apiKey, baseUrl, dbConfig);
+const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
+const batchService = new BatchService(apiKey, baseUrl, dbConfig);
+
+// Initialize API adapter with service instances
+initializeServices({
+  ProductService: picqerService,
+  PicklistService: picklistService,
+  WarehouseService: warehouseService,
+  UserService: userService,
+  SupplierService: supplierService,
+  BatchService: batchService
+});
 
 // Initialize database connection pool
-const pool = new sql.ConnectionPool(dbConfig);
+let pool;
 
-// Connect to database and start server
-pool.connect()
-  .then(() => {
-    console.log('Connected to database');
+// Function to initialize the database connection pool
+async function initializePool() {
+  try {
+    pool = await new sql.ConnectionPool(dbConfig).connect();
+    console.log('Database connection pool initialized');
+    return pool;
+  } catch (error) {
+    console.error('Error initializing database connection pool:', error.message);
+    throw error;
+  }
+}
+
+// API routes
+app.use('/api', apiAdapter);
+
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
+});
+
+// Serve static files from dashboard directory
+app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
+
+// Initialize database
+async function initializeDatabase() {
+  try {
+    console.log('Initializing database...');
     
-    // Initialize API adapters
-    const dataSyncRouter = initializeDataSync(pool, picqerConfig);
-    const dashboardRouter = initializeDashboardApi(pool);
-    const batchSyncRouter = initializeBatchSync(pool, picqerConfig);
+    // Initialize product schema
+    await picqerService.initializeDatabase();
     
-    // Use API routers
-    app.use('/api', dataSyncRouter);
-    app.use('/api', dashboardRouter);
-    app.use('/api', batchSyncRouter);
+    // Initialize picklists schema
+    await picklistService.initializePicklistsDatabase();
     
-    // Serve the dashboard
-    app.get('/', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
-    });
+    // Initialize warehouses schema
+    await warehouseService.initializeWarehousesDatabase();
     
-    // Start the server
-    app.listen(port, () => {
-      console.log(`Server running on port ${port}`);
-    });
-  })
-  .catch(err => {
-    console.error('Database connection failed:', err);
-    process.exit(1);
-  });
+    // Initialize users schema
+    await userService.initializeUsersDatabase();
+    
+    // Initialize suppliers schema
+    await supplierService.initializeSuppliersDatabase();
+    
+    // Initialize batches schema
+    await batchService.initializeBatchesDatabase();
+    
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error.message);
+  }
+}
+
+// Start server
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+  console.log(`Picqer middleware server running on port ${PORT}`);
+  
+  // Initialize database connection pool
+  await initializePool();
+  
+  // Initialize database after server starts
+  await initializeDatabase();
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  
+  // Close database connection
+  try {
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
+  }
+  
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  
+  // Close database connection
+  try {
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
+  }
+  
+  process.exit(0);
+});
+
+module.exports = app;
