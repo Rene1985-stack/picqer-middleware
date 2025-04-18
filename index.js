@@ -24,10 +24,10 @@ const BatchProductivityTracker = require('./batch_productivity_tracker');
 const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
 
 // Import batch productivity endpoints
-// Option 1: Simple implementation
-const batchProductivityEndpoints = require('./simple_batch_productivity_endpoint.js');
-// Option 2: Comprehensive implementation (uncomment to use)
-// const batchProductivityEndpoints = require('./comprehensive_batch_productivity_endpoints.js');
+// Option 1: Simple implementation (commented out)
+// const batchProductivityEndpoints = require('./simple_batch_productivity_endpoint.js');
+// Option 2: Comprehensive implementation
+const batchProductivityEndpoints = require('./comprehensive_batch_productivity_endpoints.js');
 
 // Create Express app
 const app = express();
@@ -90,23 +90,17 @@ app.use('/api', apiAdapter);
 // Initialize and use batch productivity endpoints
 async function initializeBatchEndpoints() {
   try {
-    // Initialize batch productivity endpoints with the connection pool
-    const batchRouter = batchProductivityEndpoints.initialize(pool);
-    
-    // Option 1: Simple implementation
-    app.use('/api', batchRouter);
-    
-    // Option 2: Comprehensive implementation with configuration (uncomment to use)
-    /*
-    const comprehensiveBatchRouter = batchProductivityEndpoints.initialize(pool, {
+    // Initialize comprehensive batch productivity endpoints with the connection pool and configuration
+    const batchRouter = batchProductivityEndpoints.initialize(pool, {
       cacheEnabled: true,
       cacheTTL: 300, // 5 minutes
       defaultDateRange: 30 // 30 days
     });
-    app.use('/api/v2', comprehensiveBatchRouter);
-    */
     
-    console.log('Batch productivity endpoints initialized');
+    // Use the comprehensive implementation
+    app.use('/api', batchRouter);
+    
+    console.log('Comprehensive batch productivity endpoints initialized');
   } catch (error) {
     console.error('Error initializing batch productivity endpoints:', error.message);
   }
