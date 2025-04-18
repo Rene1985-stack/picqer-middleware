@@ -1,8 +1,8 @@
 /**
- * Simplified index.js with correct module paths
+ * Enhanced index.js with rate limiting integration
  * 
- * This file provides a minimal implementation that correctly imports
- * all required modules without introducing additional complexity.
+ * This file provides a complete implementation that correctly imports
+ * all required modules and integrates the new rate limiting solution.
  */
 
 // Import required modules
@@ -12,8 +12,8 @@ const cors = require('cors');
 const sql = require('mssql');
 require('dotenv').config();
 
-// Import service classes
-const PicqerService = require('./picqer-service');
+// Import service classes with rate limiting
+const PicqerService = require('./updated-picqer-service');
 const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
@@ -49,6 +49,26 @@ const baseUrl = process.env.PICQER_BASE_URL;
 
 // Initialize services
 const picqerService = new PicqerService(apiKey, baseUrl, dbConfig);
+
+// Configure rate limiting based on environment
+if (process.env.PICQER_RATE_LIMIT_WAIT === 'false') {
+  picqerService.disableRetryOnRateLimitHit();
+  console.log('Picqer rate limit auto-retry disabled');
+} else {
+  picqerService.enableRetryOnRateLimitHit();
+  console.log('Picqer rate limit auto-retry enabled');
+}
+
+// Configure sleep time on rate limit hit (default: 20000ms / 20 seconds)
+if (process.env.PICQER_RATE_LIMIT_SLEEP_MS) {
+  const sleepTimeMs = parseInt(process.env.PICQER_RATE_LIMIT_SLEEP_MS, 10);
+  if (!isNaN(sleepTimeMs) && sleepTimeMs > 0) {
+    picqerService.setSleepTimeOnRateLimitHit(sleepTimeMs);
+    console.log(`Picqer rate limit sleep time set to ${sleepTimeMs}ms`);
+  }
+}
+
+// Initialize other services
 const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
 const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
 const userService = new UserService(apiKey, baseUrl, dbConfig);
@@ -82,6 +102,26 @@ async function initializePool() {
 
 // API routes
 app.use('/api', apiAdapter);
+
+// Add rate limiting status endpoint
+app.get('/api/status/rate-limit', (req, res) => {
+  try {
+    const stats = picqerService.getRateLimiterStats();
+    res.json({
+      success: true,
+      stats: stats,
+      config: {
+        waitOnRateLimit: process.env.PICQER_RATE_LIMIT_WAIT !== 'false',
+        sleepTimeMs: parseInt(process.env.PICQER_RATE_LIMIT_SLEEP_MS || '20000', 10)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 // Dashboard route
 app.get('/dashboard', (req, res) => {
@@ -124,12 +164,18 @@ async function initializeDatabase() {
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
   console.log(`Picqer middleware server running on port ${PORT}`);
+  console.log(`Rate limiting: ${process.env.PICQER_RATE_LIMIT_WAIT === 'false' ? 'disabled' : 'enabled'}`);
   
   // Initialize database connection pool
   await initializePool();
   
   // Initialize database after server starts
   await initializeDatabase();
+  
+  // Log rate limiter configuration
+  console.log('Rate limiter configuration:');
+  console.log('- Auto-retry on rate limit:', process.env.PICQER_RATE_LIMIT_WAIT !== 'false' ? 'Enabled' : 'Disabled');
+  console.log('- Sleep time on rate limit hit:', parseInt(process.env.PICQER_RATE_LIMIT_SLEEP_MS || '20000', 10) + 'ms');
 });
 
 // Handle graceful shutdown
