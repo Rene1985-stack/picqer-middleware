@@ -1,4 +1,4 @@
-// batch_service.js
+// standard_batch_service.js
 const sql = require('mssql');
 const axios = require('axios');
 const { SchemaManager } = require('./schema_manager');
@@ -6,13 +6,89 @@ const { SchemaManager } = require('./schema_manager');
 class BatchService {
     /**
      * Initialize the BatchService
-     * @param {sql.ConnectionPool} pool - SQL connection pool
-     * @param {Object} picqerConfig - Configuration for Picqer API
+     * @param {string} apiKey - Picqer API key
+     * @param {string} baseUrl - Picqer API base URL
+     * @param {Object} dbConfig - Database configuration
      */
-    constructor(pool, picqerConfig) {
-        this.pool = pool;
-        this.picqerConfig = picqerConfig;
-        this.schemaManager = new SchemaManager(pool);
+    constructor(apiKey, baseUrl, dbConfig) {
+        this.apiKey = apiKey;
+        this.baseUrl = baseUrl;
+        this.dbConfig = dbConfig;
+        this.pool = null;
+        this.schemaManager = null;
+    }
+
+    /**
+     * Initialize the database connection pool
+     * @returns {Promise<sql.ConnectionPool>} - SQL connection pool
+     */
+    async getPool() {
+        if (!this.pool) {
+            this.pool = await new sql.ConnectionPool(this.dbConfig).connect();
+            this.schemaManager = new SchemaManager(this.pool);
+        }
+        return this.pool;
+    }
+
+    /**
+     * Initialize the batches database schema
+     * @returns {Promise<void>}
+     */
+    async initializeBatchesDatabase() {
+        try {
+            console.log('Initializing batches database schema...');
+            const pool = await this.getPool();
+            
+            // Ensure the Batches table exists with all required columns
+            await this.schemaManager.ensureTableExists('Batches', {
+                id: { type: 'INT', primaryKey: true, identity: true },
+                idbatch: { type: 'INT', nullable: false },
+                batch_number: { type: 'NVARCHAR(50)', nullable: false },
+                created_at: { type: 'DATETIME', nullable: false, defaultValue: 'GETDATE()' },
+                assigned_to_iduser: { type: 'INT', nullable: true },
+                picking_started_at: { type: 'DATETIME', nullable: true },
+                picking_completed_at: { type: 'DATETIME', nullable: true },
+                closed_by_iduser: { type: 'INT', nullable: true },
+                packing_started_at: { type: 'DATETIME', nullable: true },
+                closed_at: { type: 'DATETIME', nullable: true },
+                status: { type: 'NVARCHAR(50)', nullable: false, defaultValue: "'open'" },
+                warehouse_id: { type: 'INT', nullable: true },
+                total_products: { type: 'INT', nullable: true },
+                total_picklists: { type: 'INT', nullable: true },
+                notes: { type: 'NVARCHAR(MAX)', nullable: true },
+                last_sync_date: { type: 'DATETIME', nullable: false, defaultValue: 'GETDATE()' }
+            });
+
+            // Ensure the Picklists table has the batch relationship column
+            await this.schemaManager.ensureColumnExists('Picklists', 'idpicklist_batch', { type: 'INT', nullable: true });
+            
+            // Create indexes for better performance
+            await pool.request().query(`
+                IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_batch_number' AND object_id = OBJECT_ID('Batches'))
+                BEGIN
+                    CREATE INDEX idx_batches_batch_number ON Batches(batch_number);
+                END
+            `);
+            
+            await pool.request().query(`
+                IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_idbatch' AND object_id = OBJECT_ID('Batches'))
+                BEGIN
+                    CREATE INDEX idx_batches_idbatch ON Batches(idbatch);
+                END
+            `);
+            
+            await pool.request().query(`
+                IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_batches_status' AND object_id = OBJECT_ID('Batches'))
+                BEGIN
+                    CREATE INDEX idx_batches_status ON Batches(status);
+                END
+            `);
+            
+            console.log('Batches database schema initialized successfully');
+        } catch (error) {
+            console.error('Error initializing batches database schema:', error);
+            throw error;
+        }
     }
 
     /**
@@ -22,7 +98,7 @@ class BatchService {
      */
     async getBatchesFromPicqer(sinceTimestamp = null) {
         try {
-            let url = `${this.picqerConfig.apiUrl}/batches`;
+            let url = `${this.baseUrl}/batches`;
             if (sinceTimestamp) {
                 url += `?since=${sinceTimestamp}`;
             }
@@ -33,7 +109,7 @@ class BatchService {
                 headers: {
                     'Content-Type': 'application/json',
                     'User-Agent': 'Picqer Middleware',
-                    'Authorization': `Bearer ${this.picqerConfig.apiKey}`
+                    'Authorization': `Bearer ${this.apiKey}`
                 }
             });
 
@@ -55,6 +131,8 @@ class BatchService {
      */
     async getLastBatchesSyncDate() {
         try {
+            const pool = await this.getPool();
+            
             // Check if the sync_progress table exists and has the necessary columns
             await this.schemaManager.ensureTableExists('SyncProgress', {
                 id: { type: 'INT', primaryKey: true, identity: true },
@@ -66,7 +144,7 @@ class BatchService {
                 error_message: { type: 'NVARCHAR(MAX)', nullable: true }
             });
 
-            const result = await this.pool.request()
+            const result = await pool.request()
                 .input('entityType', sql.NVarChar, 'batches')
                 .query(`
                     SELECT TOP 1 last_sync_date
@@ -97,6 +175,8 @@ class BatchService {
      */
     async updateBatchesSyncStatus(syncDate, status, counts = {}, errorMessage = null) {
         try {
+            const pool = await this.getPool();
+            
             // Ensure the SyncProgress table exists
             await this.schemaManager.ensureTableExists('SyncProgress', {
                 id: { type: 'INT', primaryKey: true, identity: true },
@@ -108,7 +188,7 @@ class BatchService {
                 error_message: { type: 'NVARCHAR(MAX)', nullable: true }
             });
 
-            const request = this.pool.request()
+            const request = pool.request()
                 .input('entityType', sql.NVarChar, 'batches')
                 .input('lastSyncDate', sql.DateTime, syncDate)
                 .input('status', sql.NVarChar, status);
@@ -178,10 +258,12 @@ class BatchService {
     async saveBatchesToDatabase(batches) {
         try {
             console.log(`Saving ${batches.length} batches to database...`);
+            const pool = await this.getPool();
             
             // Ensure the Batches table exists with all required columns
             await this.schemaManager.ensureTableExists('Batches', {
                 id: { type: 'INT', primaryKey: true, identity: true },
+                idbatch: { type: 'INT', nullable: false },
                 batch_number: { type: 'NVARCHAR(50)', nullable: false },
                 created_at: { type: 'DATETIME', nullable: false, defaultValue: 'GETDATE()' },
                 assigned_to_iduser: { type: 'INT', nullable: true },
@@ -202,7 +284,7 @@ class BatchService {
             await this.schemaManager.ensureColumnExists('Picklists', 'idpicklist_batch', { type: 'INT', nullable: true });
             
             // Create a transaction for batch inserts
-            const transaction = new sql.Transaction(this.pool);
+            const transaction = new sql.Transaction(pool);
             await transaction.begin();
             
             try {
@@ -211,15 +293,16 @@ class BatchService {
                 for (const batch of batches) {
                     // Check if batch already exists
                     const checkResult = await new sql.Request(transaction)
-                        .input('batchNumber', sql.NVarChar, batch.batchnumber)
+                        .input('idbatch', sql.Int, batch.idbatch)
                         .query(`
                             SELECT id FROM Batches 
-                            WHERE batch_number = @batchNumber
+                            WHERE idbatch = @idbatch
                         `);
                     
                     const request = new sql.Request(transaction);
                     
                     // Map Picqer batch data to our schema
+                    request.input('idbatch', sql.Int, batch.idbatch);
                     request.input('batchNumber', sql.NVarChar, batch.batchnumber);
                     request.input('createdAt', sql.DateTime, new Date(batch.created));
                     request.input('assignedToIduser', sql.Int, batch.assigned_to_iduser || null);
@@ -243,6 +326,7 @@ class BatchService {
                         await request.query(`
                             UPDATE Batches
                             SET 
+                                batch_number = @batchNumber,
                                 created_at = @createdAt,
                                 assigned_to_iduser = @assignedToIduser,
                                 picking_started_at = @pickingStartedAt,
@@ -262,6 +346,7 @@ class BatchService {
                         // Insert new batch
                         const insertResult = await request.query(`
                             INSERT INTO Batches (
+                                idbatch,
                                 batch_number,
                                 created_at,
                                 assigned_to_iduser,
@@ -278,6 +363,7 @@ class BatchService {
                                 last_sync_date
                             )
                             VALUES (
+                                @idbatch,
                                 @batchNumber,
                                 @createdAt,
                                 @assignedToIduser,
@@ -307,7 +393,7 @@ class BatchService {
                                 .query(`
                                     UPDATE Picklists
                                     SET idpicklist_batch = @batchId
-                                    WHERE id = @picklistId
+                                    WHERE idpicklist = @picklistId
                                 `);
                         }
                     }
@@ -333,152 +419,114 @@ class BatchService {
 
     /**
      * Sync batches from Picqer to the database
+     * @param {boolean} [fullSync=false] - Whether to perform a full sync
      * @returns {Promise<Object>} - Result of the sync operation
      */
-    async syncBatches() {
+    async syncBatches(fullSync = false) {
         try {
-            console.log('Starting batch sync...');
+            console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
             
-            // Get the last sync date
-            const lastSyncDate = await this.getLastBatchesSyncDate();
-            console.log(`Last batch sync date: ${lastSyncDate}`);
+            // Get the last sync date (only used for incremental sync)
+            const lastSyncDate = fullSync ? null : await this.getLastBatchesSyncDate();
+            if (!fullSync) {
+                console.log(`Last batch sync date: ${lastSyncDate}`);
+            }
             
             // Get batches from Picqer
-            const batches = await this.getBatchesFromPicqer(lastSyncDate);
+            const batches = await this.getBatchesFromPicqer(fullSync ? null : lastSyncDate);
             
             if (batches.length === 0) {
                 console.log('No new batches to sync');
                 await this.updateBatchesSyncStatus(new Date(), 'success', { total_count: 0, processed_count: 0 });
-                return { success: true, message: 'No new batches to sync', count: 0 };
+                return {
+                    success: true,
+                    message: 'No new batches to sync',
+                    count: 0
+                };
             }
+            
+            console.log(`Retrieved ${batches.length} batches from Picqer API`);
+            
+            // Update sync status to in progress
+            await this.updateBatchesSyncStatus(new Date(), 'in_progress', { total_count: batches.length, processed_count: 0 });
             
             // Save batches to database
             const savedCount = await this.saveBatchesToDatabase(batches);
             
-            // Update sync status
-            await this.updateBatchesSyncStatus(
-                new Date(),
-                'success',
-                { total_count: batches.length, processed_count: savedCount }
-            );
+            // Update sync status to success
+            await this.updateBatchesSyncStatus(new Date(), 'success', { total_count: batches.length, processed_count: savedCount });
             
             console.log(`Batch sync completed successfully. Saved ${savedCount} batches.`);
             return {
                 success: true,
-                message: `Batch sync completed successfully`,
+                message: `Batch sync completed successfully. Saved ${savedCount} batches.`,
                 count: savedCount
             };
         } catch (error) {
             console.error('Error syncing batches:', error);
             
-            // Update sync status with error
-            await this.updateBatchesSyncStatus(
-                new Date(),
-                'error',
-                {},
-                error.message
-            );
+            // Update sync status to error
+            await this.updateBatchesSyncStatus(new Date(), 'error', {}, error.message);
             
             return {
                 success: false,
                 message: `Error syncing batches: ${error.message}`,
-                error: error
+                error: error.message
             };
         }
     }
 
     /**
-     * Get batch statistics for productivity analysis
-     * @param {Date} startDate - Start date for the analysis
-     * @param {Date} endDate - End date for the analysis
-     * @returns {Promise<Object>} - Batch statistics
+     * Get the count of batches in the database
+     * @returns {Promise<number>} - Count of batches
      */
-    async getBatchStatistics(startDate, endDate) {
+    async getBatchCount() {
         try {
-            console.log(`Getting batch statistics from ${startDate} to ${endDate}...`);
+            const pool = await this.getPool();
             
-            // Get picker statistics
-            const pickerStats = await this.pool.request()
-                .input('startDate', sql.DateTime, startDate)
-                .input('endDate', sql.DateTime, endDate)
-                .query(`
-                    SELECT 
-                        u.id AS user_id,
-                        u.name AS user_name,
-                        COUNT(DISTINCT b.id) AS total_batches,
-                        SUM(b.total_products) AS total_products,
-                        SUM(DATEDIFF(MINUTE, b.picking_started_at, b.picking_completed_at)) AS total_picking_minutes
-                    FROM Batches b
-                    JOIN Users u ON b.assigned_to_iduser = u.id
-                    WHERE 
-                        b.picking_started_at IS NOT NULL 
-                        AND b.picking_completed_at IS NOT NULL
-                        AND b.picking_started_at >= @startDate
-                        AND b.picking_completed_at <= @endDate
-                    GROUP BY u.id, u.name
-                `);
+            // Check if the Batches table exists
+            const tableExists = await pool.request().query(`
+                SELECT CASE WHEN EXISTS (
+                    SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Batches'
+                ) THEN 1 ELSE 0 END AS table_exists
+            `);
             
-            // Get packer statistics
-            const packerStats = await this.pool.request()
-                .input('startDate', sql.DateTime, startDate)
-                .input('endDate', sql.DateTime, endDate)
-                .query(`
-                    SELECT 
-                        u.id AS user_id,
-                        u.name AS user_name,
-                        COUNT(DISTINCT b.id) AS total_batches,
-                        SUM(b.total_products) AS total_products,
-                        SUM(DATEDIFF(MINUTE, b.packing_started_at, b.closed_at)) AS total_packing_minutes
-                    FROM Batches b
-                    JOIN Users u ON b.closed_by_iduser = u.id
-                    WHERE 
-                        b.packing_started_at IS NOT NULL 
-                        AND b.closed_at IS NOT NULL
-                        AND b.packing_started_at >= @startDate
-                        AND b.closed_at <= @endDate
-                    GROUP BY u.id, u.name
-                `);
+            if (tableExists.recordset[0].table_exists === 0) {
+                return 0;
+            }
             
-            // Calculate productivity metrics
-            const pickerProductivity = pickerStats.recordset.map(picker => ({
-                user_id: picker.user_id,
-                user_name: picker.user_name,
-                total_batches: picker.total_batches,
-                total_products: picker.total_products,
-                total_picking_minutes: picker.total_picking_minutes,
-                products_per_hour: picker.total_picking_minutes > 0 
-                    ? (picker.total_products / picker.total_picking_minutes) * 60 
-                    : 0,
-                batches_per_hour: picker.total_picking_minutes > 0 
-                    ? (picker.total_batches / picker.total_picking_minutes) * 60 
-                    : 0
-            }));
+            // Get count of batches
+            const result = await pool.request().query(`
+                SELECT COUNT(*) AS count FROM Batches
+            `);
             
-            const packerProductivity = packerStats.recordset.map(packer => ({
-                user_id: packer.user_id,
-                user_name: packer.user_name,
-                total_batches: packer.total_batches,
-                total_products: packer.total_products,
-                total_packing_minutes: packer.total_packing_minutes,
-                products_per_hour: packer.total_packing_minutes > 0 
-                    ? (packer.total_products / packer.total_packing_minutes) * 60 
-                    : 0,
-                batches_per_hour: packer.total_packing_minutes > 0 
-                    ? (packer.total_batches / packer.total_packing_minutes) * 60 
-                    : 0
-            }));
-            
-            return {
-                picker_productivity: pickerProductivity,
-                packer_productivity: packerProductivity,
-                period: {
-                    start_date: startDate,
-                    end_date: endDate
-                }
-            };
+            return result.recordset[0].count;
         } catch (error) {
-            console.error('Error getting batch statistics:', error);
-            throw error;
+            console.error('Error getting batch count:', error);
+            return 0;
+        }
+    }
+
+    /**
+     * Test the connection to the Picqer API
+     * @returns {Promise<boolean>} - True if connection is successful
+     */
+    async testConnection() {
+        try {
+            const url = `${this.baseUrl}/batches?limit=1`;
+            
+            const response = await axios.get(url, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Picqer Middleware',
+                    'Authorization': `Bearer ${this.apiKey}`
+                }
+            });
+            
+            return response.status === 200;
+        } catch (error) {
+            console.error('Error testing connection to Picqer API:', error.message);
+            return false;
         }
     }
 }
