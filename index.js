@@ -25,9 +25,9 @@ const { router: apiAdapter, initializeServices } = require('./data_sync_api_adap
 
 // Import batch productivity endpoints
 // Option 1: Simple implementation
-const batchProductivityEndpoints = require('./simple_batch_productivity_endpoint');
+const batchProductivityEndpoints = require('./simple_batch_productivity_endpoint.js');
 // Option 2: Comprehensive implementation (uncomment to use)
-// const batchProductivityEndpoints = require('./comprehensive_batch_productivity_endpoints');
+// const batchProductivityEndpoints = require('./comprehensive_batch_productivity_endpoints.js');
 
 // Create Express app
 const app = express();
