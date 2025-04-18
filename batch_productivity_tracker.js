@@ -1,5 +1,11 @@
-// batch_productivity_tracker.js
+/**
+ * Fixed Batch Productivity Tracker with Users Table Schema Compatibility
+ * 
+ * This version of the batch productivity tracker handles the missing 'name' column
+ * in the Users table by using CONCAT(firstname, ' ', lastname) or other available name fields.
+ */
 const sql = require('mssql');
+const { SchemaManager } = require('./schema_manager');
 
 class BatchProductivityTracker {
     /**
@@ -8,6 +14,70 @@ class BatchProductivityTracker {
      */
     constructor(pool) {
         this.pool = pool;
+        this.schemaManager = new SchemaManager(pool);
+    }
+
+    /**
+     * Ensure the Users table has the necessary columns or computed columns
+     * @returns {Promise<boolean>} - True if the table is ready
+     */
+    async ensureUsersTableReady() {
+        try {
+            console.log('Ensuring Users table is ready for productivity tracking...');
+            
+            // First, ensure the Users table exists with basic columns
+            await this.schemaManager.ensureTableExists('Users', {
+                id: { type: 'INT', primaryKey: true, identity: true },
+                iduser: { type: 'INT', nullable: false },
+                username: { type: 'NVARCHAR(100)', nullable: false },
+                firstname: { type: 'NVARCHAR(100)', nullable: true },
+                lastname: { type: 'NVARCHAR(100)', nullable: true },
+                first_name: { type: 'NVARCHAR(100)', nullable: true },
+                last_name: { type: 'NVARCHAR(100)', nullable: true },
+                active: { type: 'BIT', nullable: false, defaultValue: '1' }
+            });
+            
+            // Check if the name column exists
+            const nameColumnExists = await this.pool.request()
+                .query(`
+                    IF EXISTS (
+                        SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_NAME = 'Users' AND COLUMN_NAME = 'name'
+                    )
+                    SELECT 1 AS column_exists
+                    ELSE
+                    SELECT 0 AS column_exists
+                `);
+            
+            if (nameColumnExists.recordset[0].column_exists === 0) {
+                console.log('Adding name computed column to Users table...');
+                
+                // Add a computed column for name that concatenates firstname and lastname
+                await this.pool.request()
+                    .query(`
+                        ALTER TABLE Users
+                        ADD name AS 
+                        CASE
+                            WHEN firstname IS NOT NULL AND lastname IS NOT NULL THEN CONCAT(firstname, ' ', lastname)
+                            WHEN first_name IS NOT NULL AND last_name IS NOT NULL THEN CONCAT(first_name, ' ', last_name)
+                            WHEN firstname IS NOT NULL THEN firstname
+                            WHEN first_name IS NOT NULL THEN first_name
+                            WHEN lastname IS NOT NULL THEN lastname
+                            WHEN last_name IS NOT NULL THEN last_name
+                            ELSE username
+                        END PERSISTED;
+                    `);
+                
+                console.log('Added name computed column to Users table.');
+            } else {
+                console.log('name column already exists in Users table.');
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Error ensuring Users table is ready:', error);
+            throw error;
+        }
     }
 
     /**
@@ -20,6 +90,9 @@ class BatchProductivityTracker {
     async getPickerProductivity(startDate, endDate, userId = null) {
         try {
             console.log(`Getting picker productivity from ${startDate} to ${endDate}${userId ? ` for user ${userId}` : ''}...`);
+            
+            // Ensure the Users table has the name column
+            await this.ensureUsersTableReady();
             
             const request = this.pool.request()
                 .input('startDate', sql.DateTime, startDate)
@@ -86,6 +159,9 @@ class BatchProductivityTracker {
         try {
             console.log(`Getting packer productivity from ${startDate} to ${endDate}${userId ? ` for user ${userId}` : ''}...`);
             
+            // Ensure the Users table has the name column
+            await this.ensureUsersTableReady();
+            
             const request = this.pool.request()
                 .input('startDate', sql.DateTime, startDate)
                 .input('endDate', sql.DateTime, endDate);
@@ -149,6 +225,9 @@ class BatchProductivityTracker {
     async getDailyProductivityTrends(startDate, endDate) {
         try {
             console.log(`Getting daily productivity trends from ${startDate} to ${endDate}...`);
+            
+            // Ensure the Users table has the name column
+            await this.ensureUsersTableReady();
             
             // Get daily picker productivity
             const pickerTrends = await this.pool.request()
@@ -231,6 +310,9 @@ class BatchProductivityTracker {
         try {
             console.log(`Getting processing time breakdown for batch ${batchId}...`);
             
+            // Ensure the Users table has the name column
+            await this.ensureUsersTableReady();
+            
             const result = await this.pool.request()
                 .input('batchId', sql.Int, batchId)
                 .query(`
@@ -277,6 +359,9 @@ class BatchProductivityTracker {
     async getUserRoleDistribution(startDate, endDate) {
         try {
             console.log(`Getting user role distribution from ${startDate} to ${endDate}...`);
+            
+            // Ensure the Users table has the name column
+            await this.ensureUsersTableReady();
             
             const result = await this.pool.request()
                 .input('startDate', sql.DateTime, startDate)
@@ -328,14 +413,16 @@ class BatchProductivityTracker {
                         CAST(
                             CASE
                                 WHEN COALESCE(p.total_picking_minutes, 0) + COALESCE(pk.total_packing_minutes, 0) > 0
-                                THEN COALESCE(p.total_picking_minutes, 0) * 100.0 / (COALESCE(p.total_picking_minutes, 0) + COALESCE(pk.total_packing_minutes, 0))
+                                THEN COALESCE(p.total_picking_minutes, 0) * 100.0 / 
+                                    (COALESCE(p.total_picking_minutes, 0) + COALESCE(pk.total_packing_minutes, 0))
                                 ELSE 0
                             END AS DECIMAL(10,2)
                         ) AS picking_percentage,
                         CAST(
                             CASE
                                 WHEN COALESCE(p.total_picking_minutes, 0) + COALESCE(pk.total_packing_minutes, 0) > 0
-                                THEN COALESCE(pk.total_packing_minutes, 0) * 100.0 / (COALESCE(p.total_picking_minutes, 0) + COALESCE(pk.total_packing_minutes, 0))
+                                THEN COALESCE(pk.total_packing_minutes, 0) * 100.0 / 
+                                    (COALESCE(p.total_picking_minutes, 0) + COALESCE(pk.total_packing_minutes, 0))
                                 ELSE 0
                             END AS DECIMAL(10,2)
                         ) AS packing_percentage
@@ -356,103 +443,6 @@ class BatchProductivityTracker {
             console.error('Error getting user role distribution:', error);
             throw error;
         }
-    }
-
-    /**
-     * Get batch processing bottlenecks
-     * @param {Date} startDate - Start date for analysis
-     * @param {Date} endDate - End date for analysis
-     * @returns {Promise<Object>} - Batch processing bottlenecks
-     */
-    async getBatchProcessingBottlenecks(startDate, endDate) {
-        try {
-            console.log(`Analyzing batch processing bottlenecks from ${startDate} to ${endDate}...`);
-            
-            const result = await this.pool.request()
-                .input('startDate', sql.DateTime, startDate)
-                .input('endDate', sql.DateTime, endDate)
-                .query(`
-                    SELECT
-                        COUNT(id) AS total_batches,
-                        
-                        -- Wait time statistics
-                        AVG(DATEDIFF(MINUTE, created_at, picking_started_at)) AS avg_wait_time_minutes,
-                        MIN(DATEDIFF(MINUTE, created_at, picking_started_at)) AS min_wait_time_minutes,
-                        MAX(DATEDIFF(MINUTE, created_at, picking_started_at)) AS max_wait_time_minutes,
-                        
-                        -- Picking time statistics
-                        AVG(DATEDIFF(MINUTE, picking_started_at, picking_completed_at)) AS avg_picking_time_minutes,
-                        MIN(DATEDIFF(MINUTE, picking_started_at, picking_completed_at)) AS min_picking_time_minutes,
-                        MAX(DATEDIFF(MINUTE, picking_started_at, picking_completed_at)) AS max_picking_time_minutes,
-                        
-                        -- Transition time statistics
-                        AVG(DATEDIFF(MINUTE, picking_completed_at, packing_started_at)) AS avg_transition_time_minutes,
-                        MIN(DATEDIFF(MINUTE, picking_completed_at, packing_started_at)) AS min_transition_time_minutes,
-                        MAX(DATEDIFF(MINUTE, picking_completed_at, packing_started_at)) AS max_transition_time_minutes,
-                        
-                        -- Packing time statistics
-                        AVG(DATEDIFF(MINUTE, packing_started_at, closed_at)) AS avg_packing_time_minutes,
-                        MIN(DATEDIFF(MINUTE, packing_started_at, closed_at)) AS min_packing_time_minutes,
-                        MAX(DATEDIFF(MINUTE, packing_started_at, closed_at)) AS max_packing_time_minutes,
-                        
-                        -- Total processing time statistics
-                        AVG(DATEDIFF(MINUTE, created_at, closed_at)) AS avg_total_processing_time_minutes,
-                        MIN(DATEDIFF(MINUTE, created_at, closed_at)) AS min_total_processing_time_minutes,
-                        MAX(DATEDIFF(MINUTE, created_at, closed_at)) AS max_total_processing_time_minutes
-                    FROM Batches
-                    WHERE 
-                        created_at IS NOT NULL
-                        AND picking_started_at IS NOT NULL
-                        AND picking_completed_at IS NOT NULL
-                        AND packing_started_at IS NOT NULL
-                        AND closed_at IS NOT NULL
-                        AND created_at >= @startDate
-                        AND closed_at <= @endDate
-                `);
-            
-            // Calculate bottleneck percentages
-            const stats = result.recordset[0];
-            const totalAvgTime = stats.avg_wait_time_minutes + stats.avg_picking_time_minutes + 
-                                stats.avg_transition_time_minutes + stats.avg_packing_time_minutes;
-            
-            const bottlenecks = {
-                ...stats,
-                wait_time_percentage: (stats.avg_wait_time_minutes / totalAvgTime * 100).toFixed(2),
-                picking_time_percentage: (stats.avg_picking_time_minutes / totalAvgTime * 100).toFixed(2),
-                transition_time_percentage: (stats.avg_transition_time_minutes / totalAvgTime * 100).toFixed(2),
-                packing_time_percentage: (stats.avg_packing_time_minutes / totalAvgTime * 100).toFixed(2),
-                primary_bottleneck: this._identifyPrimaryBottleneck(stats),
-                period: {
-                    start_date: startDate,
-                    end_date: endDate
-                }
-            };
-            
-            return bottlenecks;
-        } catch (error) {
-            console.error('Error analyzing batch processing bottlenecks:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Identify the primary bottleneck in the batch processing
-     * @param {Object} stats - Batch processing statistics
-     * @returns {string} - Primary bottleneck phase
-     * @private
-     */
-    _identifyPrimaryBottleneck(stats) {
-        const phases = [
-            { name: 'Wait Time', value: stats.avg_wait_time_minutes },
-            { name: 'Picking', value: stats.avg_picking_time_minutes },
-            { name: 'Transition', value: stats.avg_transition_time_minutes },
-            { name: 'Packing', value: stats.avg_packing_time_minutes }
-        ];
-        
-        // Sort phases by time in descending order
-        phases.sort((a, b) => b.value - a.value);
-        
-        return phases[0].name;
     }
 }
 
