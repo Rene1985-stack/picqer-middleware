@@ -1,211 +1,259 @@
-// metrics-display.js - Enhanced metrics display for the middleware dashboard
-
-// This script extends the dashboard functionality to display additional metrics
-// for all entity types (products, picklists, warehouses, users, suppliers)
+// batch-metrics-display.js - Enhanced metrics display for batch tracking
 
 document.addEventListener('DOMContentLoaded', function() {
     // API endpoints
     const API_BASE = window.location.origin;
     const ENDPOINTS = {
-        metrics: `${API_BASE}/api/metrics`,
-        entityMetrics: (entity) => `${API_BASE}/api/metrics/${entity}`,
-        syncStats: `${API_BASE}/api/sync/stats`
+        batchMetrics: `${API_BASE}/api/batches/metrics`,
+        batchProductivity: `${API_BASE}/api/batches/productivity`,
+        batchStats: `${API_BASE}/api/batches/stats`
     };
     
-    // Initialize metrics display
-    initializeMetricsDisplay();
+    // Initialize batch metrics display
+    initializeBatchMetricsDisplay();
     
     // Set up polling for metrics updates
-    setInterval(updateAllMetrics, 30000);
+    setInterval(updateBatchMetrics, 30000);
     
-    // Initialize metrics display
-    function initializeMetricsDisplay() {
-        // Create metrics containers for each entity tab
-        createEntityMetricsContainers();
+    // Initialize batch metrics display
+    function initializeBatchMetricsDisplay() {
+        // Create metrics containers for batch tab
+        createBatchMetricsContainers();
         
         // Fetch initial metrics
-        updateAllMetrics();
+        updateBatchMetrics();
         
         // Add event listeners for metrics refresh buttons
-        document.querySelectorAll('.refresh-metrics-btn').forEach(button => {
+        document.querySelectorAll('.refresh-metrics-btn[data-entity="batches"]').forEach(button => {
             button.addEventListener('click', function() {
-                const entityType = this.getAttribute('data-entity');
-                if (entityType === 'all') {
-                    updateAllMetrics();
-                } else {
-                    updateEntityMetrics(entityType);
-                }
+                updateBatchMetrics();
             });
         });
     }
     
-    // Create metrics containers for each entity tab
-    function createEntityMetricsContainers() {
-        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
-        
-        // Create metrics container for all entities tab
-        createMetricsContainer('all-content', 'all');
-        
-        // Create metrics containers for each entity tab
-        entityTypes.forEach(entityType => {
-            createMetricsContainer(`${entityType}-content`, entityType);
-        });
-    }
-    
-    // Create metrics container for an entity tab
-    function createMetricsContainer(contentId, entityType) {
-        const contentElement = document.getElementById(contentId);
-        if (!contentElement) return;
-        
-        // Check if metrics container already exists
-        if (contentElement.querySelector('.metrics-container')) return;
-        
-        // Create metrics container
-        const metricsContainer = document.createElement('div');
-        metricsContainer.className = 'metrics-container';
-        metricsContainer.innerHTML = `
-            <div class="card-header">
-                <h3 class="card-title">Performance Metrics</h3>
-                <div class="card-actions">
-                    <button class="btn btn-outline refresh-metrics-btn" data-entity="${entityType}">
-                        Refresh Metrics
-                    </button>
+    // Create metrics containers for batch tab
+    function createBatchMetricsContainers() {
+        // Create metrics container for batches tab if it doesn't exist
+        if (!document.querySelector('#batches-metrics-grid')) {
+            const batchesContent = document.getElementById('batches-content');
+            if (!batchesContent) return;
+            
+            const metricsContainer = document.createElement('div');
+            metricsContainer.className = 'metrics-container';
+            metricsContainer.innerHTML = `
+                <div class="card-header">
+                    <h3 class="card-title">Batch Performance Metrics</h3>
+                    <div class="card-actions">
+                        <button class="btn btn-outline refresh-metrics-btn" data-entity="batches">
+                            Refresh Metrics
+                        </button>
+                    </div>
                 </div>
-            </div>
-            <div class="metrics-grid" id="${entityType}-metrics-grid">
-                <div class="loading-metrics">Loading metrics...</div>
-            </div>
-        `;
-        
-        // Add metrics container to content element
-        contentElement.appendChild(metricsContainer);
+                <div class="metrics-grid" id="batches-metrics-grid">
+                    <div class="loading-metrics">Loading metrics...</div>
+                </div>
+            `;
+            
+            batchesContent.appendChild(metricsContainer);
+        }
     }
     
-    // Update all metrics
-    function updateAllMetrics() {
-        // Update metrics for all entities
-        updateEntityMetrics('all');
+    // Update batch metrics
+    function updateBatchMetrics() {
+        // Update batch metrics
+        fetchBatchMetrics();
         
-        // Update metrics for each entity type
-        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
-        entityTypes.forEach(entityType => {
-            updateEntityMetrics(entityType);
-        });
+        // Update batch productivity
+        fetchBatchProductivity();
         
-        // Update sync statistics
-        updateSyncStats();
+        // Update batch statistics
+        fetchBatchStats();
     }
     
-    // Update metrics for a specific entity type
-    function updateEntityMetrics(entityType) {
-        const endpoint = entityType === 'all' ? ENDPOINTS.metrics : ENDPOINTS.entityMetrics(entityType);
-        
-        fetch(endpoint)
+    // Fetch batch metrics
+    function fetchBatchMetrics() {
+        fetch(ENDPOINTS.batchMetrics)
             .then(response => response.json())
             .then(data => {
-                displayEntityMetrics(entityType, data);
+                displayBatchMetrics(data);
             })
             .catch(error => {
-                console.error(`Error fetching ${entityType} metrics:`, error);
-                displayMetricsError(entityType);
+                console.error('Error fetching batch metrics:', error);
+                displayBatchMetricsError();
             });
     }
     
-    // Update sync statistics
-    function updateSyncStats() {
-        fetch(ENDPOINTS.syncStats)
+    // Fetch batch productivity
+    function fetchBatchProductivity() {
+        fetch(ENDPOINTS.batchProductivity)
             .then(response => response.json())
             .then(data => {
-                displaySyncStats(data);
+                displayBatchProductivity(data);
             })
             .catch(error => {
-                console.error('Error fetching sync stats:', error);
+                console.error('Error fetching batch productivity:', error);
+                displayBatchProductivityError();
             });
     }
     
-    // Display metrics for a specific entity type
-    function displayEntityMetrics(entityType, data) {
-        const metricsGrid = document.getElementById(`${entityType}-metrics-grid`);
+    // Fetch batch statistics
+    function fetchBatchStats() {
+        fetch(ENDPOINTS.batchStats)
+            .then(response => response.json())
+            .then(data => {
+                displayBatchStats(data);
+            })
+            .catch(error => {
+                console.error('Error fetching batch stats:', error);
+                displayBatchStatsError();
+            });
+    }
+    
+    // Display batch metrics
+    function displayBatchMetrics(data) {
+        const metricsGrid = document.getElementById('batches-metrics-grid');
         if (!metricsGrid) return;
         
         // Clear loading message
         metricsGrid.innerHTML = '';
         
         // Create metrics cards
-        if (entityType === 'all') {
-            // Display overall metrics for all entities
-            createMetricCard(metricsGrid, 'Total Syncs', data.totalSyncs || 0);
-            createMetricCard(metricsGrid, 'Success Rate', `${data.successRate || 0}%`);
-            createMetricCard(metricsGrid, 'Avg Sync Time', formatDuration(data.avgSyncTime));
-            createMetricCard(metricsGrid, 'Total Errors', data.totalErrors || 0);
-        } else {
-            // Display entity-specific metrics
-            createMetricCard(metricsGrid, 'Success Rate', `${data.successRate || 0}%`);
-            createMetricCard(metricsGrid, 'Avg Sync Time', formatDuration(data.avgSyncTime));
-            createMetricCard(metricsGrid, 'Items Per Minute', data.itemsPerMinute || 0);
-            createMetricCard(metricsGrid, 'Error Rate', `${data.errorRate || 0}%`);
-            
-            // Add entity-specific metrics
-            if (entityType === 'products') {
-                createMetricCard(metricsGrid, 'Stock Accuracy', `${data.stockAccuracy || 0}%`);
-                createMetricCard(metricsGrid, 'Price Updates', data.priceUpdates || 0);
-            } else if (entityType === 'picklists') {
-                createMetricCard(metricsGrid, 'Completed Picklists', data.completedPicklists || 0);
-                createMetricCard(metricsGrid, 'Processing Time', formatDuration(data.processingTime));
-            } else if (entityType === 'warehouses') {
-                createMetricCard(metricsGrid, 'Stock Movements', data.stockMovements || 0);
-                createMetricCard(metricsGrid, 'Active Warehouses', data.activeWarehouses || 0);
-            } else if (entityType === 'users') {
-                createMetricCard(metricsGrid, 'Active Users', data.activeUsers || 0);
-                createMetricCard(metricsGrid, 'User Logins', data.userLogins || 0);
-            } else if (entityType === 'suppliers') {
-                createMetricCard(metricsGrid, 'Active Suppliers', data.activeSuppliers || 0);
-                createMetricCard(metricsGrid, 'Product Coverage', `${data.productCoverage || 0}%`);
-            }
-        }
+        createMetricCard(metricsGrid, 'Success Rate', `${data.successRate || 0}%`);
+        createMetricCard(metricsGrid, 'Avg Sync Time', formatDuration(data.avgSyncTime));
+        createMetricCard(metricsGrid, 'Batches Per Day', data.batchesPerDay || 0);
+        createMetricCard(metricsGrid, 'Error Rate', `${data.errorRate || 0}%`);
+        
+        // Add batch-specific metrics
+        createMetricCard(metricsGrid, 'Avg Batch Size', data.avgBatchSize || 0);
+        createMetricCard(metricsGrid, 'Completed Batches', data.completedBatches || 0);
         
         // Add sync history chart if data available
         if (data.syncHistory && data.syncHistory.length > 0) {
-            createSyncHistoryChart(metricsGrid, entityType, data.syncHistory);
+            createSyncHistoryChart(metricsGrid, 'batches', data.syncHistory);
         }
     }
     
-    // Display sync statistics
-    function displaySyncStats(data) {
-        // Update sync progress bars for each entity
-        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
+    // Display batch productivity
+    function displayBatchProductivity(data) {
+        if (!data || !data.productivity) return;
         
-        entityTypes.forEach(entityType => {
-            const progressBar = document.getElementById(`${entityType}-progress-bar`);
-            if (!progressBar) return;
-            
-            const entityProgress = data[entityType];
-            if (entityProgress && entityProgress.inProgress) {
-                const progress = Math.min(
-                    Math.round((entityProgress.itemsProcessed / entityProgress.totalItems) * 100),
-                    100
-                );
-                progressBar.style.width = `${progress}%`;
-                progressBar.setAttribute('title', `${progress}% complete`);
-            } else {
-                progressBar.style.width = '0%';
-                progressBar.setAttribute('title', 'No sync in progress');
-            }
-        });
+        const productivity = data.productivity;
         
-        // Update overall sync status
-        const overallStatus = document.getElementById('sync-status');
-        if (overallStatus) {
-            overallStatus.textContent = data.anySyncInProgress ? 'Running' : 'Ready';
+        // Update picker productivity
+        const pickerProductivity = document.getElementById('picker-productivity');
+        if (pickerProductivity) {
+            pickerProductivity.textContent = productivity.pickerProductivity?.toFixed(2) || '0.00';
+        }
+        
+        // Update packer productivity
+        const packerProductivity = document.getElementById('packer-productivity');
+        if (packerProductivity) {
+            packerProductivity.textContent = productivity.packerProductivity?.toFixed(2) || '0.00';
+        }
+        
+        // Update average picking time
+        const avgPickingTime = document.getElementById('avg-picking-time');
+        if (avgPickingTime) {
+            avgPickingTime.textContent = formatDuration(productivity.avgPickingTime);
+        }
+        
+        // Update average packing time
+        const avgPackingTime = document.getElementById('avg-packing-time');
+        if (avgPackingTime) {
+            avgPackingTime.textContent = formatDuration(productivity.avgPackingTime);
+        }
+        
+        // Create productivity charts if data available
+        if (productivity.timeData && productivity.timeData.length > 0) {
+            createProductivityCharts(productivity);
         }
     }
     
-    // Display metrics error
-    function displayMetricsError(entityType) {
-        const metricsGrid = document.getElementById(`${entityType}-metrics-grid`);
+    // Display batch statistics
+    function displayBatchStats(data) {
+        if (!data || !data.stats) return;
+        
+        const stats = data.stats;
+        
+        // Update batch count
+        const batchesCount = document.getElementById('batches-count');
+        if (batchesCount) {
+            batchesCount.textContent = stats.totalCount || 0;
+        }
+        
+        // Update total batches in all tab
+        const totalBatches = document.getElementById('total-batches');
+        if (totalBatches) {
+            totalBatches.textContent = stats.totalCount || 0;
+        }
+        
+        // Update last sync date
+        const batchesLastSync = document.getElementById('batches-last-sync');
+        if (batchesLastSync && stats.lastSyncDate) {
+            batchesLastSync.textContent = new Date(stats.lastSyncDate).toLocaleString();
+        }
+        
+        // Update sync status
+        const batchesSyncStatus = document.getElementById('batches-sync-status');
+        if (batchesSyncStatus) {
+            batchesSyncStatus.textContent = stats.status || 'Ready';
+        }
+        
+        // Update last sync count
+        const batchesSyncCount = document.getElementById('batches-sync-count');
+        if (batchesSyncCount) {
+            batchesSyncCount.textContent = stats.lastSyncCount || 0;
+        }
+        
+        // Update progress bar
+        const batchesProgressBar = document.getElementById('batches-progress-bar');
+        if (batchesProgressBar && stats.syncProgress) {
+            const progress = Math.min(
+                Math.round((stats.syncProgress.itemsProcessed / stats.syncProgress.totalItems) * 100),
+                100
+            );
+            batchesProgressBar.style.width = `${progress}%`;
+            batchesProgressBar.setAttribute('title', `${progress}% complete`);
+        } else if (batchesProgressBar) {
+            batchesProgressBar.style.width = '0%';
+            batchesProgressBar.setAttribute('title', 'No sync in progress');
+        }
+    }
+    
+    // Display batch metrics error
+    function displayBatchMetricsError() {
+        const metricsGrid = document.getElementById('batches-metrics-grid');
         if (!metricsGrid) return;
         
-        metricsGrid.innerHTML = '<div class="metrics-error">Error loading metrics</div>';
+        metricsGrid.innerHTML = '<div class="metrics-error">Error loading batch metrics</div>';
+    }
+    
+    // Display batch productivity error
+    function displayBatchProductivityError() {
+        const pickerProductivity = document.getElementById('picker-productivity');
+        const packerProductivity = document.getElementById('packer-productivity');
+        const avgPickingTime = document.getElementById('avg-picking-time');
+        const avgPackingTime = document.getElementById('avg-packing-time');
+        
+        if (pickerProductivity) pickerProductivity.textContent = 'Error';
+        if (packerProductivity) packerProductivity.textContent = 'Error';
+        if (avgPickingTime) avgPickingTime.textContent = 'Error';
+        if (avgPackingTime) avgPackingTime.textContent = 'Error';
+    }
+    
+    // Display batch stats error
+    function displayBatchStatsError() {
+        const batchesCount = document.getElementById('batches-count');
+        const totalBatches = document.getElementById('total-batches');
+        const batchesLastSync = document.getElementById('batches-last-sync');
+        const batchesSyncStatus = document.getElementById('batches-sync-status');
+        const batchesSyncCount = document.getElementById('batches-sync-count');
+        
+        if (batchesCount) batchesCount.textContent = 'Error';
+        if (totalBatches) totalBatches.textContent = 'Error';
+        if (batchesLastSync) batchesLastSync.textContent = 'Error';
+        if (batchesSyncStatus) batchesSyncStatus.textContent = 'Error';
+        if (batchesSyncCount) batchesSyncCount.textContent = 'Error';
     }
     
     // Create a metric card
@@ -273,7 +321,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         beginAtZero: true,
                         title: {
                             display: true,
-                            text: 'Items Synced'
+                            text: 'Batches Synced'
                         }
                     },
                     x: {
@@ -286,10 +334,116 @@ document.addEventListener('DOMContentLoaded', function() {
                 plugins: {
                     title: {
                         display: true,
-                        text: `${entityType.charAt(0).toUpperCase() + entityType.slice(1)} Sync History`
+                        text: 'Batch Sync History'
                     },
                     legend: {
                         position: 'bottom'
+                    }
+                }
+            }
+        });
+    }
+    
+    // Create productivity charts
+    function createProductivityCharts(productivity) {
+        // Check if productivity-charts container exists, if not create it
+        let productivityCharts = document.querySelector('.productivity-charts');
+        if (!productivityCharts) {
+            const batchesContent = document.getElementById('batches-content');
+            if (!batchesContent) return;
+            
+            productivityCharts = document.createElement('div');
+            productivityCharts.className = 'productivity-charts';
+            
+            // Create picker productivity chart container
+            const pickerChartContainer = document.createElement('div');
+            pickerChartContainer.className = 'chart-container';
+            
+            const pickerCanvas = document.createElement('canvas');
+            pickerCanvas.id = 'picker-productivity-chart';
+            pickerCanvas.height = 200;
+            
+            pickerChartContainer.appendChild(pickerCanvas);
+            
+            // Create packer productivity chart container
+            const packerChartContainer = document.createElement('div');
+            packerChartContainer.className = 'chart-container';
+            
+            const packerCanvas = document.createElement('canvas');
+            packerCanvas.id = 'packer-productivity-chart';
+            packerCanvas.height = 200;
+            
+            packerChartContainer.appendChild(packerCanvas);
+            
+            // Add chart containers to productivity charts
+            productivityCharts.appendChild(pickerChartContainer);
+            productivityCharts.appendChild(packerChartContainer);
+            
+            // Add productivity charts to batches content
+            batchesContent.appendChild(productivityCharts);
+        }
+        
+        // Create picker productivity chart
+        createProductivityChart('picker-productivity-chart', 'Picker Productivity', productivity.timeData, 'pickerData');
+        
+        // Create packer productivity chart
+        createProductivityChart('packer-productivity-chart', 'Packer Productivity', productivity.timeData, 'packerData');
+    }
+    
+    // Create productivity chart
+    function createProductivityChart(canvasId, title, timeData, dataKey) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        
+        // Prepare data for chart
+        const labels = timeData.map(item => {
+            const date = new Date(item.date);
+            return `${date.getMonth() + 1}/${date.getDate()}`;
+        });
+        
+        const data = timeData.map(item => item[dataKey] || 0);
+        
+        // Create chart
+        new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: title,
+                        data: data,
+                        backgroundColor: dataKey === 'pickerData' ? 'rgba(54, 162, 235, 0.2)' : 'rgba(255, 99, 132, 0.2)',
+                        borderColor: dataKey === 'pickerData' ? 'rgba(54, 162, 235, 1)' : 'rgba(255, 99, 132, 1)',
+                        borderWidth: 2,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Items per Hour'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Date'
+                        }
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: title
+                    },
+                    legend: {
+                        display: false
                     }
                 }
             }
