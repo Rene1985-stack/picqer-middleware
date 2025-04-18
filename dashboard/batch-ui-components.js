@@ -1,401 +1,381 @@
-// batch-ui-components.js - UI components for batch tracking functionality
+// Simple batch-ui-components.js - Compatible version for existing dashboard
 
+// Wait for DOM to be fully loaded
 document.addEventListener('DOMContentLoaded', function() {
-    // Create batch tab and content if they don't exist
-    createBatchTabAndContent();
+    // Only initialize if batches tab exists
+    if (document.querySelector('.entity-tab[data-entity="batches"]')) {
+        initializeBatchUI();
+    } else {
+        // Add batches tab if it doesn't exist
+        addBatchesTab();
+    }
+});
+
+// Add batches tab to entity tabs
+function addBatchesTab() {
+    const entityTabs = document.querySelector('.entity-tabs');
+    if (!entityTabs) return;
     
-    // Initialize batch UI components
-    initializeBatchUI();
+    // Create batches tab
+    const batchesTab = document.createElement('div');
+    batchesTab.className = 'entity-tab';
+    batchesTab.setAttribute('data-entity', 'batches');
+    batchesTab.textContent = 'Batches';
     
-    // Function to create batch tab and content
-    function createBatchTabAndContent() {
-        // Add batch tab to entity tabs if it doesn't exist
-        const entityTabs = document.querySelector('.entity-tabs');
-        if (entityTabs && !document.querySelector('.entity-tab[data-entity="batches"]')) {
-            const batchTab = document.createElement('div');
-            batchTab.className = 'entity-tab';
-            batchTab.setAttribute('data-entity', 'batches');
-            batchTab.textContent = 'Batches';
-            entityTabs.appendChild(batchTab);
-            
-            // Add event listener to the new tab
-            batchTab.addEventListener('click', () => {
-                // Remove active class from all tabs
-                document.querySelectorAll('.entity-tab').forEach(tab => {
-                    tab.classList.remove('active');
-                });
-                
-                // Add active class to batches tab
-                batchTab.classList.add('active');
-                
-                // Hide all content sections
-                document.querySelectorAll('.entity-content').forEach(content => {
-                    content.classList.remove('active');
-                });
-                
-                // Show batches content
-                const batchesContent = document.getElementById('batches-content');
-                if (batchesContent) {
-                    batchesContent.classList.add('active');
-                }
-            });
-        }
+    // Add click event listener
+    batchesTab.addEventListener('click', function() {
+        // Remove active class from all tabs
+        document.querySelectorAll('.entity-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
         
-        // Add batches to the All Entities stats grid if it doesn't exist
-        const allStatsGrid = document.querySelector('#all-content .stats-grid');
-        if (allStatsGrid && !document.getElementById('total-batches')) {
-            const batchStatCard = document.createElement('div');
-            batchStatCard.className = 'stat-card';
-            batchStatCard.innerHTML = `
-                <div class="stat-value" id="total-batches">--</div>
+        // Add active class to batches tab
+        batchesTab.classList.add('active');
+        
+        // Hide all entity content
+        document.querySelectorAll('.entity-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        
+        // Show batches content or create it if it doesn't exist
+        let batchesContent = document.getElementById('batches-content');
+        if (!batchesContent) {
+            batchesContent = createBatchesContent();
+        }
+        batchesContent.classList.add('active');
+        
+        // Initialize batch UI
+        initializeBatchUI();
+    });
+    
+    // Add batches tab to entity tabs
+    entityTabs.appendChild(batchesTab);
+}
+
+// Create batches content
+function createBatchesContent() {
+    const allContent = document.getElementById('all-content');
+    if (!allContent) return null;
+    
+    // Create batches content
+    const batchesContent = document.createElement('div');
+    batchesContent.className = 'entity-content';
+    batchesContent.id = 'batches-content';
+    
+    // Add batches content HTML
+    batchesContent.innerHTML = `
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="batches-count">--</div>
                 <div class="stat-label">Total Batches</div>
-            `;
-            allStatsGrid.appendChild(batchStatCard);
-        }
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="batches-last-sync">--</div>
+                <div class="stat-label">Last Sync</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="batches-sync-status">--</div>
+                <div class="stat-label">Status</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="batches-last-sync-count">--</div>
+                <div class="stat-label">Last Sync Count</div>
+            </div>
+        </div>
         
-        // Create batches content section if it doesn't exist
-        if (!document.getElementById('batches-content')) {
-            const dashboardGrid = document.querySelector('.dashboard-grid');
-            if (!dashboardGrid) return;
-            
-            const firstColumn = dashboardGrid.children[0];
-            if (!firstColumn) return;
-            
-            const batchesContent = document.createElement('div');
-            batchesContent.className = 'entity-content';
-            batchesContent.id = 'batches-content';
-            
-            batchesContent.innerHTML = `
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="batches-count">--</div>
-                        <div class="stat-label">Total Batches</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="batches-last-sync">--</div>
-                        <div class="stat-label">Last Sync</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="batches-sync-status">--</div>
-                        <div class="stat-label">Status</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="batches-sync-count">--</div>
-                        <div class="stat-label">Last Sync Count</div>
-                    </div>
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-header">
+                <h2 class="card-title">Batch Productivity</h2>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="picker-productivity">--</div>
+                    <div class="stat-label">Picker Items/Hour</div>
                 </div>
-                
-                <div class="card-header">
-                    <h3 class="card-title">Batch Actions</h3>
-                    <div class="card-actions">
-                        <button class="btn btn-primary" id="sync-batches-btn">Sync Batches</button>
-                        <button class="btn btn-outline" id="full-sync-batches-btn">Full Sync</button>
-                    </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="packer-productivity">--</div>
+                    <div class="stat-label">Packer Items/Hour</div>
                 </div>
-                
-                <div class="progress-container">
-                    <div class="progress">
-                        <div class="progress-bar" id="batches-progress-bar" style="width: 0%"></div>
-                    </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="avg-picking-time">--</div>
+                    <div class="stat-label">Avg. Picking Time (min)</div>
                 </div>
-                
-                <div class="card-header">
-                    <h3 class="card-title">Productivity Metrics</h3>
-                    <div class="card-actions">
-                        <button class="btn btn-outline refresh-metrics-btn" data-entity="batches">
-                            Refresh Metrics
-                        </button>
-                    </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="avg-packing-time">--</div>
+                    <div class="stat-label">Avg. Packing Time (min)</div>
                 </div>
-                
-                <div class="productivity-grid">
-                    <div class="productivity-card">
-                        <div class="productivity-value" id="picker-productivity">--</div>
-                        <div class="productivity-label">Picker Productivity (items/hour)</div>
-                    </div>
-                    <div class="productivity-card">
-                        <div class="productivity-value" id="packer-productivity">--</div>
-                        <div class="productivity-label">Packer Productivity (items/hour)</div>
-                    </div>
-                    <div class="productivity-card">
-                        <div class="productivity-value" id="avg-picking-time">--</div>
-                        <div class="productivity-label">Avg. Picking Time</div>
-                    </div>
-                    <div class="productivity-card">
-                        <div class="productivity-value" id="avg-packing-time">--</div>
-                        <div class="productivity-label">Avg. Packing Time</div>
-                    </div>
-                </div>
-                
-                <div class="card-header">
-                    <h3 class="card-title">Recent Batches</h3>
-                    <div class="card-actions">
-                        <div class="filter-dropdown">
-                            <button class="btn btn-outline" id="batch-filter-btn">Filter</button>
-                            <div class="filter-dropdown-content" id="batch-filter-options">
-                                <div class="filter-option active" data-filter="all">All</div>
-                                <div class="filter-option" data-filter="open">Open</div>
-                                <div class="filter-option" data-filter="picking">Picking</div>
-                                <div class="filter-option" data-filter="packing">Packing</div>
-                                <div class="filter-option" data-filter="closed">Closed</div>
-                            </div>
+            </div>
+        </div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-header">
+                <h2 class="card-title">Batch List</h2>
+                <div class="card-actions">
+                    <div class="filter-dropdown">
+                        <button class="btn btn-outline" id="batch-status-filter-btn">Status</button>
+                        <div class="filter-dropdown-content" id="batch-status-filter-options">
+                            <div class="filter-option active" data-filter="all">All</div>
+                            <div class="filter-option" data-filter="open">Open</div>
+                            <div class="filter-option" data-filter="picking">Picking</div>
+                            <div class="filter-option" data-filter="packing">Packing</div>
+                            <div class="filter-option" data-filter="closed">Closed</div>
                         </div>
                     </div>
                 </div>
-                
-                <div class="batch-list-container">
-                    <table class="batch-list">
-                        <thead>
-                            <tr>
-                                <th>Batch #</th>
-                                <th>Status</th>
-                                <th>Picker</th>
-                                <th>Packer</th>
-                                <th>Created</th>
-                                <th>Completed</th>
-                                <th>Duration</th>
-                            </tr>
-                        </thead>
-                        <tbody id="batch-list-body">
-                            <tr>
-                                <td colspan="7" class="loading-message">Loading batches...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                
-                <div id="batches-metrics-grid" class="metrics-grid">
-                    <!-- Metrics will be added here by metrics-display.js -->
-                </div>
-            `;
-            
-            firstColumn.appendChild(batchesContent);
-            
-            // Add batch filter event listeners
-            const batchFilterOptions = document.querySelectorAll('#batch-filter-options .filter-option');
-            batchFilterOptions.forEach(option => {
-                option.addEventListener('click', () => {
-                    // Remove active class from all options
-                    batchFilterOptions.forEach(o => o.classList.remove('active'));
-                    // Add active class to clicked option
-                    option.classList.add('active');
-                    
-                    // Apply filter to batch list
-                    const filterType = option.getAttribute('data-filter');
-                    filterBatchList(filterType);
+            </div>
+            <div id="batch-list-container" style="max-height: 400px; overflow-y: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background-color: var(--light-gray);">
+                            <th style="padding: 10px; text-align: left;">ID</th>
+                            <th style="padding: 10px; text-align: left;">Status</th>
+                            <th style="padding: 10px; text-align: left;">Picker</th>
+                            <th style="padding: 10px; text-align: left;">Packer</th>
+                            <th style="padding: 10px; text-align: left;">Created</th>
+                            <th style="padding: 10px; text-align: left;">Items</th>
+                        </tr>
+                    </thead>
+                    <tbody id="batch-list">
+                        <tr>
+                            <td colspan="6" style="padding: 20px; text-align: center;">Loading batches...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+    
+    // Add batches content after all content
+    allContent.parentNode.insertBefore(batchesContent, allContent.nextSibling);
+    
+    return batchesContent;
+}
+
+// Initialize batch UI
+function initializeBatchUI() {
+    // Update batch stats
+    updateBatchStats();
+    
+    // Update batch productivity
+    updateBatchProductivity();
+    
+    // Fetch batches
+    fetchBatches();
+    
+    // Set up batch status filter
+    setupBatchStatusFilter();
+}
+
+// Update batch stats
+function updateBatchStats() {
+    // Use existing dashboard API endpoint pattern
+    fetch(`${window.location.origin}/api/batches/stats`)
+        .then(response => {
+            if (!response.ok) {
+                // If endpoint doesn't exist, use fallback data
+                return Promise.resolve({
+                    stats: {
+                        totalCount: 0,
+                        lastSyncDate: 'Never',
+                        status: 'Not Available',
+                        lastSyncCount: 0
+                    }
                 });
-            });
-        }
-    }
-    
-    // Function to initialize batch UI components
-    function initializeBatchUI() {
-        // Add event listeners for batch sync buttons
-        const syncBatchesBtn = document.getElementById('sync-batches-btn');
-        const fullSyncBatchesBtn = document.getElementById('full-sync-batches-btn');
-        
-        if (syncBatchesBtn) {
-            syncBatchesBtn.addEventListener('click', () => {
-                triggerEntitySync('batches');
-            });
-        }
-        
-        if (fullSyncBatchesBtn) {
-            fullSyncBatchesBtn.addEventListener('click', () => {
-                triggerEntityFullSync('batches');
-            });
-        }
-        
-        // Load initial batch data
-        fetchBatches();
-        
-        // Set up refresh interval for batch data
-        setInterval(fetchBatches, 60000); // Refresh every minute
-    }
-    
-    // Function to fetch batches from the API
-    function fetchBatches() {
-        console.log('Fetching batches...');
-        fetch('/api/batches')
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Batches fetch failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Batches response:', data);
-                displayBatches(data.batches);
-            })
-            .catch(error => {
-                console.error('Error fetching batches:', error);
-                displayBatchError(error.message);
-            });
-    }
-    
-    // Function to display batches in the UI
-    function displayBatches(batches) {
-        const batchListBody = document.getElementById('batch-list-body');
-        if (!batchListBody) return;
-        
-        if (!batches || batches.length === 0) {
-            batchListBody.innerHTML = '<tr><td colspan="7" class="empty-message">No batches available</td></tr>';
-            return;
-        }
-        
-        // Get active filter
-        const activeFilter = document.querySelector('#batch-filter-options .filter-option.active');
-        const filterType = activeFilter ? activeFilter.getAttribute('data-filter') : 'all';
-        
-        // Apply filter
-        let filteredBatches = batches;
-        if (filterType !== 'all') {
-            filteredBatches = batches.filter(batch => {
-                if (filterType === 'open') {
-                    return batch.status === 'open';
-                } else if (filterType === 'picking') {
-                    return batch.status === 'picking' || 
-                           (batch.picking_started_at && !batch.picking_completed_at);
-                } else if (filterType === 'packing') {
-                    return batch.status === 'packing' || 
-                           (batch.picking_completed_at && !batch.closed_at);
-                } else if (filterType === 'closed') {
-                    return batch.status === 'closed' || batch.closed_at;
-                }
-                return true;
-            });
-        }
-        
-        // Clear existing content
-        batchListBody.innerHTML = '';
-        
-        // Add batches to the list
-        filteredBatches.forEach(batch => {
-            const row = document.createElement('tr');
-            
-            // Calculate duration
-            let duration = '';
-            if (batch.closed_at) {
-                const startTime = new Date(batch.created_at);
-                const endTime = new Date(batch.closed_at);
-                duration = formatDuration(endTime - startTime);
-            } else if (batch.picking_started_at) {
-                const startTime = new Date(batch.picking_started_at);
-                const endTime = batch.picking_completed_at ? new Date(batch.picking_completed_at) : new Date();
-                duration = formatDuration(endTime - startTime) + ' (ongoing)';
-            } else {
-                duration = 'Not started';
             }
-            
-            // Determine status class
-            let statusClass = '';
-            if (batch.status === 'closed' || batch.closed_at) {
-                statusClass = 'status-closed';
-            } else if (batch.status === 'picking' || (batch.picking_started_at && !batch.picking_completed_at)) {
-                statusClass = 'status-picking';
-            } else if (batch.status === 'packing' || (batch.picking_completed_at && !batch.closed_at)) {
-                statusClass = 'status-packing';
-            } else {
-                statusClass = 'status-open';
-            }
-            
-            row.innerHTML = `
-                <td>${batch.batch_number}</td>
-                <td class="${statusClass}">${batch.status || 'open'}</td>
-                <td>${batch.picker_name || 'Unassigned'}</td>
-                <td>${batch.packer_name || 'Unassigned'}</td>
-                <td>${new Date(batch.created_at).toLocaleString()}</td>
-                <td>${batch.closed_at ? new Date(batch.closed_at).toLocaleString() : 'In progress'}</td>
-                <td>${duration}</td>
-            `;
-            
-            batchListBody.appendChild(row);
+            return response.json();
+        })
+        .then(data => {
+            // Update batch stats
+            document.getElementById('batches-count').textContent = data.stats?.totalCount || 0;
+            document.getElementById('batches-last-sync').textContent = formatDate(data.stats?.lastSyncDate) || 'Never';
+            document.getElementById('batches-sync-status').textContent = data.stats?.status || 'Not Available';
+            document.getElementById('batches-last-sync-count').textContent = data.stats?.lastSyncCount || 0;
+        })
+        .catch(error => {
+            console.error('Error fetching batch stats:', error);
+            // Use fallback data
+            document.getElementById('batches-count').textContent = '0';
+            document.getElementById('batches-last-sync').textContent = 'Never';
+            document.getElementById('batches-sync-status').textContent = 'Not Available';
+            document.getElementById('batches-last-sync-count').textContent = '0';
         });
+}
+
+// Update batch productivity
+function updateBatchProductivity() {
+    // Use existing dashboard API endpoint pattern
+    fetch(`${window.location.origin}/api/batches/productivity`)
+        .then(response => {
+            if (!response.ok) {
+                // If endpoint doesn't exist, use fallback data
+                return Promise.resolve({
+                    productivity: {
+                        pickerProductivity: 0,
+                        packerProductivity: 0,
+                        avgPickingTime: 0,
+                        avgPackingTime: 0
+                    }
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Update batch productivity
+            document.getElementById('picker-productivity').textContent = 
+                (data.productivity?.pickerProductivity || 0).toFixed(1);
+            document.getElementById('packer-productivity').textContent = 
+                (data.productivity?.packerProductivity || 0).toFixed(1);
+            document.getElementById('avg-picking-time').textContent = 
+                formatMinutes(data.productivity?.avgPickingTime || 0);
+            document.getElementById('avg-packing-time').textContent = 
+                formatMinutes(data.productivity?.avgPackingTime || 0);
+        })
+        .catch(error => {
+            console.error('Error fetching batch productivity:', error);
+            // Use fallback data
+            document.getElementById('picker-productivity').textContent = '0.0';
+            document.getElementById('packer-productivity').textContent = '0.0';
+            document.getElementById('avg-picking-time').textContent = '0';
+            document.getElementById('avg-packing-time').textContent = '0';
+        });
+}
+
+// Fetch batches
+function fetchBatches() {
+    console.log('Fetching batches...');
+    // Use existing dashboard API endpoint pattern
+    fetch(`${window.location.origin}/api/batches`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Batches fetch failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Update batch list
+            updateBatchList(data);
+        })
+        .catch(error => {
+            console.error('Error fetching batches:', error);
+            // Show error message
+            document.getElementById('batch-list').innerHTML = `
+                <tr>
+                    <td colspan="6" style="padding: 20px; text-align: center;">
+                        Failed to load batches. API endpoint not available.<br>
+                        <small>This feature requires implementing the batch API endpoints.</small>
+                    </td>
+                </tr>
+            `;
+        });
+}
+
+// Update batch list
+function updateBatchList(batches) {
+    const batchList = document.getElementById('batch-list');
+    if (!batchList) return;
+    
+    // If no batches, show message
+    if (!batches || batches.length === 0) {
+        batchList.innerHTML = `
+            <tr>
+                <td colspan="6" style="padding: 20px; text-align: center;">
+                    No batches found. Sync batches to see them here.
+                </td>
+            </tr>
+        `;
+        return;
     }
     
-    // Function to display batch error
-    function displayBatchError(message) {
-        const batchListBody = document.getElementById('batch-list-body');
-        if (!batchListBody) return;
-        
-        batchListBody.innerHTML = `<tr><td colspan="7" class="error-message">Error: ${message}</td></tr>`;
+    // Get active filter
+    const activeFilter = document.querySelector('#batch-status-filter-options .filter-option.active');
+    const filterType = activeFilter ? activeFilter.getAttribute('data-filter') : 'all';
+    
+    // Filter batches
+    const filteredBatches = filterType === 'all' 
+        ? batches 
+        : batches.filter(batch => batch.status === filterType);
+    
+    // If no filtered batches, show message
+    if (filteredBatches.length === 0) {
+        batchList.innerHTML = `
+            <tr>
+                <td colspan="6" style="padding: 20px; text-align: center;">
+                    No batches found with status "${filterType}".
+                </td>
+            </tr>
+        `;
+        return;
     }
     
-    // Function to filter batch list
-    function filterBatchList(filterType) {
-        // Re-fetch batches with the new filter
-        fetchBatches();
-    }
+    // Build batch list HTML
+    let html = '';
+    filteredBatches.forEach(batch => {
+        html += `
+            <tr style="border-bottom: 1px solid var(--light-gray);">
+                <td style="padding: 10px;">${batch.id}</td>
+                <td style="padding: 10px;">${formatStatus(batch.status)}</td>
+                <td style="padding: 10px;">${batch.assigned_picker_name || 'N/A'}</td>
+                <td style="padding: 10px;">${batch.assigned_packer_name || 'N/A'}</td>
+                <td style="padding: 10px;">${formatDate(batch.created_at)}</td>
+                <td style="padding: 10px;">${batch.item_count || 0}</td>
+            </tr>
+        `;
+    });
     
-    // Function to trigger entity sync
-    function triggerEntitySync(entityType) {
-        console.log(`Triggering ${entityType} sync...`);
-        fetch(`/api/sync/${entityType}`, { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`${entityType} sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log(`${entityType} sync response:`, data);
-                addLogEntry('success', `${entityType} sync started successfully`);
-                // Refresh data after sync
-                setTimeout(fetchBatches, 2000);
-            })
-            .catch(error => {
-                console.error(`Error triggering ${entityType} sync:`, error);
-                addLogEntry('error', `Error triggering ${entityType} sync: ${error.message}`);
-            });
-    }
+    // Update batch list
+    batchList.innerHTML = html;
+}
+
+// Setup batch status filter
+function setupBatchStatusFilter() {
+    const filterOptions = document.querySelectorAll('#batch-status-filter-options .filter-option');
     
-    // Function to trigger entity full sync
-    function triggerEntityFullSync(entityType) {
-        console.log(`Triggering full ${entityType} sync...`);
-        fetch(`/api/sync/${entityType}?full=true`, { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Full ${entityType} sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log(`Full ${entityType} sync response:`, data);
-                addLogEntry('success', `Full ${entityType} sync started successfully`);
-                // Refresh data after sync
-                setTimeout(fetchBatches, 2000);
-            })
-            .catch(error => {
-                console.error(`Error triggering full ${entityType} sync:`, error);
-                addLogEntry('error', `Error triggering full ${entityType} sync: ${error.message}`);
-            });
-    }
+    filterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove active class from all options
+            filterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
+            option.classList.add('active');
+            
+            // Fetch batches again to apply filter
+            fetchBatches();
+        });
+    });
+}
+
+// Format date
+function formatDate(dateString) {
+    if (!dateString) return 'N/A';
     
-    // Function to add log entry
-    function addLogEntry(level, message) {
-        const logContainer = document.getElementById('log-container');
-        if (!logContainer) return;
-        
-        const logEntry = document.createElement('div');
-        logEntry.className = `log-entry log-${level}`;
-        logEntry.textContent = `[${new Date().toLocaleString()}] ${message}`;
-        logContainer.insertBefore(logEntry, logContainer.firstChild);
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleString();
+    } catch (error) {
+        return dateString;
     }
+}
+
+// Format minutes
+function formatMinutes(milliseconds) {
+    if (!milliseconds) return '0';
     
-    // Function to format duration
-    function formatDuration(ms) {
-        if (!ms) return '0s';
-        
-        const seconds = Math.floor(ms / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-        
-        if (hours > 0) {
-            return `${hours}h ${minutes % 60}m`;
-        } else if (minutes > 0) {
-            return `${minutes}m ${seconds % 60}s`;
-        } else {
-            return `${seconds}s`;
-        }
+    try {
+        return Math.round(milliseconds / 60000);
+    } catch (error) {
+        return '0';
     }
-});
+}
+
+// Format status
+function formatStatus(status) {
+    if (!status) return 'Unknown';
+    
+    const statusMap = {
+        'open': 'Open',
+        'picking': 'Picking',
+        'packing': 'Packing',
+        'closed': 'Closed'
+    };
+    
+    return statusMap[status] || status;
+}
