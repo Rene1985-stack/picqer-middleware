@@ -1,9 +1,9 @@
 /**
- * Updated API Adapter with Actual Data Sync Integration
+ * Updated Data Sync API Adapter
  * 
  * This adapter connects the dashboard to the actual sync implementation,
  * ensuring that when sync buttons are clicked, real data is synced from
- * Picqer to the database.
+ * Picqer to the database. Now includes BatchService integration.
  */
 
 const express = require('express');
@@ -11,7 +11,7 @@ const router = express.Router();
 const SyncImplementation = require('./sync_implementation');
 
 // Store service instances and sync implementation
-let ProductService, PicklistService, WarehouseService, UserService, SupplierService;
+let ProductService, PicklistService, WarehouseService, UserService, SupplierService, BatchService;
 let syncImplementation;
 
 // Initialize services with dependency injection
@@ -21,6 +21,7 @@ function initializeServices(services) {
   WarehouseService = services.WarehouseService;
   UserService = services.UserService;
   SupplierService = services.SupplierService;
+  BatchService = services.BatchService;
   
   // Initialize sync implementation with services
   syncImplementation = new SyncImplementation({
@@ -28,7 +29,8 @@ function initializeServices(services) {
     PicklistService,
     WarehouseService,
     UserService,
-    SupplierService
+    SupplierService,
+    BatchService
   });
   
   console.log('API adapter initialized with service instances and sync implementation');
@@ -99,6 +101,12 @@ router.get('/stats', async (req, res) => {
         lastSyncDate: await syncImplementation.getLastSyncDate('suppliers'),
         status: 'Ready',
         lastSyncCount: 0
+      },
+      batches: {
+        totalCount: await safeMethodCall(BatchService, 'getCount', 0),
+        lastSyncDate: await safeMethodCall(BatchService, 'getLastSyncDate', new Date().toISOString()),
+        status: 'Ready',
+        lastSyncCount: 0
       }
     };
     
@@ -137,6 +145,12 @@ router.get('/stats', async (req, res) => {
         lastSyncCount: 0
       },
       suppliers: {
+        totalCount: 0,
+        lastSyncDate: new Date().toISOString(),
+        status: 'Ready',
+        lastSyncCount: 0
+      },
+      batches: {
         totalCount: 0,
         lastSyncDate: new Date().toISOString(),
         status: 'Ready',
@@ -258,6 +272,13 @@ router.get('/history', async (req, res) => {
         success: false, 
         count: 0,
         error: 'API connection timeout' 
+      },
+      { 
+        sync_id: 'batches_1650123456794', 
+        entity_type: 'batches', 
+        timestamp: new Date(Date.now() - 1800000).toISOString(), 
+        success: true, 
+        count: 25 
       }
     ];
     
@@ -293,7 +314,8 @@ router.post('/sync', async (req, res) => {
         syncImplementation.syncPicklists(true),
         syncImplementation.syncWarehouses(true),
         syncImplementation.syncUsers(true),
-        syncImplementation.syncSuppliers(true)
+        syncImplementation.syncSuppliers(true),
+        safeMethodCall(BatchService, 'syncBatches', { success: false, error: 'Method not available' }, true)
       ]).catch(error => {
         console.error('Error in full sync:', error.message);
       });
@@ -307,7 +329,8 @@ router.post('/sync', async (req, res) => {
         syncImplementation.syncPicklists(false),
         syncImplementation.syncWarehouses(false),
         syncImplementation.syncUsers(false),
-        syncImplementation.syncSuppliers(false)
+        syncImplementation.syncSuppliers(false),
+        safeMethodCall(BatchService, 'syncBatches', { success: false, error: 'Method not available' }, false)
       ]).catch(error => {
         console.error('Error in incremental sync:', error.message);
       });
@@ -355,6 +378,9 @@ router.post('/sync/:entity', async (req, res) => {
         break;
       case 'suppliers':
         syncPromise = syncImplementation.syncSuppliers(fullSync);
+        break;
+      case 'batches':
+        syncPromise = safeMethodCall(BatchService, 'syncBatches', { success: false, error: 'Method not available' }, fullSync);
         break;
       default:
         return res.status(400).json({ 
@@ -453,7 +479,8 @@ router.get('/test', async (req, res) => {
   try {
     // Check if services are initialized
     const servicesInitialized = ProductService && PicklistService && 
-                               WarehouseService && UserService && SupplierService;
+                               WarehouseService && UserService && 
+                               SupplierService && BatchService;
     
     // Check if sync implementation is initialized
     const syncImplementationInitialized = !!syncImplementation;
