@@ -1,8 +1,8 @@
 /**
- * Updated index.js with batch dashboard API integration
+ * Simplified index.js with correct module paths
  * 
- * This file integrates both the standard batch service and the batch dashboard API
- * to ensure batches are properly synced and displayed in the dashboard.
+ * This file provides a minimal implementation that correctly imports
+ * all required modules without introducing additional complexity.
  */
 
 // Import required modules
@@ -20,10 +20,8 @@ const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
 const BatchService = require('./batch_service');
 
-// Import API adapters
+// Import API adapter with actual data sync implementation
 const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
-const { router: dashboardApiRouter, initialize: initializeDashboardApi } = require('./dashboard-api');
-const { router: batchDashboardRouter, initialize: initializeBatchDashboardApi } = require('./batch_dashboard_api');
 
 // Create Express app
 const app = express();
@@ -85,25 +83,6 @@ async function initializePool() {
 // API routes
 app.use('/api', apiAdapter);
 
-// Initialize and use dashboard API
-async function initializeApis() {
-  try {
-    // Initialize dashboard API
-    const dashboardApi = initializeDashboardApi(pool);
-    app.use('/api', dashboardApi);
-    
-    // Initialize batch dashboard API
-    const batchApi = initializeBatchDashboardApi(pool, {
-      BatchService: batchService
-    });
-    app.use('/api', batchApi);
-    
-    console.log('Dashboard APIs initialized');
-  } catch (error) {
-    console.error('Error initializing dashboard APIs:', error.message);
-  }
-}
-
 // Dashboard route
 app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
@@ -148,9 +127,6 @@ app.listen(PORT, async () => {
   
   // Initialize database connection pool
   await initializePool();
-  
-  // Initialize APIs
-  await initializeApis();
   
   // Initialize database after server starts
   await initializeDatabase();
