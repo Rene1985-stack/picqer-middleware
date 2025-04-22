@@ -11,26 +11,27 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('API Endpoint Monitor: Starting endpoint verification...');
     
     // Define all required API endpoints
+    // Note: These paths are adjusted for a base URL that already includes /api/v1
     const requiredEndpoints = [
         // Core endpoints
-        '/api/status',
-        '/api/stats',
-        '/api/logs',
-        '/api/history',
-        '/api/sync',
+        '/status',
+        '/stats',
+        '/logs',
+        '/history',
+        '/sync',
         
         // Entity-specific endpoints
-        '/api/sync/products',
-        '/api/sync/picklists',
-        '/api/sync/warehouses',
-        '/api/sync/users',
-        '/api/sync/suppliers',
-        '/api/sync/batches',
+        '/sync/products',
+        '/sync/picklists',
+        '/sync/warehouses',
+        '/sync/users',
+        '/sync/suppliers',
+        '/sync/batches',
         
         // Batch-specific endpoints
-        '/api/batches/metrics',
-        '/api/batches/productivity',
-        '/api/batches/stats'
+        '/batches/metrics',
+        '/batches/productivity',
+        '/batches/stats'
     ];
     
     // Check each endpoint
