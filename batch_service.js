@@ -6,7 +6,6 @@
  */
 
 const sql = require('mssql');
-const axios = require('axios');
 const PicqerApiClient = require('./picqer-api-client');
 
 class BatchService {
@@ -792,6 +791,28 @@ class BatchService {
      */
     getRateLimiterStats() {
         return this.apiClient.getStats();
+    }
+
+    /**
+     * Enable automatic retry on rate limit hit (Picqer style)
+     */
+    enableRetryOnRateLimitHit() {
+        this.apiClient.enableRetryOnRateLimitHit();
+    }
+
+    /**
+     * Disable automatic retry on rate limit hit
+     */
+    disableRetryOnRateLimitHit() {
+        this.apiClient.disableRetryOnRateLimitHit();
+    }
+
+    /**
+     * Set the sleep time on rate limit hit
+     * @param {number} ms - Milliseconds to sleep
+     */
+    setSleepTimeOnRateLimitHit(ms) {
+        this.apiClient.setSleepTimeOnRateLimitHit(ms);
     }
 }
 
