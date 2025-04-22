@@ -1,8 +1,9 @@
 /**
- * Enhanced index.js with date fixing integration
+ * Enhanced index.js with date fixing integration and root route handler
  * 
  * This file provides a complete implementation that correctly imports
  * all required modules and integrates the date fixing solution.
+ * Added root route handler and improved static file serving.
  */
 
 // Import required modules
@@ -192,6 +193,12 @@ app.get('/api/fix-dates', async (req, res) => {
   }
 });
 
+// Root route handler - redirects to dashboard
+app.get('/', (req, res) => {
+  console.log('Root path accessed, redirecting to dashboard');
+  res.redirect('/dashboard');
+});
+
 // Dashboard route
 app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
@@ -199,6 +206,18 @@ app.get('/dashboard', (req, res) => {
 
 // Serve static files from dashboard directory
 app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
+
+// Serve static files from root directory
+app.use(express.static(path.join(__dirname)));
+
+// Add test routes to verify routing is working
+app.get('/api-test', (req, res) => {
+  res.json({ message: 'API test route is working' });
+});
+
+app.get('/api/sync-test', (req, res) => {
+  res.json({ message: 'API sync test route is working' });
+});
 
 // Initialize database with improved error handling
 async function initializeDatabase() {
