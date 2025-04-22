@@ -246,7 +246,8 @@ class BatchService {
           params.updated_since = updatedSinceParam;
         }
         
-        const response = await this.apiClient.get('/picklist/batches', { params });
+        // FIXED: Using the correct API endpoint from Picqer documentation
+        const response = await this.apiClient.get('/api/v1/picklists/batches', { params });
         
         if (response && Array.isArray(response) && response.length > 0) {
           // Filter out duplicates by idpicklist_batch
@@ -294,7 +295,8 @@ class BatchService {
     try {
       console.log(`Fetching details for batch ${idpicklist_batch}...`);
       
-      const response = await this.apiClient.get(`/picklist/batches/${idpicklist_batch}`);
+      // FIXED: Using the correct API endpoint from Picqer documentation
+      const response = await this.apiClient.get(`/api/v1/picklists/batches/${idpicklist_batch}`);
       
       if (response) {
         console.log(`Retrieved details for batch ${idpicklist_batch}`);
@@ -423,62 +425,19 @@ class BatchService {
         // Process each batch in the chunk
         for (const batch of chunk) {
           try {
-            // Get detailed batch info if needed
-            let batchDetails = batch;
-            
-            // If batch doesn't have all required fields, fetch details
-            if (!batch.total_products || !batch.total_picklists) {
-              batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
-              
-              // If details fetch failed, use original batch object
-              if (!batchDetails) {
-                batchDetails = batch;
-              }
-            }
-            
-            // Save batch to database
-            const success = await this.saveBatch(batchDetails);
-            
+            const success = await this.saveBatch(batch);
             if (success) {
               successCount++;
             }
-          } catch (batchError) {
-            console.error(`Error processing batch ${batch.idpicklist_batch}:`, batchError.message);
-            // Continue with next batch
+          } catch (error) {
+            console.error(`Error saving batch ${batch.idpicklist_batch}:`, error.message);
           }
         }
         
-        console.log(`Chunk ${Math.floor(i / batchSize) + 1}/${Math.ceil(batches.length / batchSize)} completed. ${successCount}/${i + chunk.length} batches saved successfully.`);
+        console.log(`Processed ${successCount} batches so far...`);
       }
       
-      // Update SyncStatus table
-      try {
-        const pool = await this.initializePool();
-        
-        await pool.request()
-          .input('entityName', sql.NVarChar, 'batches')
-          .input('entityType', sql.NVarChar, 'batches')
-          .input('lastSyncDate', sql.DateTime, new Date())
-          .input('lastSyncCount', sql.Int, successCount)
-          .input('totalCount', sql.Int, await this.getBatchCount())
-          .query(`
-            UPDATE SyncStatus
-            SET last_sync_date = @lastSyncDate,
-                last_sync_count = @lastSyncCount,
-                total_count = @totalCount
-            WHERE entity_name = @entityName OR entity_type = @entityType
-            
-            IF @@ROWCOUNT = 0
-            BEGIN
-                INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count, total_count)
-                VALUES (@entityName, @entityType, @lastSyncDate, @lastSyncCount, @totalCount)
-            END
-          `);
-      } catch (syncStatusError) {
-        console.error('Error updating SyncStatus:', syncStatusError.message);
-      }
-      
-      console.log(`✅ Saved ${successCount}/${batches.length} batches to database`);
+      console.log(`✅ Saved ${successCount} batches to database`);
       return successCount;
     } catch (error) {
       console.error('Error saving batches to database:', error.message);
@@ -487,14 +446,81 @@ class BatchService {
   }
 
   /**
-   * Get batch count from database
-   * @returns {Promise<number>} - Number of batches in database
+   * Update last sync date for batches
+   * @param {Date} syncDate - Sync date to save
+   * @param {number} count - Number of batches synced
+   * @returns {Promise<boolean>} - Success status
+   */
+  async updateLastSyncDate(syncDate, count) {
+    try {
+      const pool = await this.initializePool();
+      
+      // Update SyncStatus table
+      await pool.request()
+        .input('syncDate', sql.DateTime, syncDate)
+        .input('count', sql.Int, count)
+        .query(`
+          UPDATE SyncStatus
+          SET last_sync_date = @syncDate,
+              last_sync_count = @count,
+              total_count = (SELECT COUNT(*) FROM Batches)
+          WHERE entity_name = 'batches'
+        `);
+      
+      console.log(`Updated last sync date for batches to ${syncDate.toISOString()}`);
+      return true;
+    } catch (error) {
+      console.error('Error updating last sync date for batches:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Get the last sync date for batches
+   * @returns {Promise<Date|null>} - Last sync date or null if not found
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await this.initializePool();
+      
+      // Get last sync date from SyncStatus table
+      const result = await pool.request().query(`
+        SELECT last_sync_date
+        FROM SyncStatus
+        WHERE entity_name = 'batches'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      // If no record found, return a date 30 days ago
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return thirtyDaysAgo;
+    } catch (error) {
+      console.error('Error getting last sync date for batches:', error.message);
+      
+      // If error, return a date 30 days ago
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return thirtyDaysAgo;
+    }
+  }
+
+  /**
+   * Get the count of batches in the database
+   * @returns {Promise<number>} - Count of batches
    */
   async getBatchCount() {
     try {
       const pool = await this.initializePool();
       
-      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Batches');
+      // Get count from Batches table
+      const result = await pool.request().query(`
+        SELECT COUNT(*) AS count
+        FROM Batches
+      `);
       
       return result.recordset[0].count;
     } catch (error) {
@@ -504,344 +530,52 @@ class BatchService {
   }
 
   /**
-   * Get last sync date for batches
-   * @returns {Promise<Date|null>} - Last sync date or null if never synced
-   */
-  async getLastBatchSyncDate() {
-    try {
-      const pool = await this.initializePool();
-      
-      const result = await pool.request()
-        .query(`
-          SELECT last_sync_date 
-          FROM SyncStatus 
-          WHERE entity_name = 'batches' OR entity_type = 'batches'
-        `);
-      
-      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
-        return new Date(result.recordset[0].last_sync_date);
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Error getting last batch sync date:', error.message);
-      return null;
-    }
-  }
-
-  /**
    * Sync batches from Picqer to database
    * @param {boolean} fullSync - Whether to perform a full sync
-   * @returns {Promise<Object>} - Sync result
+   * @returns {Promise<Object>} - Sync result with counts
    */
   async syncBatches(fullSync = false) {
     try {
       console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
       
+      // Initialize database if needed
+      await this.initializeBatchesDatabase();
+      
       let batches = [];
       
       if (fullSync) {
-        // Full sync: Get all batches
+        // Full sync - get all batches
         batches = await this.getAllBatches();
       } else {
-        // Incremental sync: Get batches updated since last sync
-        const lastSyncDate = await this.getLastBatchSyncDate();
+        // Incremental sync - get batches updated since last sync
+        const lastSyncDate = await this.getLastSyncDate();
+        console.log(`Last batch sync date: ${lastSyncDate.toISOString()}`);
         batches = await this.getBatchesUpdatedSince(lastSyncDate);
       }
+      
+      console.log(`Retrieved ${batches.length} batches from Picqer`);
       
       // Save batches to database
       const savedCount = await this.saveBatches(batches);
       
+      // Update last sync date
+      await this.updateLastSyncDate(new Date(), savedCount);
+      
+      // Get total count
+      const totalCount = await this.getBatchCount();
+      
+      console.log(`✅ Batch sync completed: ${savedCount} batches synced, ${totalCount} total batches in database`);
+      
       return {
         success: true,
-        message: `Successfully synced ${savedCount} batches`,
         syncedCount: savedCount,
-        totalCount: batches.length
+        totalCount: totalCount
       };
     } catch (error) {
       console.error('Error syncing batches:', error.message);
-      
       return {
         success: false,
-        message: `Error syncing batches: ${error.message}`,
         error: error.message
-      };
-    }
-  }
-
-  /**
-   * Get batch productivity metrics
-   * @param {Date|null} startDate - Start date for metrics calculation
-   * @param {Date|null} endDate - End date for metrics calculation
-   * @returns {Promise<Object>} - Productivity metrics
-   */
-  async getBatchProductivityMetrics(startDate = null, endDate = null) {
-    try {
-      const pool = await this.initializePool();
-      
-      // Default to last 30 days if no dates provided
-      if (!startDate) {
-        startDate = new Date();
-        startDate.setDate(startDate.getDate() - 30);
-      }
-      
-      if (!endDate) {
-        endDate = new Date();
-      }
-      
-      // Format dates for SQL query
-      const startDateStr = startDate.toISOString();
-      const endDateStr = endDate.toISOString();
-      
-      // Get completed batches in date range
-      const completedBatchesResult = await pool.request()
-        .input('startDate', sql.DateTime, startDateStr)
-        .input('endDate', sql.DateTime, endDateStr)
-        .query(`
-          SELECT 
-            COUNT(*) AS total_completed,
-            SUM(total_products) AS total_products,
-            SUM(total_picklists) AS total_picklists,
-            AVG(
-              CASE 
-                WHEN completed_at IS NOT NULL AND created_at IS NOT NULL 
-                THEN DATEDIFF(MINUTE, created_at, completed_at) 
-                ELSE NULL 
-              END
-            ) AS avg_completion_time_minutes
-          FROM Batches
-          WHERE 
-            status = 'completed' 
-            AND completed_at >= @startDate 
-            AND completed_at <= @endDate
-        `);
-      
-      // Get batches by user
-      const batchesByUserResult = await pool.request()
-        .input('startDate', sql.DateTime, startDateStr)
-        .input('endDate', sql.DateTime, endDateStr)
-        .query(`
-          SELECT 
-            completed_by_name,
-            COUNT(*) AS batches_completed,
-            SUM(total_products) AS products_processed,
-            SUM(total_picklists) AS picklists_processed,
-            AVG(
-              CASE 
-                WHEN completed_at IS NOT NULL AND created_at IS NOT NULL 
-                THEN DATEDIFF(MINUTE, created_at, completed_at) 
-                ELSE NULL 
-              END
-            ) AS avg_completion_time_minutes
-          FROM Batches
-          WHERE 
-            status = 'completed' 
-            AND completed_at >= @startDate 
-            AND completed_at <= @endDate
-            AND completed_by_name IS NOT NULL
-          GROUP BY completed_by_name
-          ORDER BY batches_completed DESC
-        `);
-      
-      // Get batches by day
-      const batchesByDayResult = await pool.request()
-        .input('startDate', sql.DateTime, startDateStr)
-        .input('endDate', sql.DateTime, endDateStr)
-        .query(`
-          SELECT 
-            CONVERT(date, completed_at) AS completion_date,
-            COUNT(*) AS batches_completed,
-            SUM(total_products) AS products_processed,
-            SUM(total_picklists) AS picklists_processed
-          FROM Batches
-          WHERE 
-            status = 'completed' 
-            AND completed_at >= @startDate 
-            AND completed_at <= @endDate
-          GROUP BY CONVERT(date, completed_at)
-          ORDER BY completion_date
-        `);
-      
-      // Get batches by type
-      const batchesByTypeResult = await pool.request()
-        .input('startDate', sql.DateTime, startDateStr)
-        .input('endDate', sql.DateTime, endDateStr)
-        .query(`
-          SELECT 
-            type,
-            COUNT(*) AS batch_count,
-            SUM(total_products) AS products_processed,
-            SUM(total_picklists) AS picklists_processed
-          FROM Batches
-          WHERE 
-            completed_at >= @startDate 
-            AND completed_at <= @endDate
-          GROUP BY type
-          ORDER BY batch_count DESC
-        `);
-      
-      // Get current active batches
-      const activeBatchesResult = await pool.request()
-        .query(`
-          SELECT 
-            COUNT(*) AS active_count,
-            SUM(total_products) AS active_products,
-            SUM(total_picklists) AS active_picklists
-          FROM Batches
-          WHERE status = 'active'
-        `);
-      
-      // Compile metrics
-      const metrics = {
-        date_range: {
-          start_date: startDate,
-          end_date: endDate
-        },
-        summary: {
-          total_completed: completedBatchesResult.recordset[0].total_completed || 0,
-          total_products: completedBatchesResult.recordset[0].total_products || 0,
-          total_picklists: completedBatchesResult.recordset[0].total_picklists || 0,
-          avg_completion_time_minutes: completedBatchesResult.recordset[0].avg_completion_time_minutes || 0,
-          active_batches: activeBatchesResult.recordset[0].active_count || 0,
-          active_products: activeBatchesResult.recordset[0].active_products || 0,
-          active_picklists: activeBatchesResult.recordset[0].active_picklists || 0
-        },
-        by_user: batchesByUserResult.recordset,
-        by_day: batchesByDayResult.recordset,
-        by_type: batchesByTypeResult.recordset
-      };
-      
-      return metrics;
-    } catch (error) {
-      console.error('Error getting batch productivity metrics:', error.message);
-      
-      // Return empty metrics on error
-      return {
-        date_range: {
-          start_date: startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-          end_date: endDate || new Date()
-        },
-        summary: {
-          total_completed: 0,
-          total_products: 0,
-          total_picklists: 0,
-          avg_completion_time_minutes: 0,
-          active_batches: 0,
-          active_products: 0,
-          active_picklists: 0
-        },
-        by_user: [],
-        by_day: [],
-        by_type: []
-      };
-    }
-  }
-
-  /**
-   * Get batch productivity trends
-   * @param {number} days - Number of days to include in trends
-   * @returns {Promise<Object>} - Productivity trends
-   */
-  async getBatchProductivityTrends(days = 30) {
-    try {
-      const endDate = new Date();
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - days);
-      
-      const metrics = await this.getBatchProductivityMetrics(startDate, endDate);
-      
-      // Calculate daily averages
-      const dailyData = metrics.by_day;
-      
-      // Fill in missing days with zeros
-      const filledDailyData = [];
-      const currentDate = new Date(startDate);
-      
-      while (currentDate <= endDate) {
-        const dateStr = currentDate.toISOString().split('T')[0];
-        const existingDay = dailyData.find(d => {
-          const dayDate = new Date(d.completion_date);
-          return dayDate.toISOString().split('T')[0] === dateStr;
-        });
-        
-        if (existingDay) {
-          filledDailyData.push(existingDay);
-        } else {
-          filledDailyData.push({
-            completion_date: new Date(currentDate),
-            batches_completed: 0,
-            products_processed: 0,
-            picklists_processed: 0
-          });
-        }
-        
-        currentDate.setDate(currentDate.getDate() + 1);
-      }
-      
-      // Calculate 7-day moving averages
-      const movingAverages = [];
-      
-      for (let i = 6; i < filledDailyData.length; i++) {
-        const window = filledDailyData.slice(i - 6, i + 1);
-        const sum = window.reduce(
-          (acc, day) => {
-            return {
-              batches: acc.batches + (day.batches_completed || 0),
-              products: acc.products + (day.products_processed || 0),
-              picklists: acc.picklists + (day.picklists_processed || 0)
-            };
-          },
-          { batches: 0, products: 0, picklists: 0 }
-        );
-        
-        movingAverages.push({
-          date: new Date(filledDailyData[i].completion_date),
-          batches_avg: sum.batches / 7,
-          products_avg: sum.products / 7,
-          picklists_avg: sum.picklists / 7
-        });
-      }
-      
-      // Calculate user productivity rankings
-      const userRankings = [...metrics.by_user]
-        .sort((a, b) => (b.products_processed || 0) - (a.products_processed || 0))
-        .map((user, index) => ({
-          ...user,
-          rank: index + 1,
-          products_per_batch: user.batches_completed ? user.products_processed / user.batches_completed : 0
-        }));
-      
-      // Return trends
-      return {
-        date_range: metrics.date_range,
-        summary: metrics.summary,
-        daily_data: filledDailyData,
-        moving_averages: movingAverages,
-        user_rankings: userRankings,
-        by_type: metrics.by_type
-      };
-    } catch (error) {
-      console.error('Error getting batch productivity trends:', error.message);
-      
-      // Return empty trends on error
-      return {
-        date_range: {
-          start_date: new Date(Date.now() - days * 24 * 60 * 60 * 1000),
-          end_date: new Date()
-        },
-        summary: {
-          total_completed: 0,
-          total_products: 0,
-          total_picklists: 0,
-          avg_completion_time_minutes: 0,
-          active_batches: 0,
-          active_products: 0,
-          active_picklists: 0
-        },
-        daily_data: [],
-        moving_averages: [],
-        user_rankings: [],
-        by_type: []
       };
     }
   }
