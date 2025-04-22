@@ -1,5 +1,5 @@
 /**
- * Picqer API Rate Limiter
+ * Picqer Rate Limiter
  * 
  * This module implements a rate limiting solution for the Picqer API to prevent
  * "Rate limit exceeded" errors. It includes:
