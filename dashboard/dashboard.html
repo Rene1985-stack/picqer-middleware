@@ -4,10 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skapa Picqer <-> SQL Middleware</title>
-    <!-- Include the fixed dashboard API script -->
-    <script src="dashboard-api.js"></script>
-    <!-- Include the batch UI components script -->
-    <script src="batch-ui-components.js"></script>
+    <!-- Chart.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* CSS styles remain unchanged */
         :root {
@@ -498,6 +496,7 @@
         .chart-container {
             height: 300px;
             margin-top: 15px;
+            position: relative;
         }
 
         .fallback-notice {
@@ -652,80 +651,59 @@
             height: 20px;
             border-radius: 50%;
             background-color: var(--primary);
-            border: 3px solid white;
-            z-index: 1;
-        }
-
-        .timeline-connector {
-            position: absolute;
-            left: -21px;
-            top: 20px;
-            bottom: -20px;
-            width: 2px;
-            background-color: var(--light-gray);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
         }
 
         .timeline-content {
+            background-color: var(--light-gray);
             padding: 10px;
-            background-color: var(--light);
             border-radius: 4px;
         }
 
-        .timeline-content h5 {
-            margin: 0;
-            color: var(--secondary);
-        }
-
-        .timeline-content p {
-            margin: 5px 0 0;
-            font-size: 14px;
+        .timeline-time {
+            font-size: 12px;
             color: var(--gray);
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-            margin-top: 15px;
-        }
-
-        .metric-card {
-            background-color: var(--light);
-            border-radius: 6px;
-            padding: 15px;
-            text-align: center;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-        }
-
-        .metric-value {
-            font-size: 24px;
-            font-weight: 700;
-            color: var(--primary);
             margin-bottom: 5px;
         }
 
-        .metric-label {
-            font-size: 14px;
-            color: var(--secondary);
-            font-weight: 500;
+        .timeline-title {
+            font-weight: 600;
+            margin-bottom: 5px;
         }
 
-        .error-container {
-            padding: 20px;
-            background-color: var(--light);
-            border-radius: 6px;
-            text-align: center;
+        .timeline-description {
+            font-size: 14px;
+        }
+
+        /* Chart styles */
+        .productivity-charts {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
             margin-top: 20px;
         }
-
-        .error-container h3 {
-            color: var(--danger);
-            margin-bottom: 10px;
+        
+        @media (max-width: 768px) {
+            .productivity-charts {
+                grid-template-columns: 1fr;
+            }
         }
-
-        .error-container p {
-            margin-bottom: 15px;
+        
+        .chart-loading, .chart-error {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
             color: var(--gray);
+            font-style: italic;
+        }
+        
+        .chart-error {
+            color: var(--danger);
         }
     </style>
 </head>
@@ -733,7 +711,7 @@
     <div class="container">
         <header>
             <div class="logo">
-                <h1>Skapa Picqer <-> SQL <span>Middleware</span></h1>
+                <h1>Skapa <span>Middleware</span></h1>
             </div>
             <div class="status">
                 <div id="status-indicator" class="status-indicator status-offline"></div>
@@ -746,34 +724,8 @@
                 <div class="card-header">
                     <h2 class="card-title">Sync Status</h2>
                     <div class="card-actions">
-                        <button id="sync-btn" class="btn btn-primary">Sync</button>
+                        <button id="sync-btn" class="btn btn-primary">Sync All</button>
                         <button id="full-sync-btn" class="btn btn-outline">Full Sync</button>
-                    </div>
-                </div>
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-products">0</div>
-                        <div class="stat-label">Products</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-picklists">0</div>
-                        <div class="stat-label">Picklists</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-warehouses">0</div>
-                        <div class="stat-label">Warehouses</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-users">0</div>
-                        <div class="stat-label">Users</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-suppliers">0</div>
-                        <div class="stat-label">Suppliers</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-batches">0</div>
-                        <div class="stat-label">Batches</div>
                     </div>
                 </div>
                 <div class="progress-container">
@@ -781,12 +733,40 @@
                         <div id="sync-progress-bar" class="progress-bar" style="width: 0%"></div>
                     </div>
                 </div>
-                <p>Last sync: <span id="last-sync">Never</span></p>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="total-products" class="stat-value">0</div>
+                        <div class="stat-label">Products</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="total-picklists" class="stat-value">0</div>
+                        <div class="stat-label">Picklists</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="total-warehouses" class="stat-value">0</div>
+                        <div class="stat-label">Warehouses</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="total-users" class="stat-value">0</div>
+                        <div class="stat-label">Users</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="total-suppliers" class="stat-value">0</div>
+                        <div class="stat-label">Suppliers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="total-batches" class="stat-value">0</div>
+                        <div class="stat-label">Batches</div>
+                    </div>
+                </div>
+                <div style="margin-top: 15px;">
+                    <p>Last sync: <span id="last-sync">Never</span></p>
+                </div>
             </div>
             
             <div class="card">
                 <div class="card-header">
-                    <h2 class="card-title">Logs</h2>
+                    <h2 class="card-title">System Logs</h2>
                     <div class="card-actions">
                         <div class="filter-dropdown">
                             <button class="btn btn-outline">Filter</button>
@@ -802,242 +782,253 @@
                     </div>
                 </div>
                 <div id="log-container" class="log-container">
-                    <div class="log-entry log-info">System initialized</div>
+                    <div class="log-entry log-info">System initializing...</div>
                 </div>
             </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Entity Management</h2>
+            </div>
+            <div class="entity-tabs">
+                <div class="entity-tab active" data-entity="products">Products</div>
+                <div class="entity-tab" data-entity="picklists">Picklists</div>
+                <div class="entity-tab" data-entity="warehouses">Warehouses</div>
+                <div class="entity-tab" data-entity="users">Users</div>
+                <div class="entity-tab" data-entity="suppliers">Suppliers</div>
+                <div class="entity-tab" data-entity="batches">Batches</div>
+            </div>
             
-            <div class="card">
+            <div id="products-content" class="entity-content active">
                 <div class="card-header">
-                    <h2 class="card-title">Entity Management</h2>
-                </div>
-                
-                <div class="entity-tabs">
-                    <div class="entity-tab active" data-entity="products">Products</div>
-                    <div class="entity-tab" data-entity="picklists">Picklists</div>
-                    <div class="entity-tab" data-entity="warehouses">Warehouses</div>
-                    <div class="entity-tab" data-entity="users">Users</div>
-                    <div class="entity-tab" data-entity="suppliers">Suppliers</div>
-                    <div class="entity-tab" data-entity="batches">Batches</div>
-                </div>
-                
-                <div id="products-content" class="entity-content active">
+                    <h3 class="card-title">Products</h3>
                     <div class="card-actions">
                         <button id="sync-products-btn" class="btn btn-primary">Sync Products</button>
                         <button id="full-sync-products-btn" class="btn btn-outline">Full Sync</button>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="products-count">0</div>
-                            <div class="stat-label">Total Products</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="products-sync-count">0</div>
-                            <div class="stat-label">Last Sync Count</div>
-                        </div>
-                    </div>
-                    <p>Last sync: <span id="products-last-sync">Never</span></p>
-                    <p>Status: <span id="products-sync-status">Ready</span></p>
                 </div>
-                
-                <div id="picklists-content" class="entity-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="products-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Products</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="products-last-sync" class="stat-value">Never</div>
+                        <div class="stat-label">Last Sync</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="products-sync-status" class="stat-value">Ready</div>
+                        <div class="stat-label">Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="products-sync-count" class="stat-value">0</div>
+                        <div class="stat-label">Last Sync Count</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="picklists-content" class="entity-content">
+                <div class="card-header">
+                    <h3 class="card-title">Picklists</h3>
                     <div class="card-actions">
                         <button id="sync-picklists-btn" class="btn btn-primary">Sync Picklists</button>
                         <button id="full-sync-picklists-btn" class="btn btn-outline">Full Sync</button>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="picklists-count">0</div>
-                            <div class="stat-label">Total Picklists</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="picklists-sync-count">0</div>
-                            <div class="stat-label">Last Sync Count</div>
-                        </div>
-                    </div>
-                    <p>Last sync: <span id="picklists-last-sync">Never</span></p>
-                    <p>Status: <span id="picklists-sync-status">Ready</span></p>
                 </div>
-                
-                <div id="warehouses-content" class="entity-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="picklists-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Picklists</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="picklists-last-sync" class="stat-value">Never</div>
+                        <div class="stat-label">Last Sync</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="picklists-sync-status" class="stat-value">Ready</div>
+                        <div class="stat-label">Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="picklists-sync-count" class="stat-value">0</div>
+                        <div class="stat-label">Last Sync Count</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="warehouses-content" class="entity-content">
+                <div class="card-header">
+                    <h3 class="card-title">Warehouses</h3>
                     <div class="card-actions">
                         <button id="sync-warehouses-btn" class="btn btn-primary">Sync Warehouses</button>
                         <button id="full-sync-warehouses-btn" class="btn btn-outline">Full Sync</button>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="warehouses-count">0</div>
-                            <div class="stat-label">Total Warehouses</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="warehouses-sync-count">0</div>
-                            <div class="stat-label">Last Sync Count</div>
-                        </div>
-                    </div>
-                    <p>Last sync: <span id="warehouses-last-sync">Never</span></p>
-                    <p>Status: <span id="warehouses-sync-status">Ready</span></p>
                 </div>
-                
-                <div id="users-content" class="entity-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="warehouses-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Warehouses</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="warehouses-last-sync" class="stat-value">Never</div>
+                        <div class="stat-label">Last Sync</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="warehouses-sync-status" class="stat-value">Ready</div>
+                        <div class="stat-label">Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="warehouses-sync-count" class="stat-value">0</div>
+                        <div class="stat-label">Last Sync Count</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="users-content" class="entity-content">
+                <div class="card-header">
+                    <h3 class="card-title">Users</h3>
                     <div class="card-actions">
                         <button id="sync-users-btn" class="btn btn-primary">Sync Users</button>
                         <button id="full-sync-users-btn" class="btn btn-outline">Full Sync</button>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="users-count">0</div>
-                            <div class="stat-label">Total Users</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="users-sync-count">0</div>
-                            <div class="stat-label">Last Sync Count</div>
-                        </div>
-                    </div>
-                    <p>Last sync: <span id="users-last-sync">Never</span></p>
-                    <p>Status: <span id="users-sync-status">Ready</span></p>
                 </div>
-                
-                <div id="suppliers-content" class="entity-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="users-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Users</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="users-last-sync" class="stat-value">Never</div>
+                        <div class="stat-label">Last Sync</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="users-sync-status" class="stat-value">Ready</div>
+                        <div class="stat-label">Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="users-sync-count" class="stat-value">0</div>
+                        <div class="stat-label">Last Sync Count</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="suppliers-content" class="entity-content">
+                <div class="card-header">
+                    <h3 class="card-title">Suppliers</h3>
                     <div class="card-actions">
                         <button id="sync-suppliers-btn" class="btn btn-primary">Sync Suppliers</button>
                         <button id="full-sync-suppliers-btn" class="btn btn-outline">Full Sync</button>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="suppliers-count">0</div>
-                            <div class="stat-label">Total Suppliers</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="suppliers-sync-count">0</div>
-                            <div class="stat-label">Last Sync Count</div>
-                        </div>
-                    </div>
-                    <p>Last sync: <span id="suppliers-last-sync">Never</span></p>
-                    <p>Status: <span id="suppliers-sync-status">Ready</span></p>
                 </div>
-                
-                <div id="batches-content" class="entity-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="suppliers-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Suppliers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="suppliers-last-sync" class="stat-value">Never</div>
+                        <div class="stat-label">Last Sync</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="suppliers-sync-status" class="stat-value">Ready</div>
+                        <div class="stat-label">Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="suppliers-sync-count" class="stat-value">0</div>
+                        <div class="stat-label">Last Sync Count</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="batches-content" class="entity-content">
+                <div class="card-header">
+                    <h3 class="card-title">Batches</h3>
                     <div class="card-actions">
                         <button id="sync-batches-btn" class="btn btn-primary">Sync Batches</button>
                         <button id="full-sync-batches-btn" class="btn btn-outline">Full Sync</button>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-value" id="batches-count">0</div>
-                            <div class="stat-label">Total Batches</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-value" id="batches-sync-count">0</div>
-                            <div class="stat-label">Last Sync Count</div>
-                        </div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div id="batches-count" class="stat-value">0</div>
+                        <div class="stat-label">Total Batches</div>
                     </div>
-                    <p>Last sync: <span id="batches-last-sync">Never</span></p>
-                    <p>Status: <span id="batches-sync-status">Ready</span></p>
-                    
-                    <!-- Batch Productivity UI -->
-                    <div class="batch-productivity-container">
-                        <div id="batch-filters"></div>
-                        <div id="batch-productivity"></div>
-                        <div id="batch-trends"></div>
-                        <div id="batch-list"></div>
-                        <div id="batch-details"></div>
+                    <div class="stat-card">
+                        <div id="batches-last-sync" class="stat-value">Never</div>
+                        <div class="stat-label">Last Sync</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="batches-sync-status" class="stat-value">Ready</div>
+                        <div class="stat-label">Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div id="batches-sync-count" class="stat-value">0</div>
+                        <div class="stat-label">Last Sync Count</div>
                     </div>
                 </div>
-            </div>
-            
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">Sync History</h2>
-                    <div class="card-actions">
-                        <div class="filter-dropdown">
-                            <button class="btn btn-outline">Filter</button>
-                            <div id="filter-options" class="filter-dropdown-content">
-                                <div class="filter-option active" data-filter="all">All</div>
-                                <div class="filter-option" data-filter="success">Success</div>
-                                <div class="filter-option" data-filter="error">Error</div>
-                            </div>
-                        </div>
-                        <div class="filter-dropdown">
-                            <button class="btn btn-outline">Entity</button>
-                            <div id="history-filter-options" class="filter-dropdown-content">
-                                <div class="filter-option active" data-filter="all">All</div>
-                                <div class="filter-option" data-filter="products">Products</div>
-                                <div class="filter-option" data-filter="picklists">Picklists</div>
-                                <div class="filter-option" data-filter="warehouses">Warehouses</div>
-                                <div class="filter-option" data-filter="users">Users</div>
-                                <div class="filter-option" data-filter="suppliers">Suppliers</div>
-                                <div class="filter-option" data-filter="batches">Batches</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <ul id="sync-history" class="sync-history">
-                    <li class="sync-item">
-                        <span class="sync-time">Loading history...</span>
-                    </li>
-                </ul>
-            </div>
-            
-            <div class="card">
-                <div class="card-header">
-                    <h2 class="card-title">Settings</h2>
-                </div>
-                <form id="email-form" class="email-form">
-                    <div class="form-group">
-                        <label for="email">Email for notifications</label>
-                        <input type="email" id="email" class="form-control" placeholder="Enter email">
-                    </div>
-                    <div class="form-check">
-                        <input type="checkbox" id="notify-errors" class="form-check-input">
-                        <label for="notify-errors">Notify on errors</label>
-                    </div>
-                    <div class="form-check">
-                        <input type="checkbox" id="notify-sync" class="form-check-input">
-                        <label for="notify-sync">Notify on sync completion</label>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save Settings</button>
-                </form>
             </div>
         </div>
         
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Sync History</h2>
+                <div class="card-actions">
+                    <div class="filter-dropdown">
+                        <button class="btn btn-outline">Filter</button>
+                        <div id="history-filter-options" class="filter-dropdown-content">
+                            <div class="filter-option active" data-filter="all">All</div>
+                            <div class="filter-option" data-filter="products">Products</div>
+                            <div class="filter-option" data-filter="picklists">Picklists</div>
+                            <div class="filter-option" data-filter="warehouses">Warehouses</div>
+                            <div class="filter-option" data-filter="users">Users</div>
+                            <div class="filter-option" data-filter="suppliers">Suppliers</div>
+                            <div class="filter-option" data-filter="batches">Batches</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <ul id="sync-history" class="sync-history">
+                <li class="sync-item">
+                    <span class="sync-time">No sync history available</span>
+                </li>
+            </ul>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Email Notifications</h2>
+            </div>
+            <form id="email-form" class="email-form">
+                <div class="form-group">
+                    <label for="email">Email Address</label>
+                    <input type="email" id="email" class="form-control" placeholder="Enter email address">
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="notify-errors" class="form-check-input">
+                    <label for="notify-errors">Notify on errors</label>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="notify-sync" class="form-check-input">
+                    <label for="notify-sync">Notify on sync completion</label>
+                </div>
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+            </form>
+        </div>
+        
         <footer>
-            <p>&copy; 2025 Skapa Picqer <-> SQL Middleware. All rights reserved.</p>
+            <p>Skapa Middleware &copy; 2025 | Version 1.0.0</p>
         </footer>
     </div>
     
-    <!-- Initialize Batch UI Components -->
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Initialize batch UI components if available
-            if (typeof BatchUIComponents !== 'undefined') {
-                const batchUI = new BatchUIComponents({
-                    apiBasePath: window.location.origin,
-                    refreshInterval: 60000,
-                    fallbackEnabled: true
-                });
-                
-                batchUI.init({
-                    filters: document.getElementById('batch-filters'),
-                    productivity: document.getElementById('batch-productivity'),
-                    trends: document.getElementById('batch-trends'),
-                    batches: document.getElementById('batch-list'),
-                    batchDetails: document.getElementById('batch-details')
-                });
-            } else {
-                console.error('BatchUIComponents not defined. Check if batch-ui-components.js is loaded correctly.');
-                
-                // Show error message in batch content area
-                const batchContainer = document.querySelector('.batch-productivity-container');
-                if (batchContainer) {
-                    batchContainer.innerHTML = `
-                        <div class="error-container">
-                            <h3>Batch UI Components Not Available</h3>
-                            <p>The batch UI components could not be loaded. Please check your configuration.</p>
-                            <button class="btn btn-primary" onclick="location.reload()">Retry</button>
-                        </div>
-                    `;
-                }
-            }
-        });
-    </script>
+    <!-- Include the dashboard API script -->
+    <script src="dashboard-api.js"></script>
+    <!-- Include the batch UI components script -->
+    <script src="batch-ui-components.js"></script>
+    <!-- Include the batch charts script -->
+    <script src="batch-charts.js"></script>
+    <!-- Include the sync button verifier script -->
+    <script src="sync-button-verifier.js"></script>
+    <!-- Include the dashboard date formatter script -->
+    <script src="dashboard-date-formatter.js"></script>
 </body>
 </html>
