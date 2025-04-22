@@ -1,30 +1,27 @@
-const sqlConfig = require('./config/dbConfig'); // Adjust the path as needed
-
 const UserMetaService = require('./UserMetaService');
 const ProductMetaService = require('./ProductMetaService');
 const WarehouseMetaService = require('./WarehouseMetaService');
-const PicklistService = require('./picklist_service'); // Assuming this file is in place and already functional
+const PicklistService = require('./picklist_service'); // Assuming this file is already present and working
 
-async function startup() {
+async function startup(dbConfig) {
   try {
-    console.log('🚀 Initializing middleware services...');
+    console.log('🚀 Initializing middleware meta services...');
 
-    const userService = new UserMetaService(sqlConfig);
-    const productService = new ProductMetaService(sqlConfig);
-    const warehouseService = new WarehouseMetaService(sqlConfig);
-    const picklistService = new PicklistService(sqlConfig);
+    const userService = new UserMetaService(dbConfig);
+    const productService = new ProductMetaService(dbConfig);
+    const warehouseService = new WarehouseMetaService(dbConfig);
+    const picklistService = new PicklistService(dbConfig);
 
-    // Initialize schema and sync status
     await userService.initializeUsersDatabase();
     await productService.initializeProductsDatabase();
     await warehouseService.initializeWarehousesDatabase();
     await picklistService.initializePicklistsDatabase();
 
-    console.log('✅ All database tables and sync statuses are initialized.');
+    console.log('✅ Meta services initialization complete.');
   } catch (error) {
-    console.error('❌ Startup failed:', error);
+    console.error('❌ Meta startup failed:', error);
     process.exit(1);
   }
 }
 
-startup();
+module.exports = startup;
