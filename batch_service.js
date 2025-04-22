@@ -246,8 +246,9 @@ class BatchService {
           params.updated_since = updatedSinceParam;
         }
         
-        // FIXED: Using the correct API endpoint from Picqer documentation
-        const response = await this.apiClient.get('/api/v1/picklists/batches', { params });
+        // FIXED: Using the correct endpoint with plural "picklists" instead of singular "picklist"
+        // Note: Since baseUrl already includes /api/v1, we don't include it in the path
+        const response = await this.apiClient.get('/picklists/batches', { params });
         
         if (response && Array.isArray(response) && response.length > 0) {
           // Filter out duplicates by idpicklist_batch
@@ -295,8 +296,9 @@ class BatchService {
     try {
       console.log(`Fetching details for batch ${idpicklist_batch}...`);
       
-      // FIXED: Using the correct API endpoint from Picqer documentation
-      const response = await this.apiClient.get(`/api/v1/picklists/batches/${idpicklist_batch}`);
+      // FIXED: Using the correct endpoint with plural "picklists" instead of singular "picklist"
+      // Note: Since baseUrl already includes /api/v1, we don't include it in the path
+      const response = await this.apiClient.get(`/picklists/batches/${idpicklist_batch}`);
       
       if (response) {
         console.log(`Retrieved details for batch ${idpicklist_batch}`);
