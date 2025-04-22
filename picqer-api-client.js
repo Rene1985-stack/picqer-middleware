@@ -31,7 +31,8 @@ class PicqerApiClient {
       headers: {
         'Authorization': `Basic ${Buffer.from(apiKey + ':').toString('base64')}`,
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'User-Agent': 'PicqerMiddleware (middleware@skapa-global.com)'
       }
     });
     
@@ -49,6 +50,31 @@ class PicqerApiClient {
     
     // Statistics
     this.requestCount = 0;
+    
+    // Add request interceptor for debugging
+    this.httpClient.interceptors.request.use(request => {
+      console.log('Making request to:', request.baseURL + request.url);
+      return request;
+    });
+    
+    // Add response interceptor for debugging
+    this.httpClient.interceptors.response.use(
+      response => {
+        console.log('Response status:', response.status);
+        return response;
+      },
+      error => {
+        console.error('Request failed:');
+        if (error.response) {
+          console.error('Response status:', error.response.status);
+        } else if (error.request) {
+          console.error('No response received');
+        } else {
+          console.error('Error message:', error.message);
+        }
+        return Promise.reject(error);
+      }
+    );
   }
 
   /**
