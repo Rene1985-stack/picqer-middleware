@@ -1,7 +1,7 @@
 const UserMetaService = require('./UserMetaService');
 const ProductMetaService = require('./ProductMetaService');
 const WarehouseMetaService = require('./WarehouseMetaService');
-const PicklistService = require('./picklist_service'); // Assuming this file is already present and working
+const PicklistService = require('./picklist-service'); // Assuming this file is already present and working
 
 async function startup(dbConfig) {
   try {
