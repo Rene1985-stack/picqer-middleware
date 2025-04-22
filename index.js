@@ -1,9 +1,8 @@
 /**
- * Enhanced index.js with rate limiting integration and improved database connection settings
+ * Enhanced index.js with date fixing integration
  * 
  * This file provides a complete implementation that correctly imports
- * all required modules and integrates the rate limiting solution.
- * It also includes improved database connection settings to address Azure SQL timeout issues.
+ * all required modules and integrates the date fixing solution.
  */
 
 // Import required modules
@@ -20,6 +19,9 @@ const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
 const BatchService = require('./batch_service');
+
+// Import date fixer utility
+const DateFixer = require('./fix-dates');
 
 // Import API adapter with actual data sync implementation
 const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
@@ -86,6 +88,9 @@ const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
 const userService = new UserService(apiKey, baseUrl, dbConfig);
 const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
 const batchService = new BatchService(apiKey, baseUrl, dbConfig);
+
+// Initialize date fixer
+const dateFixer = new DateFixer(dbConfig);
 
 // Initialize API adapter with service instances
 initializeServices({
@@ -171,6 +176,19 @@ app.get('/api/status/database', async (req, res) => {
   }
 });
 
+// Add endpoint to fix dates manually
+app.get('/api/fix-dates', async (req, res) => {
+  try {
+    const result = await dateFixer.fixDates();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Dashboard route
 app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
@@ -183,6 +201,15 @@ app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
 async function initializeDatabase() {
   try {
     console.log('Initializing database...');
+    
+    // Fix dates in SyncStatus table
+    try {
+      const fixResult = await dateFixer.fixDates();
+      console.log('Date fix result:', fixResult);
+    } catch (fixError) {
+      console.error('Error fixing dates:', fixError.message);
+      // Continue initialization even if date fixing fails
+    }
     
     // Initialize product schema
     await picqerService.initializeDatabase().catch(err => {
