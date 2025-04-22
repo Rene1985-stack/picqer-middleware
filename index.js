@@ -11,8 +11,6 @@ const path = require('path');
 const cors = require('cors');
 const sql = require('mssql');
 require('dotenv').config();
-const startup = require('./startup'); // Injected meta-service init
-startup(dbConfig);
 
 
 // Import service classes with rate limiting
@@ -38,6 +36,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Enhanced database configuration with improved timeout settings
+const startup = require('./startup');
 const dbConfig = {
   server: process.env.SQL_SERVER,
   database: process.env.SQL_DATABASE,
@@ -59,6 +58,7 @@ const dbConfig = {
     }
   }
 };
+startup(dbConfig);
 
 // Picqer API configuration
 const apiKey = process.env.PICQER_API_KEY;
