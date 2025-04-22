@@ -2,7 +2,7 @@
  * Fixed Dashboard API Adapter
  * 
  * This file fixes the data handling issues in the dashboard by properly
- * handling the API response formats.
+ * handling the API response formats and adds event listeners for sync buttons.
  */
 
 // API endpoints definition
@@ -63,6 +63,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const fullSyncUsersBtn = document.getElementById('full-sync-users-btn');
     const syncSuppliersBtn = document.getElementById('sync-suppliers-btn');
     const fullSyncSuppliersBtn = document.getElementById('full-sync-suppliers-btn');
+    const syncBatchesBtn = document.getElementById('sync-batches-btn');
+    const fullSyncBatchesBtn = document.getElementById('full-sync-batches-btn');
     
     // Filter elements
     const filterOptions = document.querySelectorAll('#filter-options .filter-option');
@@ -81,7 +83,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(fetchStats, 60000); // Refresh stats every minute
     setInterval(fetchLogs, 10000); // Refresh logs every 10 seconds
     
-    // Set up event listeners
+    // Set up event listeners for entity tabs
     entityTabs.forEach(tab => {
         tab.addEventListener('click', () => {
             // Remove active class from all tabs
@@ -100,6 +102,146 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
+    
+    // Set up event listeners for sync buttons
+    // Main sync buttons
+    if (syncBtn) {
+        syncBtn.addEventListener('click', function() {
+            triggerSync(false);
+        });
+    }
+
+    if (fullSyncBtn) {
+        fullSyncBtn.addEventListener('click', function() {
+            triggerSync(true);
+        });
+    }
+
+    // Entity-specific sync buttons
+    if (syncProductsBtn) {
+        syncProductsBtn.addEventListener('click', function() {
+            triggerEntitySync('products', false);
+        });
+    }
+
+    if (fullSyncProductsBtn) {
+        fullSyncProductsBtn.addEventListener('click', function() {
+            triggerEntitySync('products', true);
+        });
+    }
+
+    if (syncPicklistsBtn) {
+        syncPicklistsBtn.addEventListener('click', function() {
+            triggerEntitySync('picklists', false);
+        });
+    }
+
+    if (fullSyncPicklistsBtn) {
+        fullSyncPicklistsBtn.addEventListener('click', function() {
+            triggerEntitySync('picklists', true);
+        });
+    }
+
+    if (syncWarehousesBtn) {
+        syncWarehousesBtn.addEventListener('click', function() {
+            triggerEntitySync('warehouses', false);
+        });
+    }
+
+    if (fullSyncWarehousesBtn) {
+        fullSyncWarehousesBtn.addEventListener('click', function() {
+            triggerEntitySync('warehouses', true);
+        });
+    }
+
+    if (syncUsersBtn) {
+        syncUsersBtn.addEventListener('click', function() {
+            triggerEntitySync('users', false);
+        });
+    }
+
+    if (fullSyncUsersBtn) {
+        fullSyncUsersBtn.addEventListener('click', function() {
+            triggerEntitySync('users', true);
+        });
+    }
+
+    if (syncSuppliersBtn) {
+        syncSuppliersBtn.addEventListener('click', function() {
+            triggerEntitySync('suppliers', false);
+        });
+    }
+
+    if (fullSyncSuppliersBtn) {
+        fullSyncSuppliersBtn.addEventListener('click', function() {
+            triggerEntitySync('suppliers', true);
+        });
+    }
+
+    if (syncBatchesBtn) {
+        syncBatchesBtn.addEventListener('click', function() {
+            triggerEntitySync('batches', false);
+        });
+    }
+
+    if (fullSyncBatchesBtn) {
+        fullSyncBatchesBtn.addEventListener('click', function() {
+            triggerEntitySync('batches', true);
+        });
+    }
+
+    // Set up event listener for clear logs button
+    if (clearLogsBtn) {
+        clearLogsBtn.addEventListener('click', clearLogs);
+    }
+
+    // Set up event listeners for filter options
+    filterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove active class from all options
+            filterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
+            option.classList.add('active');
+            
+            // Apply filter
+            const filterType = option.getAttribute('data-filter');
+            // Implement filter logic here
+        });
+    });
+
+    historyFilterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove active class from all options
+            historyFilterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
+            option.classList.add('active');
+            
+            // Apply filter
+            const filterType = option.getAttribute('data-filter');
+            fetchHistory();
+        });
+    });
+
+    logsFilterOptions.forEach(option => {
+        option.addEventListener('click', () => {
+            // Remove active class from all options
+            logsFilterOptions.forEach(o => o.classList.remove('active'));
+            // Add active class to clicked option
+            option.classList.add('active');
+            
+            // Apply filter
+            const filterType = option.getAttribute('data-filter');
+            filterLogs(filterType);
+        });
+    });
+
+    // Set up event listener for email form
+    if (emailForm) {
+        emailForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            saveEmailSettings();
+        });
+    }
     
     // Helper function to format dates
     function formatDate(date) {
@@ -255,6 +397,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateEntityStats('warehouses', safeGet(stats, 'warehouses', {}));
                 updateEntityStats('users', safeGet(stats, 'users', {}));
                 updateEntityStats('suppliers', safeGet(stats, 'suppliers', {}));
+                updateEntityStats('batches', safeGet(stats, 'batches', {}));
                 
                 // Update sync progress if available
                 if (syncProgressBar && data.syncProgress) {
@@ -284,6 +427,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateEntityStats('warehouses', {});
                 updateEntityStats('users', {});
                 updateEntityStats('suppliers', {});
+                updateEntityStats('batches', {});
             });
     }
     
@@ -352,11 +496,19 @@ document.addEventListener('DOMContentLoaded', function() {
                                 syncStatus.appendChild(syncCount);
                             }
                             
-                            if (!item.success) {
+                            if (!item.success && item.error) {
+                                const errorText = document.createElement('span');
+                                errorText.className = 'sync-error-text';
+                                errorText.textContent = `: ${item.error}`;
+                                syncStatus.appendChild(errorText);
+                                
+                                // Add retry button
                                 const retryBtn = document.createElement('button');
                                 retryBtn.className = 'retry-btn';
                                 retryBtn.textContent = 'Retry';
-                                retryBtn.addEventListener('click', () => retrySync(item.sync_id));
+                                retryBtn.addEventListener('click', () => {
+                                    retrySync(item.sync_id);
+                                });
                                 syncStatus.appendChild(retryBtn);
                             }
                             
@@ -365,26 +517,16 @@ document.addEventListener('DOMContentLoaded', function() {
                             syncHistory.appendChild(syncItem);
                         });
                     } else {
-                        syncHistory.innerHTML = '<li class="sync-item"><span class="sync-time">No sync history available</span></li>';
+                        syncHistory.innerHTML = '<li class="sync-item"><span>No sync history available</span></li>';
                     }
                 }
             })
             .catch(error => {
                 console.error('Error fetching history:', error);
                 if (syncHistory) {
-                    syncHistory.innerHTML = `<li class="sync-item"><span class="sync-time">Error loading history: ${error.message}</span></li>`;
+                    syncHistory.innerHTML = `<li class="sync-item"><span class="sync-status sync-error">Error loading history: ${error.message}</span></li>`;
                 }
             });
-    }
-    
-    function filterSyncHistory(filterType) {
-        // Re-fetch history with the new filter
-        fetchHistory();
-    }
-    
-    function filterSyncHistoryByEntity(entityType) {
-        // Re-fetch history with the new entity filter
-        fetchHistory();
     }
     
     function loadEmailSettings() {
@@ -399,6 +541,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(data => {
                 console.log('Email settings response:', data);
                 
+                // Update form fields
                 const emailInput = document.getElementById('email');
                 const notifyErrorsCheckbox = document.getElementById('notify-errors');
                 const notifySyncCheckbox = document.getElementById('notify-sync');
@@ -409,398 +552,256 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .catch(error => {
                 console.error('Error loading email settings:', error);
-                // Don't show error in UI, just log to console
             });
     }
     
-    function triggerSync() {
-        console.log('Triggering sync for all entities...');
-        if (syncBtn) syncBtn.disabled = true;
-        
-        fetch(ENDPOINTS.sync, { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Sync response:', data);
-                
-                // Show success message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-success';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Sync started for all entities`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button after a delay
-                setTimeout(() => {
-                    if (syncBtn) syncBtn.disabled = false;
-                }, 2000);
-                
-                // Refresh data after a delay
-                setTimeout(() => {
-                    fetchStats();
-                    fetchHistory();
-                }, 5000);
-            })
-            .catch(error => {
-                console.error('Error triggering sync:', error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error triggering sync: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button
-                if (syncBtn) syncBtn.disabled = false;
-            });
-    }
-    
-    function triggerFullSync() {
-        console.log('Triggering full sync for all entities...');
-        if (fullSyncBtn) fullSyncBtn.disabled = true;
-        
-        fetch(ENDPOINTS.fullSync, { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Full sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Full sync response:', data);
-                
-                // Show success message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-success';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Full sync started for all entities`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button after a delay
-                setTimeout(() => {
-                    if (fullSyncBtn) fullSyncBtn.disabled = false;
-                }, 2000);
-                
-                // Refresh data after a delay
-                setTimeout(() => {
-                    fetchStats();
-                    fetchHistory();
-                }, 5000);
-            })
-            .catch(error => {
-                console.error('Error triggering full sync:', error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error triggering full sync: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button
-                if (fullSyncBtn) fullSyncBtn.disabled = false;
-            });
-    }
-    
-    function triggerEntitySync(entityType) {
-        console.log(`Triggering sync for ${entityType}...`);
-        const syncBtn = document.getElementById(`sync-${entityType}-btn`);
-        if (syncBtn) syncBtn.disabled = true;
-        
-        fetch(ENDPOINTS.syncEntity(entityType), { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`${entityType} sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log(`${entityType} sync response:`, data);
-                
-                // Show success message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-success';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Sync started for ${entityType}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button after a delay
-                setTimeout(() => {
-                    if (syncBtn) syncBtn.disabled = false;
-                }, 2000);
-                
-                // Refresh data after a delay
-                setTimeout(() => {
-                    fetchStats();
-                    fetchHistory();
-                }, 5000);
-            })
-            .catch(error => {
-                console.error(`Error triggering ${entityType} sync:`, error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error triggering ${entityType} sync: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button
-                if (syncBtn) syncBtn.disabled = false;
-            });
-    }
-    
-    function triggerEntityFullSync(entityType) {
-        console.log(`Triggering full sync for ${entityType}...`);
-        const fullSyncBtn = document.getElementById(`full-sync-${entityType}-btn`);
-        if (fullSyncBtn) fullSyncBtn.disabled = true;
-        
-        fetch(ENDPOINTS.syncEntity(entityType, true), { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`${entityType} full sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log(`${entityType} full sync response:`, data);
-                
-                // Show success message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-success';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Full sync started for ${entityType}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button after a delay
-                setTimeout(() => {
-                    if (fullSyncBtn) fullSyncBtn.disabled = false;
-                }, 2000);
-                
-                // Refresh data after a delay
-                setTimeout(() => {
-                    fetchStats();
-                    fetchHistory();
-                }, 5000);
-            })
-            .catch(error => {
-                console.error(`Error triggering ${entityType} full sync:`, error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error triggering ${entityType} full sync: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button
-                if (fullSyncBtn) fullSyncBtn.disabled = false;
-            });
-    }
-    
-    function retrySync(syncId) {
-        console.log(`Retrying sync ${syncId}...`);
-        
-        fetch(ENDPOINTS.retrySync(syncId), { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Retry sync failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Retry sync response:', data);
-                
-                // Show success message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-success';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Retry started for sync ${syncId}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Refresh data after a delay
-                setTimeout(() => {
-                    fetchStats();
-                    fetchHistory();
-                }, 5000);
-            })
-            .catch(error => {
-                console.error('Error retrying sync:', error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error retrying sync: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-            });
-    }
-    
-    function clearLogs() {
-        console.log('Clearing logs...');
-        if (clearLogsBtn) clearLogsBtn.disabled = true;
-        
-        fetch(ENDPOINTS.clearLogs, { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Clear logs failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Clear logs response:', data);
-                
-                // Clear logs container
-                if (logContainer) {
-                    logContainer.innerHTML = '<div class="log-entry log-success">Logs cleared successfully</div>';
-                }
-                
-                // Re-enable button
-                if (clearLogsBtn) clearLogsBtn.disabled = false;
-            })
-            .catch(error => {
-                console.error('Error clearing logs:', error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error clearing logs: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-                
-                // Re-enable button
-                if (clearLogsBtn) clearLogsBtn.disabled = false;
-            });
-    }
-    
-    function saveEmailSettings(event) {
-        event.preventDefault();
+    function saveEmailSettings() {
         console.log('Saving email settings...');
         
         const emailInput = document.getElementById('email');
         const notifyErrorsCheckbox = document.getElementById('notify-errors');
         const notifySyncCheckbox = document.getElementById('notify-sync');
         
-        const email = emailInput ? emailInput.value : '';
-        const notifyErrors = notifyErrorsCheckbox ? notifyErrorsCheckbox.checked : false;
-        const notifySync = notifySyncCheckbox ? notifySyncCheckbox.checked : false;
+        const settings = {
+            email: emailInput ? emailInput.value : '',
+            notifyErrors: notifyErrorsCheckbox ? notifyErrorsCheckbox.checked : false,
+            notifySync: notifySyncCheckbox ? notifySyncCheckbox.checked : false
+        };
         
         fetch(ENDPOINTS.email, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                email,
-                notifyErrors,
-                notifySync
-            })
+            body: JSON.stringify(settings)
         })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Save email settings failed: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Save email settings response:', data);
-                
-                // Show success message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-success';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Email settings saved successfully`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-            })
-            .catch(error => {
-                console.error('Error saving email settings:', error);
-                
-                // Show error message
-                if (logContainer) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-error';
-                    logEntry.textContent = `[${new Date().toLocaleString()}] Error saving email settings: ${error.message}`;
-                    logContainer.appendChild(logEntry);
-                    logContainer.scrollTop = logContainer.scrollHeight;
-                }
-            });
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Save email settings failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Save email settings response:', data);
+            
+            // Show success message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-success';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Email settings saved successfully`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        })
+        .catch(error => {
+            console.error('Error saving email settings:', error);
+            
+            // Show error message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-error';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Error saving email settings: ${error.message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        });
     }
     
-    // Add event listeners for sync buttons
-    if (syncBtn) syncBtn.addEventListener('click', triggerSync);
-    if (fullSyncBtn) fullSyncBtn.addEventListener('click', triggerFullSync);
-    if (clearLogsBtn) clearLogsBtn.addEventListener('click', clearLogs);
-    if (emailForm) emailForm.addEventListener('submit', saveEmailSettings);
-    
-    // Entity-specific sync buttons
-    if (syncProductsBtn) syncProductsBtn.addEventListener('click', () => triggerEntitySync('products'));
-    if (fullSyncProductsBtn) fullSyncProductsBtn.addEventListener('click', () => triggerEntityFullSync('products'));
-    if (syncPicklistsBtn) syncPicklistsBtn.addEventListener('click', () => triggerEntitySync('picklists'));
-    if (fullSyncPicklistsBtn) fullSyncPicklistsBtn.addEventListener('click', () => triggerEntityFullSync('picklists'));
-    if (syncWarehousesBtn) syncWarehousesBtn.addEventListener('click', () => triggerEntitySync('warehouses'));
-    if (fullSyncWarehousesBtn) fullSyncWarehousesBtn.addEventListener('click', () => triggerEntityFullSync('warehouses'));
-    if (syncUsersBtn) syncUsersBtn.addEventListener('click', () => triggerEntitySync('users'));
-    if (fullSyncUsersBtn) fullSyncUsersBtn.addEventListener('click', () => triggerEntityFullSync('users'));
-    if (syncSuppliersBtn) syncSuppliersBtn.addEventListener('click', () => triggerEntitySync('suppliers'));
-    if (fullSyncSuppliersBtn) fullSyncSuppliersBtn.addEventListener('click', () => triggerEntityFullSync('suppliers'));
-    
-    // Filter options
-    filterOptions.forEach(option => {
-        option.addEventListener('click', () => {
-            filterOptions.forEach(o => o.classList.remove('active'));
-            option.classList.add('active');
+    function clearLogs() {
+        console.log('Clearing logs...');
+        fetch(ENDPOINTS.clearLogs, {
+            method: 'POST'
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Clear logs failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Clear logs response:', data);
             
-            const filterType = option.getAttribute('data-filter');
-            filterSyncHistory(filterType);
-        });
-    });
-    
-    historyFilterOptions.forEach(option => {
-        option.addEventListener('click', () => {
-            historyFilterOptions.forEach(o => o.classList.remove('active'));
-            option.classList.add('active');
+            // Clear log container
+            if (logContainer) {
+                logContainer.innerHTML = '<div class="log-entry log-success">Logs cleared successfully</div>';
+            }
             
-            const entityType = option.getAttribute('data-filter');
-            filterSyncHistoryByEntity(entityType);
-        });
-    });
-    
-    logsFilterOptions.forEach(option => {
-        option.addEventListener('click', () => {
-            logsFilterOptions.forEach(o => o.classList.remove('active'));
-            option.classList.add('active');
+            // Refresh logs after a delay
+            setTimeout(fetchLogs, 1000);
+        })
+        .catch(error => {
+            console.error('Error clearing logs:', error);
             
-            const filterType = option.getAttribute('data-filter');
-            filterLogs(filterType);
+            // Show error message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-error';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Error clearing logs: ${error.message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
         });
-    });
+    }
+    
+    function retrySync(syncId) {
+        console.log(`Retrying sync ${syncId}...`);
+        fetch(ENDPOINTS.retrySync(syncId), {
+            method: 'POST'
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Retry sync failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Retry sync response:', data);
+            
+            // Show success message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-success';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Retry of sync ${syncId} started successfully`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+            
+            // Refresh history after a delay
+            setTimeout(fetchHistory, 2000);
+        })
+        .catch(error => {
+            console.error('Error retrying sync:', error);
+            
+            // Show error message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-error';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Error retrying sync: ${error.message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        });
+    }
+    
+    // Function to trigger sync for all entities
+    function triggerSync(fullSync) {
+        console.log(`Triggering ${fullSync ? 'full' : 'incremental'} sync for all entities...`);
+        
+        // Disable sync buttons during sync
+        if (syncBtn) syncBtn.disabled = true;
+        if (fullSyncBtn) fullSyncBtn.disabled = true;
+        
+        // Show sync in progress
+        if (syncProgressBar) syncProgressBar.style.width = '5%'; // Start progress
+        
+        fetch(fullSync ? ENDPOINTS.fullSync : ENDPOINTS.sync, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Sync failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Sync response:', data);
+            
+            // Show success message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-success';
+                logEntry.textContent = `[${new Date().toLocaleString()}] ${fullSync ? 'Full' : 'Incremental'} sync started for all entities`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+            
+            // Refresh stats and history after a delay to allow sync to progress
+            setTimeout(() => {
+                fetchStats();
+                fetchHistory();
+                fetchLogs();
+            }, 2000);
+        })
+        .catch(error => {
+            console.error('Error triggering sync:', error);
+            
+            // Show error message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-error';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Error triggering sync: ${error.message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        })
+        .finally(() => {
+            // Re-enable sync buttons
+            if (syncBtn) syncBtn.disabled = false;
+            if (fullSyncBtn) fullSyncBtn.disabled = false;
+        });
+    }
+
+    // Function to trigger sync for a specific entity
+    function triggerEntitySync(entityType, fullSync) {
+        console.log(`Triggering ${fullSync ? 'full' : 'incremental'} sync for ${entityType}...`);
+        
+        // Disable entity-specific sync buttons during sync
+        const syncEntityBtn = document.getElementById(`sync-${entityType}-btn`);
+        const fullSyncEntityBtn = document.getElementById(`full-sync-${entityType}-btn`);
+        
+        if (syncEntityBtn) syncEntityBtn.disabled = true;
+        if (fullSyncEntityBtn) fullSyncEntityBtn.disabled = true;
+        
+        fetch(ENDPOINTS.syncEntity(entityType, fullSync), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`${entityType} sync failed: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log(`${entityType} sync response:`, data);
+            
+            // Show success message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-success';
+                logEntry.textContent = `[${new Date().toLocaleString()}] ${fullSync ? 'Full' : 'Incremental'} sync started for ${entityType}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+            
+            // Refresh stats and history after a delay to allow sync to progress
+            setTimeout(() => {
+                fetchStats();
+                fetchHistory();
+                fetchLogs();
+            }, 2000);
+        })
+        .catch(error => {
+            console.error(`Error triggering ${entityType} sync:`, error);
+            
+            // Show error message
+            if (logContainer) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry log-error';
+                logEntry.textContent = `[${new Date().toLocaleString()}] Error triggering ${entityType} sync: ${error.message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        })
+        .finally(() => {
+            // Re-enable entity-specific sync buttons
+            if (syncEntityBtn) syncEntityBtn.disabled = false;
+            if (fullSyncEntityBtn) fullSyncEntityBtn.disabled = false;
+        });
+    }
 });
