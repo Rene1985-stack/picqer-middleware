@@ -11,6 +11,8 @@ const path = require('path');
 const cors = require('cors');
 const sql = require('mssql');
 require('dotenv').config();
+require('./startup'); // Initializes database schema and sync status
+
 
 // Import service classes with rate limiting
 const PicqerService = require('./picqer-service');
