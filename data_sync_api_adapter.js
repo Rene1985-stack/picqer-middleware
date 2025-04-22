@@ -527,80 +527,47 @@ router.get('/batches/metrics', async (req, res) => {
       throw new Error('BatchService not initialized');
     }
     
-    // Get batch count
-    const totalCount = await safeMethodCall(BatchService, 'getCount', 0);
+    // Get real batch count if available
+    const batchCount = await safeMethodCall(BatchService, 'getCount', 0);
     
-    // Get last sync date
-    const lastSyncDate = await safeMethodCall(BatchService, 'getLastBatchSyncDate', null);
+    // Get last sync date if available
+    const lastSyncDate = await safeMethodCall(BatchService, 'getLastSyncDate', new Date().toISOString());
     
-    // Calculate success rate (this would typically come from your database)
-    // For now, we'll use a placeholder value
-    const successRate = 95; // 95% success rate
+    // Sample metrics data - replace with real data when available
+    const metrics = {
+      totalBatches: batchCount,
+      lastSyncDate: lastSyncDate,
+      successRate: 95, // percentage
+      averageSyncTime: 120, // seconds
+      batchesPerDay: 25,
+      syncHistory: [
+        { date: '2025-04-15', success: 20, failed: 1 },
+        { date: '2025-04-16', success: 22, failed: 0 },
+        { date: '2025-04-17', success: 18, failed: 2 },
+        { date: '2025-04-18', success: 25, failed: 1 },
+        { date: '2025-04-19', success: 30, failed: 0 },
+        { date: '2025-04-20', success: 28, failed: 1 },
+        { date: '2025-04-21', success: 24, failed: 0 }
+      ]
+    };
     
-    // Calculate average sync time (placeholder)
-    const avgSyncTime = 120; // 2 minutes
-    
-    // Calculate batches per day (placeholder)
-    const batchesPerDay = Math.round(totalCount / 30); // Assuming data for last 30 days
-    
-    // Calculate error rate (placeholder)
-    const errorRate = 100 - successRate;
-    
-    // Calculate average batch size (placeholder)
-    const avgBatchSize = 25; // 25 items per batch
-    
-    // Calculate completed batches (placeholder)
-    const completedBatches = Math.round(totalCount * 0.8); // 80% completion rate
-    
-    // Generate sync history data for the chart
-    const syncHistory = [];
-    const now = new Date();
-    
-    // Generate data for the last 7 days
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      
-      // Generate random success count (between 5 and 20)
-      const successCount = Math.floor(Math.random() * 16) + 5;
-      
-      // Generate random error count (between 0 and 3)
-      const errorCount = Math.floor(Math.random() * 4);
-      
-      // Add success entry
-      syncHistory.push({
-        timestamp: date.toISOString(),
-        success: true,
-        count: successCount
-      });
-      
-      // Add error entry if there were errors
-      if (errorCount > 0) {
-        syncHistory.push({
-          timestamp: date.toISOString(),
-          success: false,
-          count: errorCount
-        });
-      }
-    }
-    
-    // Return metrics data
     res.json({
       success: true,
-      successRate,
-      avgSyncTime,
-      batchesPerDay,
-      errorRate,
-      avgBatchSize,
-      completedBatches,
-      syncHistory,
-      totalCount
+      metrics
     });
   } catch (error) {
-    console.error('Error in batch metrics endpoint:', error);
+    console.error('Error in batches metrics endpoint:', error);
     res.status(500).json({
       success: false,
-      error: `Error fetching batch metrics: ${error.message}`
+      error: error.message,
+      metrics: {
+        totalBatches: 0,
+        lastSyncDate: new Date().toISOString(),
+        successRate: 0,
+        averageSyncTime: 0,
+        batchesPerDay: 0,
+        syncHistory: []
+      }
     });
   }
 });
@@ -610,57 +577,52 @@ router.get('/batches/productivity', async (req, res) => {
   try {
     console.log('Fetching batch productivity...');
     
-    // Get batch service instance
-    if (!BatchService) {
-      throw new Error('BatchService not initialized');
-    }
+    // Sample productivity data - replace with real data when available
+    const productivity = {
+      picker: {
+        average: 120, // items per hour
+        trend: [
+          { date: '2025-04-15', value: 115 },
+          { date: '2025-04-16', value: 118 },
+          { date: '2025-04-17', value: 122 },
+          { date: '2025-04-18', value: 125 },
+          { date: '2025-04-19', value: 121 },
+          { date: '2025-04-20', value: 119 },
+          { date: '2025-04-21', value: 120 }
+        ]
+      },
+      packer: {
+        average: 150, // items per hour
+        trend: [
+          { date: '2025-04-15', value: 145 },
+          { date: '2025-04-16', value: 148 },
+          { date: '2025-04-17', value: 152 },
+          { date: '2025-04-18', value: 155 },
+          { date: '2025-04-19', value: 151 },
+          { date: '2025-04-20', value: 149 },
+          { date: '2025-04-21', value: 150 }
+        ]
+      }
+    };
     
-    // In a real implementation, you would call BatchService.getBatchProductivityMetrics()
-    // For now, we'll generate placeholder data
-    
-    // Generate time series data for the charts
-    const timeData = [];
-    const now = new Date();
-    
-    // Generate data for the last 14 days
-    for (let i = 13; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      
-      // Generate random picker productivity (between 50 and 150 items per hour)
-      const pickerData = Math.floor(Math.random() * 101) + 50;
-      
-      // Generate random packer productivity (between 40 and 120 items per hour)
-      const packerData = Math.floor(Math.random() * 81) + 40;
-      
-      timeData.push({
-        date: date.toISOString(),
-        pickerData,
-        packerData
-      });
-    }
-    
-    // Return productivity data
     res.json({
       success: true,
-      productivity: {
-        pickerProductivity: 85.5, // Average items per hour
-        packerProductivity: 65.2, // Average items per hour
-        avgPickingTime: 45, // Average seconds per item
-        avgPackingTime: 60, // Average seconds per item
-        timeData
-      }
+      productivity
     });
   } catch (error) {
-    console.error('Error in batch productivity endpoint:', error);
+    console.error('Error in batches productivity endpoint:', error);
     res.status(500).json({
       success: false,
-      error: `Error fetching batch productivity: ${error.message}`
+      error: error.message,
+      productivity: {
+        picker: { average: 0, trend: [] },
+        packer: { average: 0, trend: [] }
+      }
     });
   }
 });
 
-// Batch stats endpoint - provides basic stats for the batches tab
+// Batch stats endpoint - provides basic stats for batches tab
 router.get('/batches/stats', async (req, res) => {
   try {
     console.log('Fetching batch stats...');
@@ -670,33 +632,42 @@ router.get('/batches/stats', async (req, res) => {
       throw new Error('BatchService not initialized');
     }
     
-    // Get batch count
-    const totalCount = await safeMethodCall(BatchService, 'getCount', 0);
+    // Get real batch count if available
+    const batchCount = await safeMethodCall(BatchService, 'getCount', 0);
     
-    // Get last sync date
-    const lastSyncDate = await safeMethodCall(BatchService, 'getLastBatchSyncDate', null);
+    // Get last sync date if available
+    const lastSyncDate = await safeMethodCall(BatchService, 'getLastSyncDate', new Date().toISOString());
     
-    // Return stats data
+    // Sample stats data - replace with real data when available
+    const stats = {
+      totalCount: batchCount,
+      lastSyncDate: lastSyncDate,
+      status: 'Ready',
+      lastSyncCount: 25,
+      pendingCount: 5,
+      completedCount: batchCount - 5
+    };
+    
     res.json({
       success: true,
-      stats: {
-        totalCount,
-        lastSyncDate: lastSyncDate ? lastSyncDate.toISOString() : new Date().toISOString(),
-        status: 'Ready',
-        lastSyncCount: Math.floor(Math.random() * 51) + 10, // Random number between 10 and 60
-        syncProgress: null
-      }
+      stats
     });
   } catch (error) {
-    console.error('Error in batch stats endpoint:', error);
+    console.error('Error in batches stats endpoint:', error);
     res.status(500).json({
       success: false,
-      error: `Error fetching batch stats: ${error.message}`
+      error: error.message,
+      stats: {
+        totalCount: 0,
+        lastSyncDate: new Date().toISOString(),
+        status: 'Error',
+        lastSyncCount: 0,
+        pendingCount: 0,
+        completedCount: 0
+      }
     });
   }
 });
 
-module.exports = {
-  router,
-  initializeServices
-};
+// Export both the router and the initializeServices function
+module.exports = { router, initializeServices };
