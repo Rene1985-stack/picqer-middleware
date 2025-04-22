@@ -12,7 +12,7 @@
  */
 
 const axios = require('axios');
-const PicqerRateLimiter = require('./picqer-rate-limiter');
+const PicqerRateLimiter = require('./updated-picqer-rate-limiter');
 
 class PicqerApiClient {
   /**
