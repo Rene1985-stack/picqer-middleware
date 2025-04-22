@@ -18,7 +18,7 @@ const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
-const BatchService = require('./batch_service');
+const BatchService = require('./updated-batch_service');  // Using updated filename
 
 // Import API adapter with actual data sync implementation
 const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
