@@ -209,14 +209,82 @@ class PicqerService {
       await pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
       console.log('✅ Created SyncProgress table for resumable sync functionality');
       
-      // Ensure all expanded product columns exist
-      await this.ensureProductColumnsExist();
+      // Implementation of the missing ensureProductColumnsExist method
+      await this.ensureProductColumnsExist(pool);
       
       console.log('✅ Database initialized successfully with expanded schema');
       return true;
     } catch (error) {
       console.error('❌ Error initializing database:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Ensure all expanded product columns exist in the Products table
+   * @param {sql.ConnectionPool} [pool] - SQL connection pool
+   * @returns {Promise<void>}
+   */
+  async ensureProductColumnsExist(existingPool = null) {
+    try {
+      console.log('Ensuring all product columns exist...');
+      const pool = existingPool || await sql.connect(this.sqlConfig);
+      
+      // Define all columns that should exist in the Products table
+      const requiredColumns = [
+        { name: 'id', type: 'INT' },
+        { name: 'idproduct', type: 'INT' },
+        { name: 'productcode', type: 'NVARCHAR(100)' },
+        { name: 'name', type: 'NVARCHAR(255)' },
+        { name: 'price', type: 'DECIMAL(18,2)' },
+        { name: 'stock', type: 'INT' },
+        { name: 'created', type: 'DATETIME' },
+        { name: 'updated', type: 'DATETIME' },
+        { name: 'last_sync_date', type: 'DATETIME' },
+        // Add any additional columns you need here
+        { name: 'barcode', type: 'NVARCHAR(100)' },
+        { name: 'supplier_code', type: 'NVARCHAR(100)' },
+        { name: 'ean', type: 'NVARCHAR(100)' },
+        { name: 'sku', type: 'NVARCHAR(100)' },
+        { name: 'weight', type: 'DECIMAL(18,2)' },
+        { name: 'stock_minimum', type: 'INT' },
+        { name: 'stock_maximum', type: 'INT' },
+        { name: 'purchase_price', type: 'DECIMAL(18,2)' }
+      ];
+      
+      // Check which columns already exist
+      const columnsResult = await pool.request().query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'Products'
+      `);
+      
+      const existingColumns = columnsResult.recordset.map(row => row.COLUMN_NAME.toLowerCase());
+      
+      // Add missing columns
+      for (const column of requiredColumns) {
+        if (!existingColumns.includes(column.name.toLowerCase())) {
+          console.log(`Adding column ${column.name} to Products table...`);
+          try {
+            await pool.request().query(`
+              ALTER TABLE Products 
+              ADD ${column.name} ${column.type} NULL
+            `);
+            console.log(`✅ Added column ${column.name} to Products table`);
+          } catch (error) {
+            console.warn(`⚠️ Error adding column ${column.name}:`, error.message);
+            // Continue with other columns even if one fails
+          }
+        } else {
+          console.log(`Column ${column.name} already exists in Products table`);
+        }
+      }
+      
+      console.log('✅ Ensured all product columns exist');
+    } catch (error) {
+      console.error('❌ Error ensuring product columns exist:', error.message);
+      // Don't throw the error to allow initialization to continue
+      console.log('Continuing with initialization despite column check error');
     }
   }
 
