@@ -6,7 +6,7 @@
  */
 
 const sql = require('mssql');
-const PicqerApiClient = require('./picqer-api-client');
+const PicqerApiClient = require('./updated-picqer-api-client');
 
 class BatchService {
     /**
@@ -384,6 +384,7 @@ class BatchService {
             
             return {
                 success: false,
+                syncId,
                 error: error.message,
                 message: `Batch sync failed: ${error.message}`
             };
@@ -391,23 +392,46 @@ class BatchService {
     }
 
     /**
+     * Update sync progress
+     * @param {string} syncId - Sync ID
+     * @param {number} processedCount - Number of processed batches
+     * @param {number} totalCount - Total number of batches
+     * @returns {Promise<void>}
+     * @private
+     */
+    async updateSyncProgress(syncId, processedCount, totalCount) {
+        try {
+            await this.pool.request()
+                .input('syncId', sql.NVarChar, syncId)
+                .input('processedCount', sql.Int, processedCount)
+                .input('totalCount', sql.Int, totalCount)
+                .query(`
+                    UPDATE SyncProgress
+                    SET processed_count = @processedCount,
+                        total_count = @totalCount
+                    WHERE sync_id = @syncId
+                `);
+        } catch (error) {
+            console.error('Error updating sync progress:', error.message);
+        }
+    }
+
+    /**
      * Fetch batches from Picqer API
-     * @returns {Promise<Array>} - Array of batches
+     * @returns {Promise<Array>} - Array of batch objects
+     * @private
      */
     async fetchBatchesFromPicqer() {
         try {
-            console.log('Fetching batches from Picqer API...');
+            // Get all batches from Picqer API
+            const response = await this.apiClient.get('/picklistbatches');
             
-            // Make API call to Picqer to get all batches
-            const response = await this.apiClient.get('/picklists/batches');
-            
-            if (!Array.isArray(response)) {
-                console.error('Invalid response from Picqer API:', response);
+            if (!response || !response.data) {
+                console.error('Invalid response from Picqer API');
                 return [];
             }
             
-            console.log(`Received ${response.length} batches from Picqer API`);
-            return response;
+            return response.data;
         } catch (error) {
             console.error('Error fetching batches from Picqer:', error.message);
             throw error;
@@ -415,29 +439,14 @@ class BatchService {
     }
 
     /**
-     * Process a batch and save it to the database
-     * @param {Object} batch - Batch data from Picqer
+     * Process a batch from Picqer
+     * @param {Object} batch - Batch object from Picqer
      * @returns {Promise<void>}
+     * @private
      */
     async processBatch(batch) {
         try {
             await this.initializePool();
-            
-            // Extract assigned_to and completed_by information
-            let assignedToIdUser = null;
-            let assignedToName = null;
-            let completedByIdUser = null;
-            let completedByName = null;
-            
-            if (batch.assigned_to) {
-                assignedToIdUser = batch.assigned_to.iduser;
-                assignedToName = batch.assigned_to.full_name;
-            }
-            
-            if (batch.completed_by) {
-                completedByIdUser = batch.completed_by.iduser;
-                completedByName = batch.completed_by.full_name;
-            }
             
             // Check if batch already exists
             const existingBatch = await this.pool.request()
@@ -448,6 +457,8 @@ class BatchService {
                     WHERE idpicklist_batch = @idpicklist_batch
                 `);
             
+            const now = new Date();
+            
             if (existingBatch.recordset.length > 0) {
                 // Update existing batch
                 await this.pool.request()
@@ -456,16 +467,16 @@ class BatchService {
                     .input('idwarehouse', sql.Int, batch.idwarehouse)
                     .input('type', sql.NVarChar, batch.type)
                     .input('status', sql.NVarChar, batch.status)
-                    .input('assigned_to_iduser', sql.Int, assignedToIdUser)
-                    .input('assigned_to_name', sql.NVarChar, assignedToName)
-                    .input('completed_by_iduser', sql.Int, completedByIdUser)
-                    .input('completed_by_name', sql.NVarChar, completedByName)
+                    .input('assigned_to_iduser', sql.Int, batch.assigned_to_iduser)
+                    .input('assigned_to_name', sql.NVarChar, batch.assigned_to_name)
+                    .input('completed_by_iduser', sql.Int, batch.completed_by_iduser)
+                    .input('completed_by_name', sql.NVarChar, batch.completed_by_name)
                     .input('total_products', sql.Int, batch.total_products)
                     .input('total_picklists', sql.Int, batch.total_picklists)
                     .input('completed_at', sql.DateTime, batch.completed_at ? new Date(batch.completed_at) : null)
                     .input('created_at', sql.DateTime, batch.created_at ? new Date(batch.created_at) : null)
                     .input('updated_at', sql.DateTime, batch.updated_at ? new Date(batch.updated_at) : null)
-                    .input('last_sync_date', sql.DateTime, new Date())
+                    .input('last_sync_date', sql.DateTime, now)
                     .query(`
                         UPDATE Batches
                         SET picklist_batchid = @picklist_batchid,
@@ -492,16 +503,16 @@ class BatchService {
                     .input('idwarehouse', sql.Int, batch.idwarehouse)
                     .input('type', sql.NVarChar, batch.type)
                     .input('status', sql.NVarChar, batch.status)
-                    .input('assigned_to_iduser', sql.Int, assignedToIdUser)
-                    .input('assigned_to_name', sql.NVarChar, assignedToName)
-                    .input('completed_by_iduser', sql.Int, completedByIdUser)
-                    .input('completed_by_name', sql.NVarChar, completedByName)
+                    .input('assigned_to_iduser', sql.Int, batch.assigned_to_iduser)
+                    .input('assigned_to_name', sql.NVarChar, batch.assigned_to_name)
+                    .input('completed_by_iduser', sql.Int, batch.completed_by_iduser)
+                    .input('completed_by_name', sql.NVarChar, batch.completed_by_name)
                     .input('total_products', sql.Int, batch.total_products)
                     .input('total_picklists', sql.Int, batch.total_picklists)
                     .input('completed_at', sql.DateTime, batch.completed_at ? new Date(batch.completed_at) : null)
                     .input('created_at', sql.DateTime, batch.created_at ? new Date(batch.created_at) : null)
                     .input('updated_at', sql.DateTime, batch.updated_at ? new Date(batch.updated_at) : null)
-                    .input('last_sync_date', sql.DateTime, new Date())
+                    .input('last_sync_date', sql.DateTime, now)
                     .query(`
                         INSERT INTO Batches (
                             idpicklist_batch, picklist_batchid, idwarehouse, type, status,
@@ -515,13 +526,6 @@ class BatchService {
                         )
                     `);
             }
-            
-            // Process picklists in the batch if available
-            if (batch.picklists && Array.isArray(batch.picklists)) {
-                for (const picklist of batch.picklists) {
-                    await this.updatePicklistBatchAssociation(picklist.idpicklist, batch.idpicklist_batch);
-                }
-            }
         } catch (error) {
             console.error(`Error processing batch ${batch.idpicklist_batch}:`, error.message);
             throw error;
@@ -529,290 +533,276 @@ class BatchService {
     }
 
     /**
-     * Update the batch association for a picklist
-     * @param {number} idpicklist - Picklist ID
-     * @param {number} idpicklist_batch - Batch ID
-     * @returns {Promise<void>}
+     * Get all batches with pagination
+     * @param {number} [page=1] - Page number
+     * @param {number} [limit=20] - Number of batches per page
+     * @param {string} [sortBy='created_at'] - Field to sort by
+     * @param {string} [sortOrder='desc'] - Sort order ('asc' or 'desc')
+     * @param {Object} [filters={}] - Filters to apply
+     * @returns {Promise<Object>} - Paginated batches
      */
-    async updatePicklistBatchAssociation(idpicklist, idpicklist_batch) {
+    async getBatches(page = 1, limit = 20, sortBy = 'created_at', sortOrder = 'desc', filters = {}) {
         try {
             await this.initializePool();
             
-            // Update the picklist with the batch ID
-            await this.pool.request()
-                .input('idpicklist', sql.Int, idpicklist)
-                .input('idpicklist_batch', sql.Int, idpicklist_batch)
-                .query(`
-                    UPDATE Picklists
-                    SET idpicklist_batch = @idpicklist_batch
-                    WHERE idpicklist = @idpicklist
-                `);
+            // Calculate offset
+            const offset = (page - 1) * limit;
+            
+            // Build WHERE clause for filters
+            let whereClause = '';
+            const filterParams = [];
+            
+            if (filters.status) {
+                whereClause += `${whereClause ? ' AND ' : ' WHERE '} status = @status`;
+                filterParams.push({ name: 'status', value: filters.status, type: sql.NVarChar });
+            }
+            
+            if (filters.type) {
+                whereClause += `${whereClause ? ' AND ' : ' WHERE '} type = @type`;
+                filterParams.push({ name: 'type', value: filters.type, type: sql.NVarChar });
+            }
+            
+            if (filters.assigned_to_iduser) {
+                whereClause += `${whereClause ? ' AND ' : ' WHERE '} assigned_to_iduser = @assigned_to_iduser`;
+                filterParams.push({ name: 'assigned_to_iduser', value: filters.assigned_to_iduser, type: sql.Int });
+            }
+            
+            // Build query
+            let query = `
+                SELECT *
+                FROM Batches
+                ${whereClause}
+                ORDER BY ${sortBy} ${sortOrder === 'asc' ? 'ASC' : 'DESC'}
+                OFFSET ${offset} ROWS
+                FETCH NEXT ${limit} ROWS ONLY
+            `;
+            
+            // Build count query
+            let countQuery = `
+                SELECT COUNT(*) AS total
+                FROM Batches
+                ${whereClause}
+            `;
+            
+            // Create request
+            let request = this.pool.request();
+            
+            // Add filter parameters
+            for (const param of filterParams) {
+                request.input(param.name, param.type, param.value);
+            }
+            
+            // Execute queries
+            const [batches, count] = await Promise.all([
+                request.query(query),
+                request.query(countQuery)
+            ]);
+            
+            // Calculate pagination info
+            const total = count.recordset[0].total;
+            const totalPages = Math.ceil(total / limit);
+            
+            return {
+                data: batches.recordset,
+                pagination: {
+                    total,
+                    page,
+                    limit,
+                    totalPages,
+                    hasNextPage: page < totalPages,
+                    hasPrevPage: page > 1
+                }
+            };
         } catch (error) {
-            console.error(`Error updating picklist ${idpicklist} batch association:`, error.message);
+            console.error('Error getting batches:', error.message);
+            throw error;
         }
     }
 
     /**
-     * Update sync progress
-     * @param {string} syncId - Sync ID
-     * @param {number} processedCount - Number of processed items
-     * @param {number} totalCount - Total number of items
-     * @returns {Promise<void>}
+     * Get a batch by ID
+     * @param {number} id - Batch ID
+     * @returns {Promise<Object>} - Batch object
      */
-    async updateSyncProgress(syncId, processedCount, totalCount) {
+    async getBatchById(id) {
         try {
-            await this.pool.request()
-                .input('syncId', sql.NVarChar, syncId)
-                .input('processedCount', sql.Int, processedCount)
-                .input('totalCount', sql.Int, totalCount)
+            await this.initializePool();
+            
+            const result = await this.pool.request()
+                .input('id', sql.Int, id)
                 .query(`
-                    UPDATE SyncProgress
-                    SET processed_count = @processedCount,
-                        total_count = @totalCount
-                    WHERE sync_id = @syncId
+                    SELECT *
+                    FROM Batches
+                    WHERE id = @id
                 `);
+            
+            if (result.recordset.length === 0) {
+                throw new Error(`Batch with ID ${id} not found`);
+            }
+            
+            return result.recordset[0];
         } catch (error) {
-            console.error('Error updating sync progress:', error.message);
+            console.error(`Error getting batch with ID ${id}:`, error.message);
+            throw error;
         }
     }
 
     /**
      * Get batch productivity metrics
-     * @param {number} [days=30] - Number of days to include in the metrics
      * @returns {Promise<Object>} - Productivity metrics
      */
-    async getProductivity(days = 30) {
+    async getProductivityMetrics() {
         try {
             await this.initializePool();
             
-            // Get completed batches in the time period
-            const completedBatchesResult = await this.pool.request()
-                .input('days', sql.Int, days)
-                .query(`
-                    SELECT COUNT(*) AS count,
-                           SUM(total_products) AS total_products
-                    FROM Batches
-                    WHERE completed_at >= DATEADD(day, -@days, GETDATE())
-                    AND status = 'completed'
-                `);
+            // Get picker productivity
+            const pickerResult = await this.pool.request().query(`
+                SELECT 
+                    assigned_to_name AS name,
+                    assigned_to_iduser AS id,
+                    COUNT(*) AS total_batches,
+                    SUM(total_products) AS total_products,
+                    SUM(total_picklists) AS total_picklists,
+                    AVG(DATEDIFF(MINUTE, created_at, completed_at)) AS avg_completion_time_minutes
+                FROM Batches
+                WHERE 
+                    assigned_to_iduser IS NOT NULL
+                    AND completed_at IS NOT NULL
+                    AND type = 'pick'
+                GROUP BY assigned_to_name, assigned_to_iduser
+                ORDER BY total_products DESC
+            `);
             
-            const completedBatches = completedBatchesResult.recordset[0].count || 0;
-            const totalProducts = completedBatchesResult.recordset[0].total_products || 0;
+            // Get packer productivity
+            const packerResult = await this.pool.request().query(`
+                SELECT 
+                    assigned_to_name AS name,
+                    assigned_to_iduser AS id,
+                    COUNT(*) AS total_batches,
+                    SUM(total_products) AS total_products,
+                    SUM(total_picklists) AS total_picklists,
+                    AVG(DATEDIFF(MINUTE, created_at, completed_at)) AS avg_completion_time_minutes
+                FROM Batches
+                WHERE 
+                    assigned_to_iduser IS NOT NULL
+                    AND completed_at IS NOT NULL
+                    AND type = 'pack'
+                GROUP BY assigned_to_name, assigned_to_iduser
+                ORDER BY total_products DESC
+            `);
             
-            // Calculate average batches per day
-            const avgBatchesPerDay = Math.max(1, Math.round(completedBatches / days));
-            
-            // Calculate average items per hour (assuming 8-hour workdays)
-            const workHours = days * 8;
-            const avgItemsPerHour = Math.round(totalProducts / workHours);
+            // Get overall metrics
+            const overallResult = await this.pool.request().query(`
+                SELECT 
+                    COUNT(*) AS total_batches,
+                    SUM(total_products) AS total_products,
+                    SUM(total_picklists) AS total_picklists,
+                    AVG(DATEDIFF(MINUTE, created_at, completed_at)) AS avg_completion_time_minutes
+                FROM Batches
+                WHERE completed_at IS NOT NULL
+            `);
             
             return {
-                picker_productivity: {
-                    average_items_per_hour: avgItemsPerHour,
-                    average_batches_per_day: avgBatchesPerDay,
-                    total_items_picked: totalProducts,
-                    total_batches_completed: completedBatches
-                },
-                packer_productivity: {
-                    average_items_per_hour: Math.round(avgItemsPerHour * 1.2), // Packers are typically faster
-                    average_batches_per_day: avgBatchesPerDay,
-                    total_items_packed: totalProducts,
-                    total_batches_completed: completedBatches
-                }
+                pickers: pickerResult.recordset,
+                packers: packerResult.recordset,
+                overall: overallResult.recordset[0]
             };
         } catch (error) {
-            console.error('Error getting batch productivity:', error.message);
+            console.error('Error getting productivity metrics:', error.message);
             
             // Return fallback data if there's an error
             return {
-                picker_productivity: {
-                    average_items_per_hour: 45,
-                    average_batches_per_day: 5,
-                    total_items_picked: 0,
-                    total_batches_completed: 0
-                },
-                packer_productivity: {
-                    average_items_per_hour: 60,
-                    average_batches_per_day: 5,
-                    total_items_packed: 0,
-                    total_batches_completed: 0
+                pickers: [],
+                packers: [],
+                overall: {
+                    total_batches: 0,
+                    total_products: 0,
+                    total_picklists: 0,
+                    avg_completion_time_minutes: 0
                 }
             };
         }
     }
 
     /**
-     * Get batch productivity trends
-     * @param {number} [days=30] - Number of days to include in the trends
+     * Get productivity trends over time
+     * @param {string} [period='day'] - Time period ('day', 'week', 'month')
+     * @param {number} [limit=30] - Number of periods to return
      * @returns {Promise<Object>} - Productivity trends
      */
-    async getTrends(days = 30) {
+    async getProductivityTrends(period = 'day', limit = 30) {
         try {
             await this.initializePool();
             
-            // Generate dates for the past N days
-            const dates = [];
-            const today = new Date();
-            for (let i = days - 1; i >= 0; i--) {
-                const date = new Date(today);
-                date.setDate(today.getDate() - i);
-                dates.push(date.toISOString().split('T')[0]);
+            // Determine date format based on period
+            let dateFormat;
+            let dateGroup;
+            
+            switch (period) {
+                case 'week':
+                    dateFormat = 'YYYY-WW';
+                    dateGroup = "FORMAT(created_at, 'yyyy-') + 'W' + FORMAT(DATEPART(week, created_at), '00')";
+                    break;
+                case 'month':
+                    dateFormat = 'YYYY-MM';
+                    dateGroup = "FORMAT(created_at, 'yyyy-MM')";
+                    break;
+                case 'day':
+                default:
+                    dateFormat = 'YYYY-MM-DD';
+                    dateGroup = "FORMAT(created_at, 'yyyy-MM-dd')";
+                    break;
             }
             
-            // Get batch counts by day
-            const batchCountsResult = await this.pool.request()
-                .input('days', sql.Int, days)
-                .query(`
-                    SELECT 
-                        CONVERT(date, completed_at) AS date,
-                        COUNT(*) AS count,
-                        SUM(total_products) AS total_products
-                    FROM Batches
-                    WHERE completed_at >= DATEADD(day, -@days, GETDATE())
-                    AND status = 'completed'
-                    GROUP BY CONVERT(date, completed_at)
-                    ORDER BY CONVERT(date, completed_at)
-                `);
+            // Get picker trends
+            const pickerResult = await this.pool.request().query(`
+                SELECT 
+                    ${dateGroup} AS period,
+                    COUNT(*) AS total_batches,
+                    SUM(total_products) AS total_products,
+                    SUM(total_picklists) AS total_picklists,
+                    AVG(DATEDIFF(MINUTE, created_at, completed_at)) AS avg_completion_time_minutes
+                FROM Batches
+                WHERE 
+                    completed_at IS NOT NULL
+                    AND type = 'pick'
+                    AND created_at >= DATEADD(${period}, -${limit}, GETDATE())
+                GROUP BY ${dateGroup}
+                ORDER BY ${dateGroup} DESC
+            `);
             
-            // Create a map of date to count and products
-            const batchDataByDate = {};
-            batchCountsResult.recordset.forEach(row => {
-                const dateStr = new Date(row.date).toISOString().split('T')[0];
-                batchDataByDate[dateStr] = {
-                    count: row.count,
-                    total_products: row.total_products
-                };
-            });
-            
-            // Generate trend data with actual counts where available
-            const pickerData = dates.map(date => {
-                const data = batchDataByDate[date] || { count: 0, total_products: 0 };
-                // Calculate items per hour (assuming 8-hour workday)
-                const itemsPerHour = data.total_products > 0 ? Math.round(data.total_products / 8) : 0;
-                
-                return {
-                    date,
-                    count: data.count,
-                    items_per_hour: itemsPerHour
-                };
-            });
-            
-            const packerData = dates.map(date => {
-                const data = batchDataByDate[date] || { count: 0, total_products: 0 };
-                // Calculate items per hour (assuming 8-hour workday and packers are 20% faster)
-                const itemsPerHour = data.total_products > 0 ? Math.round((data.total_products / 8) * 1.2) : 0;
-                
-                return {
-                    date,
-                    count: data.count,
-                    items_per_hour: itemsPerHour
-                };
-            });
+            // Get packer trends
+            const packerResult = await this.pool.request().query(`
+                SELECT 
+                    ${dateGroup} AS period,
+                    COUNT(*) AS total_batches,
+                    SUM(total_products) AS total_products,
+                    SUM(total_picklists) AS total_picklists,
+                    AVG(DATEDIFF(MINUTE, created_at, completed_at)) AS avg_completion_time_minutes
+                FROM Batches
+                WHERE 
+                    completed_at IS NOT NULL
+                    AND type = 'pack'
+                    AND created_at >= DATEADD(${period}, -${limit}, GETDATE())
+                GROUP BY ${dateGroup}
+                ORDER BY ${dateGroup} DESC
+            `);
             
             return {
-                picker_trends: pickerData,
-                packer_trends: packerData
+                period,
+                pickers: pickerResult.recordset,
+                packers: packerResult.recordset
             };
         } catch (error) {
-            console.error('Error getting batch trends:', error.message);
+            console.error('Error getting productivity trends:', error.message);
             
             // Return fallback data if there's an error
-            const fallbackData = dates.map(date => ({
-                date,
-                count: 0,
-                items_per_hour: 0
-            }));
-            
             return {
-                picker_trends: fallbackData,
-                packer_trends: fallbackData
+                period,
+                pickers: [],
+                packers: []
             };
         }
-    }
-
-    /**
-     * Get a single batch by ID
-     * @param {number} idpicklist_batch - Batch ID
-     * @returns {Promise<Object>} - Batch details
-     */
-    async getBatch(idpicklist_batch) {
-        try {
-            await this.initializePool();
-            
-            // Get batch from database
-            const batchResult = await this.pool.request()
-                .input('idpicklist_batch', sql.Int, idpicklist_batch)
-                .query(`
-                    SELECT *
-                    FROM Batches
-                    WHERE idpicklist_batch = @idpicklist_batch
-                `);
-            
-            if (batchResult.recordset.length === 0) {
-                // If not in database, try to fetch from Picqer
-                const batch = await this.fetchBatchFromPicqer(idpicklist_batch);
-                if (batch) {
-                    await this.processBatch(batch);
-                    return batch;
-                }
-                return null;
-            }
-            
-            return batchResult.recordset[0];
-        } catch (error) {
-            console.error(`Error getting batch ${idpicklist_batch}:`, error.message);
-            return null;
-        }
-    }
-
-    /**
-     * Fetch a single batch from Picqer
-     * @param {number} idpicklist_batch - Batch ID
-     * @returns {Promise<Object>} - Batch details
-     */
-    async fetchBatchFromPicqer(idpicklist_batch) {
-        try {
-            console.log(`Fetching batch ${idpicklist_batch} from Picqer API...`);
-            
-            // Make API call to Picqer to get the batch
-            const response = await this.apiClient.get(`/picklists/batches/${idpicklist_batch}`);
-            
-            console.log(`Received batch ${idpicklist_batch} from Picqer API`);
-            return response;
-        } catch (error) {
-            console.error(`Error fetching batch ${idpicklist_batch} from Picqer:`, error.message);
-            return null;
-        }
-    }
-
-    /**
-     * Get the rate limiter statistics
-     * @returns {Object} - Rate limiter statistics
-     */
-    getRateLimiterStats() {
-        return this.apiClient.getStats();
-    }
-
-    /**
-     * Enable automatic retry on rate limit hit (Picqer style)
-     */
-    enableRetryOnRateLimitHit() {
-        this.apiClient.enableRetryOnRateLimitHit();
-    }
-
-    /**
-     * Disable automatic retry on rate limit hit
-     */
-    disableRetryOnRateLimitHit() {
-        this.apiClient.disableRetryOnRateLimitHit();
-    }
-
-    /**
-     * Set the sleep time on rate limit hit
-     * @param {number} ms - Milliseconds to sleep
-     */
-    setSleepTimeOnRateLimitHit(ms) {
-        this.apiClient.setSleepTimeOnRateLimitHit(ms);
     }
 }
 
