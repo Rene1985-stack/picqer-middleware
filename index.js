@@ -11,7 +11,8 @@ const path = require('path');
 const cors = require('cors');
 const sql = require('mssql');
 require('dotenv').config();
-require('./startup'); // Initializes database schema and sync status
+const startup = require('./startup'); // Injected meta-service init
+startup(dbConfig);
 
 
 // Import service classes with rate limiting
