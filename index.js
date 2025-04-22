@@ -303,15 +303,3 @@ process.on('SIGINT', async () => {
 });
 
 module.exports = app;
-
-
-// ✅ Database connection test route
-app.get('/api/status/database', async (req, res) => {
-  try {
-    const pool = await sql.connect(dbConfig);
-    const result = await pool.request().query('SELECT GETDATE() AS current_time');
-    res.json({ status: 'ok', message: 'Database connected', time: result.recordset[0].current_time });
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Database connection failed', error: err.message });
-  }
-});
