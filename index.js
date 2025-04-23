@@ -282,6 +282,24 @@ app.listen(PORT, async () => {
     // Initialize database after server starts
     await initializeDatabase();
     
+    // ADDED: Early initialization of batch service
+    console.log('Initializing batch service early...');
+    try {
+      // Check if the service has the initialize method (from our updated implementation)
+      if (typeof batchService.initialize === 'function') {
+        await batchService.initialize();
+        console.log('✅ Batch service initialized successfully');
+      } else {
+        // Fallback for older implementation without initialize method
+        console.log('Batch service does not have initialize method, using initializeBatchesDatabase instead');
+        await batchService.initializeBatchesDatabase();
+        console.log('✅ Batch service database initialized successfully');
+      }
+    } catch (batchInitError) {
+      console.error('❌ Error initializing batch service:', batchInitError.message);
+      console.log('Continuing startup despite batch service initialization error');
+    }
+    
     // Log rate limiter configuration
     console.log('Rate limiter configuration:');
     console.log('- Auto-retry on rate limit:', process.env.PICQER_RATE_LIMIT_WAIT !== 'false' ? 'Enabled' : 'Disabled');
