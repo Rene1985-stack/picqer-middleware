@@ -18,23 +18,50 @@ class PicklistService {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     
-    // Enhanced sqlConfig handling with port safeguard
-    this.sqlConfig = sqlConfig ? {
-      ...sqlConfig,
-      port: sqlConfig.port || 1433 // Ensure port is always defined with default 1433
-    } : null;
+    // Enhanced sqlConfig handling with complete safeguards
+    if (sqlConfig) {
+      this.sqlConfig = {
+        ...sqlConfig,
+        server: sqlConfig.server || process.env.SQL_SERVER,
+        port: sqlConfig.port || parseInt(process.env.SQL_PORT || '1433', 10),
+        database: sqlConfig.database || process.env.SQL_DATABASE,
+        user: sqlConfig.user || process.env.SQL_USER,
+        password: sqlConfig.password || process.env.SQL_PASSWORD,
+        options: {
+          ...(sqlConfig.options || {}),
+          encrypt: true
+        }
+      };
+    } else {
+      // Create config from environment variables if sqlConfig is null
+      this.sqlConfig = {
+        server: process.env.SQL_SERVER,
+        port: parseInt(process.env.SQL_PORT || '1433', 10),
+        database: process.env.SQL_DATABASE,
+        user: process.env.SQL_USER,
+        password: process.env.SQL_PASSWORD,
+        options: {
+          encrypt: true
+        }
+      };
+    }
+    
+    // Verify essential properties
+    if (!this.sqlConfig.server) {
+      console.error('WARNING: SQL Server not defined in configuration or environment variables');
+    }
+    
+    if (!this.sqlConfig.database) {
+      console.error('WARNING: SQL Database not defined in configuration or environment variables');
+    }
     
     // Log configuration for debugging (without password)
-    if (this.sqlConfig) {
-      console.log('PicklistService database config:', {
-        server: this.sqlConfig.server,
-        port: this.sqlConfig.port,
-        database: this.sqlConfig.database,
-        user: this.sqlConfig.user
-      });
-    } else {
-      console.warn('PicklistService initialized with null or undefined sqlConfig');
-    }
+    console.log('PicklistService database config:', {
+      server: this.sqlConfig.server,
+      port: this.sqlConfig.port,
+      database: this.sqlConfig.database,
+      user: this.sqlConfig.user
+    });
     
     this.batchSize = 100; // Increased from 20 to 100 for better performance
     this.pool = null; // Added for connection pool management
@@ -109,10 +136,46 @@ class PicklistService {
    */
   async initializePool() {
     if (!this.pool) {
-      // Verify sqlConfig is properly defined
+      // Verify sqlConfig is properly defined with all required properties
       if (!this.sqlConfig) {
         console.error('Cannot initialize pool: sqlConfig is null or undefined');
-        throw new Error('Database configuration is missing');
+        
+        // Create config from environment variables as last resort
+        this.sqlConfig = {
+          server: process.env.SQL_SERVER,
+          port: parseInt(process.env.SQL_PORT || '1433', 10),
+          database: process.env.SQL_DATABASE,
+          user: process.env.SQL_USER,
+          password: process.env.SQL_PASSWORD,
+          options: {
+            encrypt: true
+          }
+        };
+        
+        if (!this.sqlConfig.server) {
+          throw new Error('Database server configuration is missing');
+        }
+      }
+      
+      // Ensure all required properties are defined
+      if (!this.sqlConfig.server) {
+        console.error('Server not defined in sqlConfig');
+        throw new Error('Database server configuration is missing');
+      }
+      
+      if (!this.sqlConfig.database) {
+        console.error('Database not defined in sqlConfig');
+        throw new Error('Database name configuration is missing');
+      }
+      
+      if (!this.sqlConfig.user) {
+        console.error('User not defined in sqlConfig');
+        throw new Error('Database user configuration is missing');
+      }
+      
+      if (!this.sqlConfig.password) {
+        console.error('Password not defined in sqlConfig');
+        throw new Error('Database password configuration is missing');
       }
       
       // Ensure port is defined
@@ -121,12 +184,22 @@ class PicklistService {
         this.sqlConfig.port = 1433;
       }
       
+      // Ensure options are defined
+      if (!this.sqlConfig.options) {
+        this.sqlConfig.options = { encrypt: true };
+      } else if (this.sqlConfig.options.encrypt === undefined) {
+        this.sqlConfig.options.encrypt = true;
+      }
+      
       // Log the configuration being used (without password)
       console.log('Initializing pool with config:', {
         server: this.sqlConfig.server,
         port: this.sqlConfig.port,
         database: this.sqlConfig.database,
-        user: this.sqlConfig.user
+        user: this.sqlConfig.user,
+        options: {
+          encrypt: this.sqlConfig.options.encrypt
+        }
       });
       
       let retries = 3;
@@ -250,21 +323,46 @@ class PicklistService {
           this.pool = await this.initializePool();
         } catch (poolError) {
           console.error('Failed to initialize pool for picklists schema:', poolError.message);
-          // Create a fallback configuration if needed
-          if (!this.sqlConfig || !this.sqlConfig.port) {
-            console.log('Creating fallback configuration with default port 1433');
-            this.sqlConfig = {
-              ...(this.sqlConfig || {}),
-              port: 1433,
-              options: {
-                ...(this.sqlConfig?.options || {}),
-                encrypt: true
-              }
-            };
-            this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
-          } else {
-            throw poolError; // Re-throw if we can't recover
+          
+          // Create a complete fallback configuration from environment variables
+          console.log('Creating complete fallback configuration from environment variables');
+          this.sqlConfig = {
+            server: process.env.SQL_SERVER,
+            port: parseInt(process.env.SQL_PORT || '1433', 10),
+            database: process.env.SQL_DATABASE,
+            user: process.env.SQL_USER,
+            password: process.env.SQL_PASSWORD,
+            options: {
+              encrypt: true
+            }
+          };
+          
+          // Verify essential properties
+          if (!this.sqlConfig.server) {
+            throw new Error('Database server not defined in environment variables');
           }
+          
+          if (!this.sqlConfig.database) {
+            throw new Error('Database name not defined in environment variables');
+          }
+          
+          if (!this.sqlConfig.user) {
+            throw new Error('Database user not defined in environment variables');
+          }
+          
+          if (!this.sqlConfig.password) {
+            throw new Error('Database password not defined in environment variables');
+          }
+          
+          console.log('Attempting connection with fallback configuration:', {
+            server: this.sqlConfig.server,
+            port: this.sqlConfig.port,
+            database: this.sqlConfig.database,
+            user: this.sqlConfig.user
+          });
+          
+          this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
+          console.log('Successfully connected with fallback configuration');
         }
       }
       
