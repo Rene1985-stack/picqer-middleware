@@ -17,7 +17,25 @@ class PicklistService {
   constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
-    this.sqlConfig = sqlConfig;
+    
+    // Enhanced sqlConfig handling with port safeguard
+    this.sqlConfig = sqlConfig ? {
+      ...sqlConfig,
+      port: sqlConfig.port || 1433 // Ensure port is always defined with default 1433
+    } : null;
+    
+    // Log configuration for debugging (without password)
+    if (this.sqlConfig) {
+      console.log('PicklistService database config:', {
+        server: this.sqlConfig.server,
+        port: this.sqlConfig.port,
+        database: this.sqlConfig.database,
+        user: this.sqlConfig.user
+      });
+    } else {
+      console.warn('PicklistService initialized with null or undefined sqlConfig');
+    }
+    
     this.batchSize = 100; // Increased from 20 to 100 for better performance
     this.pool = null; // Added for connection pool management
     
@@ -91,6 +109,26 @@ class PicklistService {
    */
   async initializePool() {
     if (!this.pool) {
+      // Verify sqlConfig is properly defined
+      if (!this.sqlConfig) {
+        console.error('Cannot initialize pool: sqlConfig is null or undefined');
+        throw new Error('Database configuration is missing');
+      }
+      
+      // Ensure port is defined
+      if (!this.sqlConfig.port) {
+        console.log('Port not defined in sqlConfig, setting default port 1433');
+        this.sqlConfig.port = 1433;
+      }
+      
+      // Log the configuration being used (without password)
+      console.log('Initializing pool with config:', {
+        server: this.sqlConfig.server,
+        port: this.sqlConfig.port,
+        database: this.sqlConfig.database,
+        user: this.sqlConfig.user
+      });
+      
       let retries = 3;
       let lastError = null;
       
@@ -206,9 +244,28 @@ class PicklistService {
     try {
       console.log('Initializing database with picklists schema...');
       
-      // Ensure pool is initialized
+      // Ensure pool is initialized with enhanced error handling
       if (!this.pool) {
-        this.pool = await this.initializePool();
+        try {
+          this.pool = await this.initializePool();
+        } catch (poolError) {
+          console.error('Failed to initialize pool for picklists schema:', poolError.message);
+          // Create a fallback configuration if needed
+          if (!this.sqlConfig || !this.sqlConfig.port) {
+            console.log('Creating fallback configuration with default port 1433');
+            this.sqlConfig = {
+              ...(this.sqlConfig || {}),
+              port: 1433,
+              options: {
+                ...(this.sqlConfig?.options || {}),
+                encrypt: true
+              }
+            };
+            this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
+          } else {
+            throw poolError; // Re-throw if we can't recover
+          }
+        }
       }
       
       // Create Picklists table
@@ -325,171 +382,6 @@ class PicklistService {
     } catch (error) {
       console.error('❌ Error initializing picklists database schema:', error.message);
       throw error;
-    }
-  }
-
-  /**
-   * Create a new sync progress record or get existing one
-   * @param {string} entityType - Type of entity being synced (e.g., 'picklists')
-   * @param {boolean} isFullSync - Whether this is a full sync
-   * @returns {Promise<Object>} - Sync progress record
-   */
-  async createOrGetSyncProgress(entityType, isFullSync = false) {
-    try {
-      // Ensure pool is initialized
-      if (!this.pool) {
-        this.pool = await this.initializePool();
-      }
-      
-      // Check for any in-progress sync for this entity type
-      const inProgressResult = await this.pool.request()
-        .input('entityType', sql.NVarChar, entityType)
-        .query(`
-          SELECT * FROM SyncProgress 
-          WHERE entity_type = @entityType AND status = 'in_progress'
-          ORDER BY started_at DESC
-        `);
-      
-      if (inProgressResult.recordset.length > 0) {
-        console.log(`Found in-progress sync for ${entityType}, will resume from last position`);
-        return inProgressResult.recordset[0];
-      }
-      
-      // No in-progress sync found, create a new one
-      const syncId = uuidv4();
-      const now = new Date().toISOString();
-      
-      const result = await this.pool.request()
-        .input('entityType', sql.NVarChar, entityType)
-        .input('syncId', sql.NVarChar, syncId)
-        .input('isFullSync', sql.Bit, isFullSync ? 1 : 0)
-        .input('now', sql.DateTime, now)
-        .query(`
-          INSERT INTO SyncProgress (
-            entity_type, sync_id, current_offset, batch_number,
-            items_processed, status, started_at, last_updated
-          )
-          VALUES (
-            @entityType, @syncId, 0, 0, 
-            0, 'in_progress', @now, @now
-          );
-          
-          SELECT * FROM SyncProgress WHERE entity_type = @entityType AND sync_id = @syncId
-        `);
-      
-      console.log(`Created new sync progress record for ${entityType} with ID ${syncId}`);
-      return result.recordset[0];
-    } catch (error) {
-      console.error('Error creating or getting sync progress:', error.message);
-      // Return a default progress object if database operation fails
-      return {
-        entity_type: entityType,
-        sync_id: uuidv4(),
-        current_offset: 0,
-        batch_number: 0,
-        items_processed: 0,
-        status: 'in_progress',
-        started_at: new Date().toISOString(),
-        last_updated: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Update sync progress
-   * @param {Object} progress - Sync progress record
-   * @param {Object} updates - Fields to update
-   * @returns {Promise<boolean>} - Success status
-   */
-  async updateSyncProgress(progress, updates) {
-    try {
-      // Ensure pool is initialized
-      if (!this.pool) {
-        this.pool = await this.initializePool();
-      }
-      
-      // Build update query dynamically based on provided updates
-      let updateFields = [];
-      const request = new sql.Request(this.pool);
-      
-      // Add each update field to the query
-      if (updates.current_offset !== undefined) {
-        updateFields.push('current_offset = @currentOffset');
-        request.input('currentOffset', sql.Int, updates.current_offset);
-      }
-      
-      if (updates.batch_number !== undefined) {
-        updateFields.push('batch_number = @batchNumber');
-        request.input('batchNumber', sql.Int, updates.batch_number);
-      }
-      
-      if (updates.total_batches !== undefined) {
-        updateFields.push('total_batches = @totalBatches');
-        request.input('totalBatches', sql.Int, updates.total_batches);
-      }
-      
-      if (updates.items_processed !== undefined) {
-        updateFields.push('items_processed = @itemsProcessed');
-        request.input('itemsProcessed', sql.Int, updates.items_processed);
-      }
-      
-      if (updates.total_items !== undefined) {
-        updateFields.push('total_items = @totalItems');
-        request.input('totalItems', sql.Int, updates.total_items);
-      }
-      
-      if (updates.status !== undefined) {
-        updateFields.push('status = @status');
-        request.input('status', sql.NVarChar, updates.status);
-      }
-      
-      if (updates.completed_at !== undefined) {
-        updateFields.push('completed_at = @completedAt');
-        request.input('completedAt', sql.DateTime, updates.completed_at);
-      }
-      
-      // Always update last_updated timestamp
-      updateFields.push('last_updated = @lastUpdated');
-      request.input('lastUpdated', sql.DateTime, new Date());
-      
-      // Add where clause parameters
-      request.input('entityType', sql.NVarChar, progress.entity_type);
-      request.input('syncId', sql.NVarChar, progress.sync_id);
-      
-      // Execute update query
-      await request.query(`
-        UPDATE SyncProgress
-        SET ${updateFields.join(', ')}
-        WHERE entity_type = @entityType AND sync_id = @syncId
-      `);
-      
-      return true;
-    } catch (error) {
-      console.error('Error updating sync progress:', error.message);
-      // Continue even if update fails
-      return false;
-    }
-  }
-
-  /**
-   * Complete sync progress
-   * @param {Object} progress - Sync progress record
-   * @param {boolean} success - Whether sync completed successfully
-   * @returns {Promise<boolean>} - Success status
-   */
-  async completeSyncProgress(progress, success = true) {
-    try {
-      const now = new Date();
-      await this.updateSyncProgress(progress, {
-        status: success ? 'completed' : 'failed',
-        completed_at: now
-      });
-      
-      console.log(`Marked sync ${progress.sync_id} as ${success ? 'completed' : 'failed'}`);
-      return true;
-    } catch (error) {
-      console.error('Error completing sync progress:', error.message);
-      return false;
     }
   }
 
