@@ -246,8 +246,7 @@ class BatchService {
           params.updated_since = updatedSinceParam;
         }
         
-        // FIXED: Using the correct endpoint with plural "picklists" instead of singular "picklist"
-        // Note: Since baseUrl already includes /api/v1, we don't include it in the path
+        // FIXED: Changed from '/picklist/batches' to '/picklists/batches'
         const response = await this.apiClient.get('/picklists/batches', { params });
         
         if (response && Array.isArray(response) && response.length > 0) {
@@ -296,8 +295,7 @@ class BatchService {
     try {
       console.log(`Fetching details for batch ${idpicklist_batch}...`);
       
-      // FIXED: Using the correct endpoint with plural "picklists" instead of singular "picklist"
-      // Note: Since baseUrl already includes /api/v1, we don't include it in the path
+      // FIXED: Changed from '/picklist/batches/${idpicklist_batch}' to '/picklists/batches/${idpicklist_batch}'
       const response = await this.apiClient.get(`/picklists/batches/${idpicklist_batch}`);
       
       if (response) {
@@ -425,105 +423,51 @@ class BatchService {
         console.log(`Processing chunk ${Math.floor(i / batchSize) + 1}/${Math.ceil(batches.length / batchSize)} (${chunk.length} batches)...`);
         
         // Process each batch in the chunk
-        for (const batch of chunk) {
-          try {
-            const success = await this.saveBatch(batch);
-            if (success) {
-              successCount++;
-            }
-          } catch (error) {
-            console.error(`Error saving batch ${batch.idpicklist_batch}:`, error.message);
-          }
-        }
+        const results = await Promise.all(chunk.map(batch => this.saveBatch(batch)));
         
-        console.log(`Processed ${successCount} batches so far...`);
+        // Count successful saves
+        const chunkSuccessCount = results.filter(result => result).length;
+        successCount += chunkSuccessCount;
+        
+        console.log(`Saved ${chunkSuccessCount}/${chunk.length} batches in current chunk (total: ${successCount}/${batches.length})`);
       }
       
-      console.log(`✅ Saved ${successCount} batches to database`);
+      console.log(`✅ Saved ${successCount}/${batches.length} batches to database`);
+      
+      // Update SyncStatus table
+      try {
+        const pool = await this.initializePool();
+        await pool.request()
+          .input('last_sync_date', sql.DateTime, new Date())
+          .input('last_sync_count', sql.Int, successCount)
+          .input('total_count', sql.Int, await this.getCount())
+          .query(`
+            UPDATE SyncStatus
+            SET last_sync_date = @last_sync_date,
+                last_sync_count = @last_sync_count,
+                total_count = @total_count
+            WHERE entity_name = 'batches'
+          `);
+        console.log('Updated SyncStatus for batches');
+      } catch (error) {
+        console.error('Error updating SyncStatus for batches:', error.message);
+      }
+      
       return successCount;
     } catch (error) {
       console.error('Error saving batches to database:', error.message);
-      throw error;
+      return 0;
     }
   }
 
   /**
-   * Update last sync date for batches
-   * @param {Date} syncDate - Sync date to save
-   * @param {number} count - Number of batches synced
-   * @returns {Promise<boolean>} - Success status
+   * Get the total count of batches in the database
+   * @returns {Promise<number>} - Total count of batches
    */
-  async updateLastSyncDate(syncDate, count) {
+  async getCount() {
     try {
       const pool = await this.initializePool();
-      
-      // Update SyncStatus table
-      await pool.request()
-        .input('syncDate', sql.DateTime, syncDate)
-        .input('count', sql.Int, count)
-        .query(`
-          UPDATE SyncStatus
-          SET last_sync_date = @syncDate,
-              last_sync_count = @count,
-              total_count = (SELECT COUNT(*) FROM Batches)
-          WHERE entity_name = 'batches'
-        `);
-      
-      console.log(`Updated last sync date for batches to ${syncDate.toISOString()}`);
-      return true;
-    } catch (error) {
-      console.error('Error updating last sync date for batches:', error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Get the last sync date for batches
-   * @returns {Promise<Date|null>} - Last sync date or null if not found
-   */
-  async getLastSyncDate() {
-    try {
-      const pool = await this.initializePool();
-      
-      // Get last sync date from SyncStatus table
-      const result = await pool.request().query(`
-        SELECT last_sync_date
-        FROM SyncStatus
-        WHERE entity_name = 'batches'
-      `);
-      
-      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
-        return new Date(result.recordset[0].last_sync_date);
-      }
-      
-      // If no record found, return a date 30 days ago
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return thirtyDaysAgo;
-    } catch (error) {
-      console.error('Error getting last sync date for batches:', error.message);
-      
-      // If error, return a date 30 days ago
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return thirtyDaysAgo;
-    }
-  }
-
-  /**
-   * Get the count of batches in the database
-   * @returns {Promise<number>} - Count of batches
-   */
-  async getBatchCount() {
-    try {
-      const pool = await this.initializePool();
-      
-      // Get count from Batches table
-      const result = await pool.request().query(`
-        SELECT COUNT(*) AS count
-        FROM Batches
-      `);
-      
+      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Batches');
       return result.recordset[0].count;
     } catch (error) {
       console.error('Error getting batch count:', error.message);
@@ -532,49 +476,114 @@ class BatchService {
   }
 
   /**
+   * Get the last sync date for batches
+   * @returns {Promise<Date|null>} - Last sync date
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await this.initializePool();
+      const result = await pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_name = 'batches'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      // Fallback: Get the most recent last_sync_date from Batches table
+      try {
+        const fallbackResult = await pool.request().query(`
+          SELECT MAX(last_sync_date) AS last_sync_date 
+          FROM Batches
+        `);
+        
+        if (fallbackResult.recordset.length > 0 && fallbackResult.recordset[0].last_sync_date) {
+          return new Date(fallbackResult.recordset[0].last_sync_date);
+        }
+      } catch (fallbackError) {
+        console.error('Error getting fallback last sync date for batches:', fallbackError.message);
+      }
+      
+      // If all else fails, return a date 30 days ago
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return thirtyDaysAgo;
+    } catch (error) {
+      console.error('Error getting last sync date for batches:', error.message);
+      
+      // Return a date 30 days ago as a fallback
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return thirtyDaysAgo;
+    }
+  }
+
+  /**
+   * Reset the sync offset to start fresh
+   * @returns {Promise<boolean>} - Success status
+   */
+  async resetSyncOffset() {
+    try {
+      console.log('Resetting sync offset for batches...');
+      
+      const pool = await this.initializePool();
+      
+      // Update SyncStatus to reset last_sync_date
+      await pool.request()
+        .input('last_sync_date', sql.DateTime, new Date('2025-01-01'))
+        .query(`
+          UPDATE SyncStatus
+          SET last_sync_date = @last_sync_date
+          WHERE entity_name = 'batches'
+        `);
+      
+      console.log('✅ Reset sync offset for batches successfully');
+      return true;
+    } catch (error) {
+      console.error('Error resetting sync offset for batches:', error.message);
+      return false;
+    }
+  }
+
+  /**
    * Sync batches from Picqer to database
    * @param {boolean} fullSync - Whether to perform a full sync
-   * @returns {Promise<Object>} - Sync result with counts
+   * @returns {Promise<Object>} - Sync result
    */
   async syncBatches(fullSync = false) {
     try {
-      console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync of batches...`);
       
-      // Initialize database if needed
-      await this.initializeBatchesDatabase();
-      
-      let batches = [];
+      let batches;
       
       if (fullSync) {
-        // Full sync - get all batches
+        // For full sync, get all batches
         batches = await this.getAllBatches();
       } else {
-        // Incremental sync - get batches updated since last sync
+        // For incremental sync, get batches updated since last sync
         const lastSyncDate = await this.getLastSyncDate();
-        console.log(`Last batch sync date: ${lastSyncDate.toISOString()}`);
         batches = await this.getBatchesUpdatedSince(lastSyncDate);
       }
       
-      console.log(`Retrieved ${batches.length} batches from Picqer`);
+      if (batches.length === 0) {
+        console.log('No new or updated batches to sync');
+        return { success: true, count: 0 };
+      }
       
       // Save batches to database
       const savedCount = await this.saveBatches(batches);
       
-      // Update last sync date
-      await this.updateLastSyncDate(new Date(), savedCount);
-      
-      // Get total count
-      const totalCount = await this.getBatchCount();
-      
-      console.log(`✅ Batch sync completed: ${savedCount} batches synced, ${totalCount} total batches in database`);
+      console.log(`✅ ${fullSync ? 'Full' : 'Incremental'} sync of batches completed: ${savedCount}/${batches.length} batches saved`);
       
       return {
         success: true,
-        syncedCount: savedCount,
-        totalCount: totalCount
+        count: savedCount,
+        total: batches.length
       };
     } catch (error) {
-      console.error('Error syncing batches:', error.message);
+      console.error(`Error syncing batches:`, error.message);
       return {
         success: false,
         error: error.message
