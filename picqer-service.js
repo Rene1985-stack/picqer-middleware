@@ -19,6 +19,7 @@ class PicqerService {
     this.baseUrl = baseUrl;
     this.sqlConfig = sqlConfig;
     this.batchSize = 100; // Increased from 50 to 100 for better performance
+    this.pool = null; // Added for connection pool management
     
     console.log('Initializing PicqerService with:');
     console.log('API Key (first 5 chars):', this.apiKey ? this.apiKey.substring(0, 5) + '...' : 'undefined');
@@ -37,16 +38,80 @@ class PicqerService {
   }
 
   /**
+   * Initialize the service
+   * Establishes database connection early in the lifecycle
+   * @returns {Promise<boolean>} - Success status
+   */
+  async initialize() {
+    try {
+      // Initialize the pool as early as possible
+      if (!this.pool) {
+        console.log('Initializing pool in PicqerService...');
+        this.pool = await this.initializePool();
+      }
+      
+      // Initialize database schema
+      await this.initializeDatabase();
+      
+      console.log('PicqerService fully initialized');
+      return true;
+    } catch (error) {
+      console.error('Error initializing PicqerService:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Initialize the database connection pool with retry logic
+   * @returns {Promise<sql.ConnectionPool>} - SQL connection pool
+   */
+  async initializePool() {
+    if (!this.pool) {
+      let retries = 3;
+      let lastError = null;
+      
+      while (retries > 0) {
+        try {
+          console.log(`Attempting to initialize database connection pool (${retries} retries left)...`);
+          this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
+          console.log('Database connection pool initialized successfully');
+          return this.pool;
+        } catch (error) {
+          lastError = error;
+          console.error(`Error initializing database connection pool (retrying): ${error.message}`);
+          retries--;
+          
+          if (retries > 0) {
+            // Wait before retrying (exponential backoff)
+            const waitTime = (4 - retries) * 1000; // 1s, 2s, 3s
+            console.log(`Waiting ${waitTime}ms before retrying...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          }
+        }
+      }
+      
+      console.error('Failed to initialize database connection pool after multiple attempts');
+      throw lastError;
+    }
+    
+    return this.pool;
+  }
+
+  /**
    * Initialize the database with expanded product schema and sync progress tracking
    * @returns {Promise<boolean>} - Success status
    */
   async initializeDatabase() {
     try {
       console.log('Initializing database with expanded product schema...');
-      const pool = await sql.connect(this.sqlConfig);
+      
+      // Ensure pool is initialized
+      if (!this.pool) {
+        this.pool = await this.initializePool();
+      }
       
       // Check if Products table exists
-      const tableResult = await pool.request().query(`
+      const tableResult = await this.pool.request().query(`
         SELECT COUNT(*) AS tableExists 
         FROM INFORMATION_SCHEMA.TABLES 
         WHERE TABLE_NAME = 'Products'
@@ -57,7 +122,7 @@ class PicqerService {
       if (!productsTableExists) {
         // Create Products table if it doesn't exist
         console.log('Creating Products table...');
-        await pool.request().query(`
+        await this.pool.request().query(`
           CREATE TABLE Products (
             id INT IDENTITY(1,1) PRIMARY KEY,
             idproduct INT NOT NULL,
@@ -77,7 +142,7 @@ class PicqerService {
       }
       
       // Check if SyncStatus table exists
-      const syncTableResult = await pool.request().query(`
+      const syncTableResult = await this.pool.request().query(`
         SELECT COUNT(*) AS tableExists 
         FROM INFORMATION_SCHEMA.TABLES 
         WHERE TABLE_NAME = 'SyncStatus'
@@ -88,7 +153,7 @@ class PicqerService {
       if (!syncTableExists) {
         // Create SyncStatus table if it doesn't exist
         console.log('Creating SyncStatus table...');
-        await pool.request().query(`
+        await this.pool.request().query(`
           CREATE TABLE SyncStatus (
             id INT IDENTITY(1,1) PRIMARY KEY,
             entity_name NVARCHAR(50) NOT NULL,
@@ -107,7 +172,7 @@ class PicqerService {
       } else {
         // Check if entity_name column exists in SyncStatus table
         try {
-          const columnResult = await pool.request().query(`
+          const columnResult = await this.pool.request().query(`
             SELECT COUNT(*) AS columnExists 
             FROM INFORMATION_SCHEMA.COLUMNS 
             WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_name'
@@ -119,14 +184,14 @@ class PicqerService {
             // Add entity_name column if it doesn't exist
             console.log('Adding entity_name column to SyncStatus table...');
             try {
-              await pool.request().query(`
+              await this.pool.request().query(`
                 ALTER TABLE SyncStatus 
                 ADD entity_name NVARCHAR(50) NOT NULL DEFAULT 'products'
               `);
               
               // Add unique constraint in a separate statement
               try {
-                await pool.request().query(`
+                await this.pool.request().query(`
                   ALTER TABLE SyncStatus 
                   ADD CONSTRAINT UC_SyncStatus_entity_name UNIQUE (entity_name)
                 `);
@@ -141,7 +206,7 @@ class PicqerService {
           }
           
           // Check if entity_type column exists
-          const entityTypeResult = await pool.request().query(`
+          const entityTypeResult = await this.pool.request().query(`
             SELECT COUNT(*) AS columnExists 
             FROM INFORMATION_SCHEMA.COLUMNS 
             WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
@@ -153,14 +218,14 @@ class PicqerService {
             // Add entity_type column if it doesn't exist
             console.log('Adding entity_type column to SyncStatus table...');
             try {
-              await pool.request().query(`
+              await this.pool.request().query(`
                 ALTER TABLE SyncStatus 
                 ADD entity_type NVARCHAR(50) NOT NULL DEFAULT 'products'
               `);
               
               // Add unique constraint in a separate statement
               try {
-                await pool.request().query(`
+                await this.pool.request().query(`
                   ALTER TABLE SyncStatus 
                   ADD CONSTRAINT UC_SyncStatus_entity_type UNIQUE (entity_type)
                 `);
@@ -175,7 +240,7 @@ class PicqerService {
           }
           
           // Check if products record exists in SyncStatus
-          const productsRecordResult = await pool.request().query(`
+          const productsRecordResult = await this.pool.request().query(`
             SELECT COUNT(*) AS recordExists 
             FROM SyncStatus 
             WHERE entity_type = 'products'
@@ -187,7 +252,7 @@ class PicqerService {
             // Insert products record if it doesn't exist
             console.log('Adding products record to SyncStatus table...');
             try {
-              await pool.request().query(`
+              await this.pool.request().query(`
                 INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
                 VALUES ('products', 'products', '2025-01-01T00:00:00.000Z')
               `);
@@ -206,11 +271,11 @@ class PicqerService {
       }
       
       // Create SyncProgress table for resumable sync
-      await pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
+      await this.pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
       console.log('✅ Created SyncProgress table for resumable sync functionality');
       
       // Implementation of the missing ensureProductColumnsExist method
-      await this.ensureProductColumnsExist(pool);
+      await this.ensureProductColumnsExist(this.pool);
       
       console.log('✅ Database initialized successfully with expanded schema');
       return true;
@@ -228,7 +293,7 @@ class PicqerService {
   async ensureProductColumnsExist(existingPool = null) {
     try {
       console.log('Ensuring all product columns exist...');
-      const pool = existingPool || await sql.connect(this.sqlConfig);
+      const pool = existingPool || await this.initializePool();
       
       // Define all columns that should exist in the Products table
       const requiredColumns = [
@@ -285,6 +350,83 @@ class PicqerService {
       console.error('❌ Error ensuring product columns exist:', error.message);
       // Don't throw the error to allow initialization to continue
       console.log('Continuing with initialization despite column check error');
+    }
+  }
+
+  /**
+   * Get the total count of products in the database
+   * @returns {Promise<number>} - Total count of products
+   */
+  async getCount() {
+    try {
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for getCount() in PicqerService...');
+        this.pool = await this.initializePool();
+      }
+      
+      const result = await this.pool.request().query('SELECT COUNT(*) AS count FROM Products');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting product count:', error.message);
+      // Return a default value instead of throwing an error
+      return 0;
+    }
+  }
+
+  /**
+   * Get the last sync date for products
+   * @returns {Promise<Date|null>} - Last sync date
+   */
+  async getLastSyncDate() {
+    try {
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for getLastSyncDate() in PicqerService...');
+        this.pool = await this.initializePool();
+      }
+      
+      const result = await this.pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_name = 'products'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      // Fallback: Get the most recent last_sync_date from Products table
+      try {
+        // Ensure pool is still available for fallback
+        if (!this.pool) {
+          console.log('Reinitializing pool for fallback last sync date in PicqerService...');
+          this.pool = await this.initializePool();
+        }
+        
+        const fallbackResult = await this.pool.request().query(`
+          SELECT MAX(last_sync_date) AS last_sync_date 
+          FROM Products
+        `);
+        
+        if (fallbackResult.recordset.length > 0 && fallbackResult.recordset[0].last_sync_date) {
+          return new Date(fallbackResult.recordset[0].last_sync_date);
+        }
+      } catch (fallbackError) {
+        console.error('Error getting fallback last sync date for products:', fallbackError.message);
+      }
+      
+      // If all else fails, return a date 30 days ago
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return thirtyDaysAgo;
+    } catch (error) {
+      console.error('Error getting last sync date for products:', error.message);
+      
+      // Return a date 30 days ago as a fallback
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return thirtyDaysAgo;
     }
   }
 
