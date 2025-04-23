@@ -69,11 +69,31 @@ console.log('Database configuration:', {
   user: dbConfig.user
 });
 
+// Verify essential database properties
+if (!dbConfig.server) {
+  console.error('WARNING: SQL Server not defined in environment variables');
+}
+
+if (!dbConfig.database) {
+  console.error('WARNING: SQL Database not defined in environment variables');
+}
+
+if (!dbConfig.user) {
+  console.error('WARNING: SQL User not defined in environment variables');
+}
+
+if (!dbConfig.password) {
+  console.error('WARNING: SQL Password not defined in environment variables');
+}
+
 startup(dbConfig);
 
 // Picqer API configuration
 const apiKey = process.env.PICQER_API_KEY;
 const baseUrl = process.env.PICQER_BASE_URL;
+
+// Initialize services
+console.log('🚀 Initializing middleware meta services...');
 
 // Initialize services
 console.log('🚀 Initializing middleware services...');
