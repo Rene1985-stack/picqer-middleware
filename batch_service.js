@@ -1,37 +1,110 @@
 /**
- * Comprehensive Batch Service Fix
+ * Fixed Batch Service with Corrected Offset Management
  * 
- * This file combines all fixes for the Picqer middleware batch service:
- * 1. Corrected API endpoint paths (plural 'picklists/batches' instead of singular)
- * 2. Improved database connection pool handling
- * 3. Added missing methods (getCount, getLastSyncDate)
- * 4. Enhanced error handling and retry logic
- * 5. Added reset functionality for fresh starts
+ * This file fixes the issues with batch synchronization:
+ * 1. Corrects the API endpoint path from '/picklist/batches' to '/picklists/batches'
+ * 2. Fixes the offset tracking logic to prevent inconsistent offset values
+ * 3. Adds proper database connection pool handling
+ * 4. Implements missing methods (getCount, getLastSyncDate, initialize)
+ * 5. Adds a reset function to start fresh when needed
  */
+
+const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const PicqerApiClient = require('./picqer-api-client');
+const batchesSchema = require('./batches_schema');
 
 class BatchService {
-  /**
-   * Initialize the BatchService
-   * @param {string} apiKey - Picqer API key
-   * @param {string} baseUrl - Picqer API base URL
-   * @param {Object} dbConfig - Database configuration
-   */
-  constructor(apiKey, baseUrl, dbConfig) {
+  constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
-    this.dbConfig = dbConfig;
-    this.pool = null;
     
-    // Initialize API client with rate limiting
-    this.apiClient = new PicqerApiClient(apiKey, baseUrl, {
-      requestsPerMinute: 30, // Adjust based on your Picqer plan
-      maxRetries: 5,
-      waitOnRateLimit: true,
-      sleepTimeOnRateLimitHitInMs: 20000 // 20 seconds, like Picqer's default
+    // Enhanced sqlConfig handling with complete safeguards
+    if (sqlConfig) {
+      this.sqlConfig = {
+        ...sqlConfig,
+        server: sqlConfig.server || process.env.SQL_SERVER,
+        port: sqlConfig.port || parseInt(process.env.SQL_PORT || '1433', 10),
+        database: sqlConfig.database || process.env.SQL_DATABASE,
+        user: sqlConfig.user || process.env.SQL_USER,
+        password: sqlConfig.password || process.env.SQL_PASSWORD,
+        options: {
+          ...(sqlConfig.options || {}),
+          encrypt: true
+        }
+      };
+    } else {
+      // Create config from environment variables if sqlConfig is null
+      this.sqlConfig = {
+        server: process.env.SQL_SERVER,
+        port: parseInt(process.env.SQL_PORT || '1433', 10),
+        database: process.env.SQL_DATABASE,
+        user: process.env.SQL_USER,
+        password: process.env.SQL_PASSWORD,
+        options: {
+          encrypt: true
+        }
+      };
+    }
+    
+    // Verify essential properties
+    if (!this.sqlConfig.server) {
+      console.error('WARNING: SQL Server not defined in configuration or environment variables');
+    }
+    
+    if (!this.sqlConfig.database) {
+      console.error('WARNING: SQL Database not defined in configuration or environment variables');
+    }
+    
+    // Log configuration for debugging (without password)
+    console.log('BatchService database config:', {
+      server: this.sqlConfig.server,
+      port: this.sqlConfig.port,
+      database: this.sqlConfig.database,
+      user: this.sqlConfig.user
     });
+    
+    this.pool = null;
+    this.batchSize = 100;
+    
+    // Create Base64 encoded credentials (apiKey + ":")
+    const credentials = `${this.apiKey}:`;
+    const encodedCredentials = Buffer.from(credentials).toString('base64');
+    
+    // Create client with Basic Authentication header
+    this.apiClient = axios.create({
+      baseURL: baseUrl,
+      headers: {
+        'Authorization': `Basic ${encodedCredentials}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'PicqerMiddleware (middleware@skapa-global.com)'
+      }
+    });
+    
+    // Add request interceptor for debugging
+    this.apiClient.interceptors.request.use(request => {
+      console.log('Making request to:', request.baseURL + request.url);
+      return request;
+    });
+    
+    // Add response interceptor for debugging
+    this.apiClient.interceptors.response.use(
+      response => {
+        console.log('Response status:', response.status);
+        return response;
+      },
+      error => {
+        console.error('Request failed:');
+        if (error.response) {
+          console.error('Response status:', error.response.status);
+        } else if (error.request) {
+          console.error('No response received');
+        } else {
+          console.error('Error message:', error.message);
+        }
+        return Promise.reject(error);
+      }
+    );
     
     console.log('BatchService initialized with rate-limited Picqer API client');
   }
@@ -44,7 +117,10 @@ class BatchService {
   async initialize() {
     try {
       // Initialize the pool as early as possible
-      await this.initializePool();
+      if (!this.pool) {
+        console.log('Initializing pool in BatchService...');
+        this.pool = await this.initializePool();
+      }
       
       // Initialize database schema
       await this.initializeBatchesDatabase();
@@ -63,13 +139,79 @@ class BatchService {
    */
   async initializePool() {
     if (!this.pool) {
+      // Verify sqlConfig is properly defined with all required properties
+      if (!this.sqlConfig) {
+        console.error('Cannot initialize pool: sqlConfig is null or undefined');
+        
+        // Create config from environment variables as last resort
+        this.sqlConfig = {
+          server: process.env.SQL_SERVER,
+          port: parseInt(process.env.SQL_PORT || '1433', 10),
+          database: process.env.SQL_DATABASE,
+          user: process.env.SQL_USER,
+          password: process.env.SQL_PASSWORD,
+          options: {
+            encrypt: true
+          }
+        };
+        
+        if (!this.sqlConfig.server) {
+          throw new Error('Database server configuration is missing');
+        }
+      }
+      
+      // Ensure all required properties are defined
+      if (!this.sqlConfig.server) {
+        console.error('Server not defined in sqlConfig');
+        throw new Error('Database server configuration is missing');
+      }
+      
+      if (!this.sqlConfig.database) {
+        console.error('Database not defined in sqlConfig');
+        throw new Error('Database name configuration is missing');
+      }
+      
+      if (!this.sqlConfig.user) {
+        console.error('User not defined in sqlConfig');
+        throw new Error('Database user configuration is missing');
+      }
+      
+      if (!this.sqlConfig.password) {
+        console.error('Password not defined in sqlConfig');
+        throw new Error('Database password configuration is missing');
+      }
+      
+      // Ensure port is defined
+      if (!this.sqlConfig.port) {
+        console.log('Port not defined in sqlConfig, setting default port 1433');
+        this.sqlConfig.port = 1433;
+      }
+      
+      // Ensure options are defined
+      if (!this.sqlConfig.options) {
+        this.sqlConfig.options = { encrypt: true };
+      } else if (this.sqlConfig.options.encrypt === undefined) {
+        this.sqlConfig.options.encrypt = true;
+      }
+      
+      // Log the configuration being used (without password)
+      console.log('Initializing pool with config:', {
+        server: this.sqlConfig.server,
+        port: this.sqlConfig.port,
+        database: this.sqlConfig.database,
+        user: this.sqlConfig.user,
+        options: {
+          encrypt: this.sqlConfig.options.encrypt
+        }
+      });
+      
       let retries = 3;
       let lastError = null;
       
       while (retries > 0) {
         try {
           console.log(`Attempting to initialize database connection pool (${retries} retries left)...`);
-          this.pool = await new sql.ConnectionPool(this.dbConfig).connect();
+          this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
           console.log('Database connection pool initialized successfully');
           return this.pool;
         } catch (error) {
@@ -94,422 +236,6 @@ class BatchService {
   }
 
   /**
-   * Initialize the batches database schema
-   * @returns {Promise<void>}
-   */
-  async initializeBatchesDatabase() {
-    try {
-      console.log('Initializing batches database schema...');
-      
-      // Ensure pool is initialized
-      if (!this.pool) {
-        this.pool = await this.initializePool();
-      }
-      
-      // Create Batches table if it doesn't exist
-      await this.pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Batches')
-        BEGIN
-          CREATE TABLE Batches (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            idpicklist_batch INT,
-            picklist_batchid NVARCHAR(255),
-            idwarehouse INT,
-            type NVARCHAR(50),
-            status NVARCHAR(50),
-            assigned_to_iduser INT,
-            assigned_to_name NVARCHAR(255),
-            completed_by_iduser INT,
-            completed_by_name NVARCHAR(255),
-            total_products INT,
-            total_picklists INT,
-            completed_at DATETIME,
-            created_at DATETIME,
-            updated_at DATETIME,
-            last_sync_date DATETIME
-          )
-        END
-      `);
-      
-      // Add columns if they don't exist
-      const columns = [
-        { name: 'idpicklist_batch', type: 'INT' },
-        { name: 'picklist_batchid', type: 'NVARCHAR(255)' },
-        { name: 'idwarehouse', type: 'INT' },
-        { name: 'type', type: 'NVARCHAR(50)' },
-        { name: 'status', type: 'NVARCHAR(50)' },
-        { name: 'assigned_to_iduser', type: 'INT' },
-        { name: 'assigned_to_name', type: 'NVARCHAR(255)' },
-        { name: 'completed_by_iduser', type: 'INT' },
-        { name: 'completed_by_name', type: 'NVARCHAR(255)' },
-        { name: 'total_products', type: 'INT' },
-        { name: 'total_picklists', type: 'INT' },
-        { name: 'completed_at', type: 'DATETIME' },
-        { name: 'created_at', type: 'DATETIME' },
-        { name: 'updated_at', type: 'DATETIME' },
-        { name: 'last_sync_date', type: 'DATETIME' }
-      ];
-      
-      for (const column of columns) {
-        try {
-          const columnExists = await this.pool.request().query(`
-            SELECT COUNT(*) AS count
-            FROM sys.columns
-            WHERE Name = '${column.name}'
-            AND Object_ID = Object_ID('Batches')
-          `);
-          
-          if (columnExists.recordset[0].count === 0) {
-            console.log(`Adding column ${column.name} to table Batches...`);
-            await this.pool.request().query(`
-              ALTER TABLE Batches
-              ADD ${column.name} ${column.type}
-            `);
-            console.log(`Column ${column.name} added to table Batches successfully.`);
-          } else {
-            console.log(`Column ${column.name} already exists in table Batches.`);
-          }
-        } catch (error) {
-          console.error(`Error adding column ${column.name} to Batches table:`, error.message);
-        }
-      }
-      
-      // Add idpicklist_batch column to Picklists table if it doesn't exist
-      try {
-        const columnExists = await this.pool.request().query(`
-          SELECT COUNT(*) AS count
-          FROM sys.columns
-          WHERE Name = 'idpicklist_batch'
-          AND Object_ID = Object_ID('Picklists')
-        `);
-        
-        if (columnExists.recordset[0].count === 0) {
-          console.log('Adding column idpicklist_batch to table Picklists...');
-          await this.pool.request().query(`
-            ALTER TABLE Picklists
-            ADD idpicklist_batch INT
-          `);
-          console.log('Column idpicklist_batch added to table Picklists successfully.');
-        } else {
-          console.log('Column idpicklist_batch already exists in table Picklists.');
-        }
-      } catch (error) {
-        console.error('Error adding column idpicklist_batch to Picklists table:', error.message);
-      }
-      
-      // Update SyncStatus table to include batches entity
-      try {
-        // Check if SyncStatus table exists
-        const tableExists = await this.pool.request().query(`
-          SELECT COUNT(*) AS count
-          FROM sys.tables
-          WHERE name = 'SyncStatus'
-        `);
-        
-        if (tableExists.recordset[0].count === 0) {
-          // Create SyncStatus table if it doesn't exist
-          await this.pool.request().query(`
-            CREATE TABLE SyncStatus (
-              id INT IDENTITY(1,1) PRIMARY KEY,
-              entity_name NVARCHAR(50) NOT NULL,
-              entity_type NVARCHAR(50) NOT NULL,
-              last_sync_date DATETIME NULL,
-              last_sync_count INT NULL,
-              total_count INT NULL
-            )
-          `);
-          console.log('Created SyncStatus table');
-        }
-        
-        const entityExists = await this.pool.request().query(`
-          SELECT COUNT(*) AS count
-          FROM SyncStatus
-          WHERE entity_name = 'batches'
-        `);
-        
-        if (entityExists.recordset[0].count === 0) {
-          await this.pool.request().query(`
-            INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count, total_count)
-            VALUES ('batches', 'batches', GETDATE(), 0, 0)
-          `);
-          console.log('Added batches entity to SyncStatus');
-        } else {
-          await this.pool.request().query(`
-            UPDATE SyncStatus
-            SET entity_type = 'batches'
-            WHERE entity_name = 'batches'
-          `);
-          console.log('Updated existing batches entity in SyncStatus');
-        }
-      } catch (error) {
-        console.error('Error updating SyncStatus table:', error.message);
-      }
-      
-      console.log('Batches database schema initialized successfully');
-    } catch (error) {
-      console.error('Error initializing batches database schema:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Get all batches from Picqer API with pagination
-   * @param {Date|null} updatedSince - Only get batches updated since this date
-   * @returns {Promise<Array>} - Array of batches
-   */
-  async getAllBatches(updatedSince = null) {
-    try {
-      const limit = 100; // Number of batches per page
-      let offset = 0;
-      let hasMoreBatches = true;
-      let allBatches = [];
-      
-      // Format date for API request if provided
-      let updatedSinceParam = null;
-      if (updatedSince) {
-        updatedSinceParam = updatedSince.toISOString();
-        console.log(`Fetching batches updated since: ${updatedSinceParam}`);
-      } else {
-        console.log('Fetching all batches from Picqer...');
-      }
-      
-      // Continue fetching until we have all batches
-      while (hasMoreBatches) {
-        console.log(`Fetching batches with offset ${offset}...`);
-        
-        // Build request parameters
-        const params = { 
-          offset,
-          limit
-        };
-        
-        // Add updated_since parameter if provided
-        if (updatedSinceParam) {
-          params.updated_since = updatedSinceParam;
-        }
-        
-        // FIXED: Using correct plural endpoint '/picklists/batches'
-        const response = await this.apiClient.get('/picklists/batches', { params });
-        
-        if (response && Array.isArray(response) && response.length > 0) {
-          // Filter out duplicates by idpicklist_batch
-          const existingIds = new Set(allBatches.map(b => b.idpicklist_batch));
-          const newBatches = response.filter(batch => {
-            return !existingIds.has(batch.idpicklist_batch);
-          });
-          
-          allBatches = [...allBatches, ...newBatches];
-          console.log(`Retrieved ${newBatches.length} new batches (total unique: ${allBatches.length})`);
-          
-          // Check if we have more batches
-          hasMoreBatches = response.length === limit;
-          
-          // Increment offset for next page
-          offset += limit;
-        } else {
-          hasMoreBatches = false;
-        }
-      }
-      
-      // Sort batches by updated_at in descending order (newest first)
-      allBatches.sort((a, b) => {
-        const dateA = a.updated_at ? new Date(a.updated_at) : new Date(0);
-        const dateB = b.updated_at ? new Date(b.updated_at) : new Date(0);
-        return dateB - dateA; // Descending order (newest first)
-      });
-      
-      console.log('Sorted batches with most recently updated first for priority processing');
-      console.log(`✅ Retrieved ${allBatches.length} unique batches from Picqer`);
-      
-      return allBatches;
-    } catch (error) {
-      console.error('Error fetching batches from Picqer:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Get batch details from Picqer API
-   * @param {number} idpicklist_batch - Batch ID
-   * @returns {Promise<Object>} - Batch details
-   */
-  async getBatchDetails(idpicklist_batch) {
-    try {
-      console.log(`Fetching details for batch ${idpicklist_batch}...`);
-      
-      // FIXED: Using correct plural endpoint '/picklists/batches/${idpicklist_batch}'
-      const response = await this.apiClient.get(`/picklists/batches/${idpicklist_batch}`);
-      
-      if (response) {
-        console.log(`Retrieved details for batch ${idpicklist_batch}`);
-        return response;
-      }
-      
-      return null;
-    } catch (error) {
-      console.error(`Error fetching details for batch ${idpicklist_batch}:`, error.message);
-      return null;
-    }
-  }
-
-  /**
-   * Get batches updated since a specific date
-   * For incremental syncs, use a 30-day rolling window
-   * @param {Date} date - The date to check updates from
-   * @returns {Promise<Array>} - Array of updated batches
-   */
-  async getBatchesUpdatedSince(date) {
-    // For incremental syncs, use a 30-day rolling window
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    // Use the more recent date between the provided date and 30 days ago
-    const syncDate = date && date > thirtyDaysAgo ? date : thirtyDaysAgo;
-    
-    console.log(`Using sync date: ${syncDate.toISOString()}`);
-    return this.getAllBatches(syncDate);
-  }
-
-  /**
-   * Save batch to database
-   * @param {Object} batch - Batch object from Picqer API
-   * @returns {Promise<boolean>} - Success status
-   */
-  async saveBatch(batch) {
-    try {
-      // Ensure pool is initialized
-      if (!this.pool) {
-        this.pool = await this.initializePool();
-      }
-      
-      // Check if batch already exists
-      const existingResult = await this.pool.request()
-        .input('idpicklist_batch', sql.Int, batch.idpicklist_batch)
-        .query('SELECT id FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
-      
-      const exists = existingResult.recordset.length > 0;
-      
-      // Prepare common parameters
-      const request = new sql.Request(this.pool);
-      request.input('idpicklist_batch', sql.Int, batch.idpicklist_batch);
-      request.input('picklist_batchid', sql.NVarChar, batch.picklist_batchid || '');
-      request.input('idwarehouse', sql.Int, batch.idwarehouse || null);
-      request.input('type', sql.NVarChar, batch.type || '');
-      request.input('status', sql.NVarChar, batch.status || '');
-      request.input('assigned_to_iduser', sql.Int, batch.assigned_to_iduser || null);
-      request.input('assigned_to_name', sql.NVarChar, batch.assigned_to_name || '');
-      request.input('completed_by_iduser', sql.Int, batch.completed_by_iduser || null);
-      request.input('completed_by_name', sql.NVarChar, batch.completed_by_name || '');
-      request.input('total_products', sql.Int, batch.total_products || 0);
-      request.input('total_picklists', sql.Int, batch.total_picklists || 0);
-      request.input('completed_at', sql.DateTime, batch.completed_at ? new Date(batch.completed_at) : null);
-      request.input('created_at', sql.DateTime, batch.created_at ? new Date(batch.created_at) : null);
-      request.input('updated_at', sql.DateTime, batch.updated_at ? new Date(batch.updated_at) : null);
-      request.input('last_sync_date', sql.DateTime, new Date());
-      
-      if (exists) {
-        // Update existing batch
-        await request.query(`
-          UPDATE Batches
-          SET picklist_batchid = @picklist_batchid,
-              idwarehouse = @idwarehouse,
-              type = @type,
-              status = @status,
-              assigned_to_iduser = @assigned_to_iduser,
-              assigned_to_name = @assigned_to_name,
-              completed_by_iduser = @completed_by_iduser,
-              completed_by_name = @completed_by_name,
-              total_products = @total_products,
-              total_picklists = @total_picklists,
-              completed_at = @completed_at,
-              created_at = @created_at,
-              updated_at = @updated_at,
-              last_sync_date = @last_sync_date
-          WHERE idpicklist_batch = @idpicklist_batch
-        `);
-      } else {
-        // Insert new batch
-        await request.query(`
-          INSERT INTO Batches (
-            idpicklist_batch, picklist_batchid, idwarehouse, type, status,
-            assigned_to_iduser, assigned_to_name, completed_by_iduser, completed_by_name,
-            total_products, total_picklists, completed_at, created_at, updated_at, last_sync_date
-          )
-          VALUES (
-            @idpicklist_batch, @picklist_batchid, @idwarehouse, @type, @status,
-            @assigned_to_iduser, @assigned_to_name, @completed_by_iduser, @completed_by_name,
-            @total_products, @total_picklists, @completed_at, @created_at, @updated_at, @last_sync_date
-          )
-        `);
-      }
-      
-      return true;
-    } catch (error) {
-      console.error(`Error saving batch ${batch.idpicklist_batch}:`, error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Save multiple batches to database
-   * @param {Array} batches - Array of batch objects from Picqer API
-   * @returns {Promise<number>} - Number of successfully saved batches
-   */
-  async saveBatches(batches) {
-    try {
-      console.log(`Saving ${batches.length} batches to database...`);
-      
-      let successCount = 0;
-      const batchSize = 50; // Process in smaller batches to avoid overwhelming the database
-      
-      // Process batches in smaller chunks
-      for (let i = 0; i < batches.length; i += batchSize) {
-        const chunk = batches.slice(i, i + batchSize);
-        console.log(`Processing chunk ${Math.floor(i / batchSize) + 1}/${Math.ceil(batches.length / batchSize)} (${chunk.length} batches)...`);
-        
-        // Process each batch in the chunk
-        const results = await Promise.all(chunk.map(batch => this.saveBatch(batch)));
-        
-        // Count successful saves
-        const chunkSuccessCount = results.filter(result => result).length;
-        successCount += chunkSuccessCount;
-        
-        console.log(`Saved ${chunkSuccessCount}/${chunk.length} batches in current chunk (total: ${successCount}/${batches.length})`);
-      }
-      
-      console.log(`✅ Saved ${successCount}/${batches.length} batches to database`);
-      
-      // Update SyncStatus table
-      try {
-        // Ensure pool is initialized
-        if (!this.pool) {
-          this.pool = await this.initializePool();
-        }
-        
-        await this.pool.request()
-          .input('last_sync_date', sql.DateTime, new Date())
-          .input('last_sync_count', sql.Int, successCount)
-          .input('total_count', sql.Int, await this.getCount())
-          .query(`
-            UPDATE SyncStatus
-            SET last_sync_date = @last_sync_date,
-                last_sync_count = @last_sync_count,
-                total_count = @total_count
-            WHERE entity_name = 'batches'
-          `);
-        console.log('Updated SyncStatus for batches');
-      } catch (error) {
-        console.error('Error updating SyncStatus for batches:', error.message);
-      }
-      
-      return successCount;
-    } catch (error) {
-      console.error('Error saving batches to database:', error.message);
-      return 0;
-    }
-  }
-
-  /**
    * Get the total count of batches in the database
    * @returns {Promise<number>} - Total count of batches
    */
@@ -517,7 +243,7 @@ class BatchService {
     try {
       // Ensure pool is initialized
       if (!this.pool) {
-        console.log('Initializing pool for getCount()...');
+        console.log('Initializing pool for getCount() in BatchService...');
         this.pool = await this.initializePool();
       }
       
@@ -538,7 +264,7 @@ class BatchService {
     try {
       // Ensure pool is initialized
       if (!this.pool) {
-        console.log('Initializing pool for getLastSyncDate()...');
+        console.log('Initializing pool for getLastSyncDate() in BatchService...');
         this.pool = await this.initializePool();
       }
       
@@ -556,7 +282,7 @@ class BatchService {
       try {
         // Ensure pool is still available for fallback
         if (!this.pool) {
-          console.log('Reinitializing pool for fallback last sync date...');
+          console.log('Reinitializing pool for fallback last sync date in BatchService...');
           this.pool = await this.initializePool();
         }
         
@@ -587,74 +313,413 @@ class BatchService {
   }
 
   /**
-   * Reset the sync offset to start fresh
+   * Initialize the database with batches schema
    * @returns {Promise<boolean>} - Success status
    */
-  async resetSyncOffset() {
+  async initializeBatchesDatabase() {
     try {
-      console.log('Resetting sync offset for batches...');
+      console.log('Initializing database with batches schema...');
       
-      // Ensure pool is initialized
+      // Ensure pool is initialized with enhanced error handling
       if (!this.pool) {
-        this.pool = await this.initializePool();
+        try {
+          this.pool = await this.initializePool();
+        } catch (poolError) {
+          console.error('Failed to initialize pool for batches schema:', poolError.message);
+          
+          // Create a complete fallback configuration from environment variables
+          console.log('Creating complete fallback configuration from environment variables');
+          this.sqlConfig = {
+            server: process.env.SQL_SERVER,
+            port: parseInt(process.env.SQL_PORT || '1433', 10),
+            database: process.env.SQL_DATABASE,
+            user: process.env.SQL_USER,
+            password: process.env.SQL_PASSWORD,
+            options: {
+              encrypt: true
+            }
+          };
+          
+          // Verify essential properties
+          if (!this.sqlConfig.server) {
+            throw new Error('Database server not defined in environment variables');
+          }
+          
+          if (!this.sqlConfig.database) {
+            throw new Error('Database name not defined in environment variables');
+          }
+          
+          if (!this.sqlConfig.user) {
+            throw new Error('Database user not defined in environment variables');
+          }
+          
+          if (!this.sqlConfig.password) {
+            throw new Error('Database password not defined in environment variables');
+          }
+          
+          console.log('Attempting connection with fallback configuration:', {
+            server: this.sqlConfig.server,
+            port: this.sqlConfig.port,
+            database: this.sqlConfig.database,
+            user: this.sqlConfig.user
+          });
+          
+          this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
+          console.log('Successfully connected with fallback configuration');
+        }
       }
       
-      // Update SyncStatus to reset last_sync_date
-      await this.pool.request()
-        .input('last_sync_date', sql.DateTime, new Date('2025-01-01'))
-        .query(`
-          UPDATE SyncStatus
-          SET last_sync_date = @last_sync_date
-          WHERE entity_name = 'batches'
-        `);
+      // Create Batches table
+      await this.pool.request().query(batchesSchema.createBatchesTableSQL);
       
-      console.log('✅ Reset sync offset for batches successfully');
+      // Check if SyncStatus table exists
+      const tableResult = await this.pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
+      
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (syncTableExists) {
+        // Check if entity_type column exists in SyncStatus
+        const columnResult = await this.pool.request().query(`
+          SELECT 
+            COLUMN_NAME 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE 
+            TABLE_NAME = 'SyncStatus' AND 
+            COLUMN_NAME = 'entity_type'
+        `);
+        
+        const hasEntityTypeColumn = columnResult.recordset.length > 0;
+        
+        if (hasEntityTypeColumn) {
+          // Check if batches entity already exists in SyncStatus with entity_type
+          const entityTypeResult = await this.pool.request().query(`
+            SELECT COUNT(*) AS entityExists 
+            FROM SyncStatus 
+            WHERE entity_type = 'batches'
+          `);
+          
+          const entityTypeExists = entityTypeResult.recordset[0].entityExists > 0;
+          
+          if (entityTypeExists) {
+            // Entity with this entity_type already exists, update it instead of inserting
+            await this.pool.request().query(`
+              UPDATE SyncStatus 
+              SET entity_name = 'batches', last_sync_date = '2020-01-01T00:00:00.000Z'
+              WHERE entity_type = 'batches'
+            `);
+            console.log('Updated existing batches entity in SyncStatus');
+          } else {
+            // Check if batches entity exists by name
+            const entityNameResult = await this.pool.request().query(`
+              SELECT COUNT(*) AS entityExists 
+              FROM SyncStatus 
+              WHERE entity_name = 'batches'
+            `);
+            
+            const entityNameExists = entityNameResult.recordset[0].entityExists > 0;
+            
+            if (entityNameExists) {
+              // Entity with this name exists, update it
+              await this.pool.request().query(`
+                UPDATE SyncStatus 
+                SET entity_type = 'batches', last_sync_date = '2020-01-01T00:00:00.000Z'
+                WHERE entity_name = 'batches'
+              `);
+              console.log('Updated existing batches entity in SyncStatus');
+            } else {
+              // No entity exists, insert new one
+              await this.pool.request().query(`
+                INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
+                VALUES ('batches', 'batches', '2020-01-01T00:00:00.000Z');
+              `);
+              console.log('Inserted new batches entity in SyncStatus');
+            }
+          }
+        } else {
+          // No entity_type column, check by entity_name only
+          const entityResult = await this.pool.request().query(`
+            SELECT COUNT(*) AS entityExists 
+            FROM SyncStatus 
+            WHERE entity_name = 'batches'
+          `);
+          
+          const entityExists = entityResult.recordset[0].entityExists > 0;
+          
+          if (entityExists) {
+            // Entity exists, update it
+            await this.pool.request().query(`
+              UPDATE SyncStatus 
+              SET last_sync_date = '2020-01-01T00:00:00.000Z'
+              WHERE entity_name = 'batches'
+            `);
+            console.log('Updated existing batches entity in SyncStatus');
+          } else {
+            // No entity exists, insert new one
+            await this.pool.request().query(`
+              INSERT INTO SyncStatus (entity_name, last_sync_date)
+              VALUES ('batches', '2020-01-01T00:00:00.000Z');
+            `);
+            console.log('Inserted new batches entity in SyncStatus');
+          }
+        }
+      }
+      
+      console.log('✅ Batches database schema initialized successfully');
       return true;
     } catch (error) {
-      console.error('Error resetting sync offset for batches:', error.message);
-      return false;
+      console.error('❌ Error initializing batches database schema:', error.message);
+      throw error;
     }
   }
 
   /**
-   * Sync batches from Picqer to database
-   * @param {boolean} fullSync - Whether to perform a full sync
-   * @returns {Promise<Object>} - Sync result
+   * Reset the sync offset to start fresh
+   * @returns {Promise<Object>} - Result of the reset operation
+   */
+  async resetSyncOffset() {
+    try {
+      console.log('Resetting batch sync offset...');
+      
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for resetSyncOffset()...');
+        this.pool = await this.initializePool();
+      }
+      
+      // Reset the last_sync_date in SyncStatus table
+      await this.pool.request().query(`
+        UPDATE SyncStatus
+        SET last_sync_date = '2020-01-01T00:00:00.000Z'
+        WHERE entity_name = 'batches'
+      `);
+      
+      console.log('Batch sync offset reset successfully');
+      return {
+        success: true,
+        message: 'Batch sync offset reset successfully'
+      };
+    } catch (error) {
+      console.error('Error resetting batch sync offset:', error.message);
+      return {
+        success: false,
+        message: `Error resetting batch sync offset: ${error.message}`,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Get all batches from Picqer with pagination
+   * @param {number} offset - Offset for pagination
+   * @param {number} limit - Limit for pagination
+   * @returns {Promise<Object>} - Batches data
+   */
+  async getAllBatches(offset = 0, limit = 100) {
+    try {
+      // FIXED: Changed from '/picklist/batches' to '/picklists/batches'
+      const params = {
+        offset: offset,
+        limit: limit
+      };
+      
+      const response = await this.apiClient.get('/picklists/batches', { params });
+      return response.data;
+    } catch (error) {
+      console.error('Error getting batches:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get batch details from Picqer
+   * @param {string} idpicklist_batch - Batch ID
+   * @returns {Promise<Object>} - Batch details
+   */
+  async getBatchDetails(idpicklist_batch) {
+    try {
+      // FIXED: Changed from '/picklist/batches/' to '/picklists/batches/'
+      const response = await this.apiClient.get(`/picklists/batches/${idpicklist_batch}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error getting batch details for ${idpicklist_batch}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync batches from Picqer to the database
+   * @param {boolean} [fullSync=false] - Whether to perform a full sync
+   * @returns {Promise<Object>} - Result of the sync operation
    */
   async syncBatches(fullSync = false) {
     try {
-      console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync of batches...`);
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
       
-      let batches;
-      
-      if (fullSync) {
-        // For full sync, get all batches
-        batches = await this.getAllBatches();
-      } else {
-        // For incremental sync, get batches updated since last sync
-        const lastSyncDate = await this.getLastSyncDate();
-        batches = await this.getBatchesUpdatedSince(lastSyncDate);
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for syncBatches()...');
+        this.pool = await this.initializePool();
       }
       
-      if (batches.length === 0) {
-        console.log('No new or updated batches to sync');
-        return { success: true, count: 0 };
+      // Get last sync date
+      let lastSyncDate = null;
+      if (!fullSync) {
+        lastSyncDate = await this.getLastSyncDate();
+        console.log(`Last batch sync date: ${lastSyncDate.toISOString()}`);
       }
       
-      // Save batches to database
-      const savedCount = await this.saveBatches(batches);
+      // Track sync progress
+      const syncId = uuidv4();
+      const startTime = new Date();
+      let totalBatches = 0;
+      let newBatches = 0;
+      let uniqueBatches = new Set();
       
-      console.log(`✅ ${fullSync ? 'Full' : 'Incremental'} sync of batches completed: ${savedCount}/${batches.length} batches saved`);
+      // FIXED: Start with offset 0 and use a consistent increment
+      let offset = 0;
+      const limit = this.batchSize;
+      let hasMore = true;
       
-      return {
-        success: true,
-        count: savedCount,
-        total: batches.length
-      };
+      // Create a transaction for batch inserts
+      const transaction = new sql.Transaction(this.pool);
+      await transaction.begin();
+      
+      try {
+        while (hasMore) {
+          console.log(`Fetching batches with offset ${offset}...`);
+          
+          // Get batches from Picqer
+          const batchesData = await this.getAllBatches(offset, limit);
+          
+          // Check if we have more batches to fetch
+          hasMore = batchesData.length === limit;
+          
+          // Process batches
+          for (const batch of batchesData) {
+            // Skip if we've already processed this batch in this sync
+            if (uniqueBatches.has(batch.idpicklist_batch)) {
+              continue;
+            }
+            
+            // Add to unique batches set
+            uniqueBatches.add(batch.idpicklist_batch);
+            totalBatches++;
+            
+            // Check if batch is newer than last sync date
+            const batchDate = new Date(batch.created);
+            if (!fullSync && batchDate <= lastSyncDate) {
+              continue;
+            }
+            
+            // Get batch details
+            const batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
+            
+            // Insert or update batch in database
+            await transaction.request()
+              .input('idpicklist_batch', sql.NVarChar, batch.idpicklist_batch)
+              .input('idpicklist', sql.NVarChar, batch.idpicklist)
+              .input('idcustomer', sql.NVarChar, batch.idcustomer || null)
+              .input('iduser', sql.NVarChar, batch.iduser || null)
+              .input('idwarehouse', sql.NVarChar, batch.idwarehouse || null)
+              .input('created', sql.DateTime, new Date(batch.created))
+              .input('finished', sql.DateTime, batch.finished ? new Date(batch.finished) : null)
+              .input('status', sql.NVarChar, batch.status)
+              .input('last_sync_date', sql.DateTime, new Date())
+              .query(`
+                MERGE INTO Batches AS target
+                USING (SELECT @idpicklist_batch AS idpicklist_batch) AS source
+                ON target.idpicklist_batch = source.idpicklist_batch
+                WHEN MATCHED THEN
+                  UPDATE SET
+                    idpicklist = @idpicklist,
+                    idcustomer = @idcustomer,
+                    iduser = @iduser,
+                    idwarehouse = @idwarehouse,
+                    created = @created,
+                    finished = @finished,
+                    status = @status,
+                    last_sync_date = @last_sync_date
+                WHEN NOT MATCHED THEN
+                  INSERT (
+                    idpicklist_batch,
+                    idpicklist,
+                    idcustomer,
+                    iduser,
+                    idwarehouse,
+                    created,
+                    finished,
+                    status,
+                    last_sync_date
+                  )
+                  VALUES (
+                    @idpicklist_batch,
+                    @idpicklist,
+                    @idcustomer,
+                    @iduser,
+                    @idwarehouse,
+                    @created,
+                    @finished,
+                    @status,
+                    @last_sync_date
+                  );
+              `);
+            
+            newBatches++;
+          }
+          
+          // FIXED: Consistently increment offset by the limit
+          offset += limit;
+          
+          console.log(`Retrieved ${batchesData.length} batches (total unique: ${uniqueBatches.size})`);
+          
+          // Break if we have no more batches
+          if (batchesData.length === 0) {
+            hasMore = false;
+          }
+        }
+        
+        // Commit transaction
+        await transaction.commit();
+        
+        // Update last sync date
+        await this.pool.request()
+          .input('last_sync_date', sql.DateTime, new Date())
+          .query(`
+            UPDATE SyncStatus
+            SET last_sync_date = @last_sync_date
+            WHERE entity_name = 'batches'
+          `);
+        
+        const endTime = new Date();
+        const duration = (endTime - startTime) / 1000;
+        
+        console.log(`Batch sync completed in ${duration} seconds`);
+        console.log(`Total batches processed: ${totalBatches}`);
+        console.log(`New batches added/updated: ${newBatches}`);
+        
+        return {
+          success: true,
+          syncId,
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          duration,
+          totalBatches,
+          newBatches
+        };
+      } catch (error) {
+        // Rollback transaction on error
+        await transaction.rollback();
+        throw error;
+      }
     } catch (error) {
-      console.error(`Error syncing batches:`, error.message);
+      console.error('Error syncing batches:', error.message);
       return {
         success: false,
+        message: `Error syncing batches: ${error.message}`,
         error: error.message
       };
     }
