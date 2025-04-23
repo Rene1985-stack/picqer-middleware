@@ -40,6 +40,7 @@ app.use(express.urlencoded({ extended: true }));
 const startup = require('./startup');
 const dbConfig = {
   server: process.env.SQL_SERVER,
+  port: parseInt(process.env.SQL_PORT || '1433', 10), // Default to 1433 for SQL Server if not specified
   database: process.env.SQL_DATABASE,
   user: process.env.SQL_USER,
   password: process.env.SQL_PASSWORD,
@@ -59,6 +60,15 @@ const dbConfig = {
     }
   }
 };
+
+// Log database configuration for debugging (without password)
+console.log('Database configuration:', {
+  server: dbConfig.server,
+  port: dbConfig.port,
+  database: dbConfig.database,
+  user: dbConfig.user
+});
+
 startup(dbConfig);
 
 // Picqer API configuration
@@ -66,6 +76,7 @@ const apiKey = process.env.PICQER_API_KEY;
 const baseUrl = process.env.PICQER_BASE_URL;
 
 // Initialize services
+console.log('🚀 Initializing middleware services...');
 const picqerService = new PicqerService(apiKey, baseUrl, dbConfig);
 
 // Configure rate limiting based on environment
@@ -167,6 +178,7 @@ app.get('/api/status/database', async (req, res) => {
       success: true,
       connected: result.recordset[0].connected === 1,
       server: process.env.SQL_SERVER,
+      port: process.env.SQL_PORT || '1433',
       database: process.env.SQL_DATABASE
     });
   } catch (error) {
@@ -175,6 +187,7 @@ app.get('/api/status/database', async (req, res) => {
       connected: false,
       error: error.message,
       server: process.env.SQL_SERVER,
+      port: process.env.SQL_PORT || '1433',
       database: process.env.SQL_DATABASE
     });
   }
@@ -233,6 +246,45 @@ async function initializeDatabase() {
       // Continue initialization even if date fixing fails
     }
     
+    // ADDED: Early initialization of services
+    console.log('Initializing services early...');
+    try {
+      // Check if the services have the initialize method (from our updated implementation)
+      if (typeof picqerService.initialize === 'function') {
+        await picqerService.initialize();
+        console.log('✅ PicqerService initialized successfully');
+      }
+      
+      if (typeof picklistService.initialize === 'function') {
+        await picklistService.initialize();
+        console.log('✅ PicklistService initialized successfully');
+      }
+      
+      if (typeof warehouseService.initialize === 'function') {
+        await warehouseService.initialize();
+        console.log('✅ WarehouseService initialized successfully');
+      }
+      
+      if (typeof userService.initialize === 'function') {
+        await userService.initialize();
+        console.log('✅ UserService initialized successfully');
+      }
+      
+      if (typeof supplierService.initialize === 'function') {
+        await supplierService.initialize();
+        console.log('✅ SupplierService initialized successfully');
+      }
+      
+      if (typeof batchService.initialize === 'function') {
+        await batchService.initialize();
+        console.log('✅ BatchService initialized successfully');
+      }
+    } catch (initError) {
+      console.error('Error during service initialization:', initError.message);
+      console.log('Continuing with traditional initialization...');
+    }
+    
+    // Traditional initialization (as fallback)
     // Initialize product schema
     await picqerService.initializeDatabase().catch(err => {
       console.error('Error initializing product schema:', err.message);
@@ -281,24 +333,6 @@ app.listen(PORT, async () => {
     
     // Initialize database after server starts
     await initializeDatabase();
-    
-    // ADDED: Early initialization of batch service
-    console.log('Initializing batch service early...');
-    try {
-      // Check if the service has the initialize method (from our updated implementation)
-      if (typeof batchService.initialize === 'function') {
-        await batchService.initialize();
-        console.log('✅ Batch service initialized successfully');
-      } else {
-        // Fallback for older implementation without initialize method
-        console.log('Batch service does not have initialize method, using initializeBatchesDatabase instead');
-        await batchService.initializeBatchesDatabase();
-        console.log('✅ Batch service database initialized successfully');
-      }
-    } catch (batchInitError) {
-      console.error('❌ Error initializing batch service:', batchInitError.message);
-      console.log('Continuing startup despite batch service initialization error');
-    }
     
     // Log rate limiter configuration
     console.log('Rate limiter configuration:');
