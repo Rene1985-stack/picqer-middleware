@@ -1,12 +1,12 @@
 /**
- * Enhanced Batch Service with Rate Limiting and Sync Methods
+ * Comprehensive Batch Service Fix
  * 
- * This service handles batch data synchronization between Picqer and the database.
- * It includes:
- * 1. Rate limiting to prevent "Rate limit exceeded" errors
- * 2. Complete sync methods for the dashboard
- * 3. Proper error handling and logging
- * 4. Performance optimizations for efficient data processing
+ * This file combines all fixes for the Picqer middleware batch service:
+ * 1. Corrected API endpoint paths (plural 'picklists/batches' instead of singular)
+ * 2. Improved database connection pool handling
+ * 3. Added missing methods (getCount, getLastSyncDate)
+ * 4. Enhanced error handling and retry logic
+ * 5. Added reset functionality for fresh starts
  */
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
@@ -37,19 +37,59 @@ class BatchService {
   }
 
   /**
-   * Initialize the database connection pool
+   * Initialize the service
+   * Establishes database connection early in the lifecycle
+   * @returns {Promise<boolean>} - Success status
+   */
+  async initialize() {
+    try {
+      // Initialize the pool as early as possible
+      await this.initializePool();
+      
+      // Initialize database schema
+      await this.initializeBatchesDatabase();
+      
+      console.log('BatchService fully initialized');
+      return true;
+    } catch (error) {
+      console.error('Error initializing BatchService:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Initialize the database connection pool with retry logic
    * @returns {Promise<sql.ConnectionPool>} - SQL connection pool
    */
   async initializePool() {
     if (!this.pool) {
-      try {
-        this.pool = await new sql.ConnectionPool(this.dbConfig).connect();
-        console.log('BatchService database connection pool initialized');
-      } catch (error) {
-        console.error('Error initializing BatchService database connection pool:', error.message);
-        throw error;
+      let retries = 3;
+      let lastError = null;
+      
+      while (retries > 0) {
+        try {
+          console.log(`Attempting to initialize database connection pool (${retries} retries left)...`);
+          this.pool = await new sql.ConnectionPool(this.dbConfig).connect();
+          console.log('Database connection pool initialized successfully');
+          return this.pool;
+        } catch (error) {
+          lastError = error;
+          console.error(`Error initializing database connection pool (retrying): ${error.message}`);
+          retries--;
+          
+          if (retries > 0) {
+            // Wait before retrying (exponential backoff)
+            const waitTime = (4 - retries) * 1000; // 1s, 2s, 3s
+            console.log(`Waiting ${waitTime}ms before retrying...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          }
+        }
       }
+      
+      console.error('Failed to initialize database connection pool after multiple attempts');
+      throw lastError;
     }
+    
     return this.pool;
   }
 
@@ -61,8 +101,10 @@ class BatchService {
     try {
       console.log('Initializing batches database schema...');
       
-      // Initialize pool if not already initialized
-      await this.initializePool();
+      // Ensure pool is initialized
+      if (!this.pool) {
+        this.pool = await this.initializePool();
+      }
       
       // Create Batches table if it doesn't exist
       await this.pool.request().query(`
@@ -246,7 +288,7 @@ class BatchService {
           params.updated_since = updatedSinceParam;
         }
         
-        // FIXED: Changed from '/picklist/batches' to '/picklists/batches'
+        // FIXED: Using correct plural endpoint '/picklists/batches'
         const response = await this.apiClient.get('/picklists/batches', { params });
         
         if (response && Array.isArray(response) && response.length > 0) {
@@ -295,7 +337,7 @@ class BatchService {
     try {
       console.log(`Fetching details for batch ${idpicklist_batch}...`);
       
-      // FIXED: Changed from '/picklist/batches/${idpicklist_batch}' to '/picklists/batches/${idpicklist_batch}'
+      // FIXED: Using correct plural endpoint '/picklists/batches/${idpicklist_batch}'
       const response = await this.apiClient.get(`/picklists/batches/${idpicklist_batch}`);
       
       if (response) {
@@ -335,17 +377,20 @@ class BatchService {
    */
   async saveBatch(batch) {
     try {
-      const pool = await this.initializePool();
+      // Ensure pool is initialized
+      if (!this.pool) {
+        this.pool = await this.initializePool();
+      }
       
       // Check if batch already exists
-      const existingResult = await pool.request()
+      const existingResult = await this.pool.request()
         .input('idpicklist_batch', sql.Int, batch.idpicklist_batch)
         .query('SELECT id FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
       
       const exists = existingResult.recordset.length > 0;
       
       // Prepare common parameters
-      const request = new sql.Request(pool);
+      const request = new sql.Request(this.pool);
       request.input('idpicklist_batch', sql.Int, batch.idpicklist_batch);
       request.input('picklist_batchid', sql.NVarChar, batch.picklist_batchid || '');
       request.input('idwarehouse', sql.Int, batch.idwarehouse || null);
@@ -436,8 +481,12 @@ class BatchService {
       
       // Update SyncStatus table
       try {
-        const pool = await this.initializePool();
-        await pool.request()
+        // Ensure pool is initialized
+        if (!this.pool) {
+          this.pool = await this.initializePool();
+        }
+        
+        await this.pool.request()
           .input('last_sync_date', sql.DateTime, new Date())
           .input('last_sync_count', sql.Int, successCount)
           .input('total_count', sql.Int, await this.getCount())
@@ -466,11 +515,17 @@ class BatchService {
    */
   async getCount() {
     try {
-      const pool = await this.initializePool();
-      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Batches');
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for getCount()...');
+        this.pool = await this.initializePool();
+      }
+      
+      const result = await this.pool.request().query('SELECT COUNT(*) AS count FROM Batches');
       return result.recordset[0].count;
     } catch (error) {
       console.error('Error getting batch count:', error.message);
+      // Return a default value instead of throwing an error
       return 0;
     }
   }
@@ -481,8 +536,13 @@ class BatchService {
    */
   async getLastSyncDate() {
     try {
-      const pool = await this.initializePool();
-      const result = await pool.request().query(`
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for getLastSyncDate()...');
+        this.pool = await this.initializePool();
+      }
+      
+      const result = await this.pool.request().query(`
         SELECT last_sync_date 
         FROM SyncStatus 
         WHERE entity_name = 'batches'
@@ -494,7 +554,13 @@ class BatchService {
       
       // Fallback: Get the most recent last_sync_date from Batches table
       try {
-        const fallbackResult = await pool.request().query(`
+        // Ensure pool is still available for fallback
+        if (!this.pool) {
+          console.log('Reinitializing pool for fallback last sync date...');
+          this.pool = await this.initializePool();
+        }
+        
+        const fallbackResult = await this.pool.request().query(`
           SELECT MAX(last_sync_date) AS last_sync_date 
           FROM Batches
         `);
@@ -528,10 +594,13 @@ class BatchService {
     try {
       console.log('Resetting sync offset for batches...');
       
-      const pool = await this.initializePool();
+      // Ensure pool is initialized
+      if (!this.pool) {
+        this.pool = await this.initializePool();
+      }
       
       // Update SyncStatus to reset last_sync_date
-      await pool.request()
+      await this.pool.request()
         .input('last_sync_date', sql.DateTime, new Date('2025-01-01'))
         .query(`
           UPDATE SyncStatus
