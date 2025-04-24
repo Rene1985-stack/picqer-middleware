@@ -6,7 +6,7 @@ async function resetSync() {
   // Create batch service instance with your API credentials
   const batchService = new BatchService(
     process.env.PICQER_API_KEY,
-    process.env.PICQER_BASE_URL,
+    process.env.PICQER_API_URL,
     {
       server: process.env.SQL_SERVER,
       port: parseInt(process.env.SQL_PORT || '1433', 10),
