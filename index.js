@@ -1,12 +1,11 @@
 /**
- * Final comprehensive fix for index.js with proper imports, API adapter initialization, dashboard routing, and dashboard files
+ * Standalone solution for index.js with inline JavaScript for dashboard
  * 
  * This version fixes all identified issues:
  * 1. PicqerApiClient import issue
  * 2. API adapter function issue
  * 3. Dashboard routing issue
- * 4. Missing dashboard JavaScript files
- * 5. Dashboard HTML creation issue
+ * 4. Missing dashboard JavaScript files (embedded directly)
  */
 
 require('dotenv').config();
@@ -232,30 +231,11 @@ if (!fs.existsSync(dashboardDir)) {
   fs.mkdirSync(dashboardDir, { recursive: true });
 }
 
-// FIX: Create all required JavaScript files for the dashboard
-const dashboardJsFiles = {
-  'dashboard-api.js': fs.readFileSync(path.join(__dirname, 'dashboard-api.js'), 'utf8'),
-  'batch-ui-components.js': fs.readFileSync(path.join(__dirname, 'batch-ui-components.js'), 'utf8'),
-  'batch-charts.js': fs.readFileSync(path.join(__dirname, 'batch-charts.js'), 'utf8'),
-  'sync-button-verifier.js': fs.readFileSync(path.join(__dirname, 'sync-button-verifier.js'), 'utf8'),
-  'dashboard-date-formatter.js': fs.readFileSync(path.join(__dirname, 'dashboard-date-formatter.js'), 'utf8'),
-  'api-endpoint-monitor.js': fs.readFileSync(path.join(__dirname, 'api-endpoint-monitor.js'), 'utf8')
-};
-
-// Write all JavaScript files to the dashboard directory
-for (const [filename, content] of Object.entries(dashboardJsFiles)) {
-  const filePath = path.join(dashboardDir, filename);
-  if (!fs.existsSync(filePath)) {
-    console.log(`Creating ${filename} in dashboard directory`);
-    fs.writeFileSync(filePath, content);
-  }
-}
-
-// FIX: Create a basic dashboard.html file if it doesn't exist
+// FIX: Create a dashboard.html file with inline JavaScript
 const dashboardHtmlPath = path.join(dashboardDir, 'dashboard.html');
 if (!fs.existsSync(dashboardHtmlPath)) {
-  console.log('Creating basic dashboard.html file');
-  const basicDashboardHtml = `
+  console.log('Creating dashboard.html file with inline JavaScript');
+  const dashboardHtml = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -373,18 +353,298 @@ if (!fs.existsSync(dashboardHtmlPath)) {
     </div>
   </div>
 
-  <!-- JavaScript files -->
-  <script src="dashboard-api.js"></script>
-  <script src="batch-ui-components.js"></script>
-  <script src="batch-charts.js"></script>
-  <script src="sync-button-verifier.js"></script>
-  <script src="dashboard-date-formatter.js"></script>
-  <script src="api-endpoint-monitor.js"></script>
+  <!-- Inline JavaScript -->
+  <script>
+    // Dashboard API
+    document.addEventListener('DOMContentLoaded', function() {
+      // API endpoints
+      const API_ENDPOINTS = {
+        STATUS: '/api/status',
+        STATS: '/api/stats',
+        LOGS: '/api/logs',
+        HISTORY: '/api/history',
+        SYNC: '/api/sync',
+        SYNC_PRODUCTS: '/api/sync/products',
+        SYNC_PICKLISTS: '/api/sync/picklists',
+        SYNC_WAREHOUSES: '/api/sync/warehouses',
+        SYNC_USERS: '/api/sync/users',
+        SYNC_SUPPLIERS: '/api/sync/suppliers',
+        SYNC_BATCHES: '/api/sync/batches'
+      };
+      
+      // Elements
+      const statusElement = document.getElementById('status');
+      const statsElement = document.getElementById('stats');
+      const historyElement = document.getElementById('history');
+      const endpointStatusElement = document.getElementById('endpoint-status');
+      
+      // Initialize event listeners
+      document.getElementById('syncAll').addEventListener('click', function() {
+        syncAll();
+      });
+      
+      document.getElementById('syncProducts').addEventListener('click', function() {
+        syncEntity('products');
+      });
+      
+      document.getElementById('syncPicklists').addEventListener('click', function() {
+        syncEntity('picklists');
+      });
+      
+      document.getElementById('syncWarehouses').addEventListener('click', function() {
+        syncEntity('warehouses');
+      });
+      
+      document.getElementById('syncUsers').addEventListener('click', function() {
+        syncEntity('users');
+      });
+      
+      document.getElementById('syncSuppliers').addEventListener('click', function() {
+        syncEntity('suppliers');
+      });
+      
+      document.getElementById('syncBatches').addEventListener('click', function() {
+        syncEntity('batches');
+      });
+      
+      // Load all data
+      loadStatus();
+      loadStats();
+      loadHistory();
+      createEndpointStatusTable();
+      
+      // Load system status
+      function loadStatus() {
+        if (!statusElement) return;
+        
+        statusElement.innerHTML = 'Checking status...';
+        
+        fetch(API_ENDPOINTS.STATUS)
+          .then(response => response.json())
+          .then(data => {
+            if (data.online) {
+              statusElement.innerHTML = '<span class="status online">Online</span> - Version: ' + data.version;
+            } else {
+              statusElement.innerHTML = '<span class="status offline">Offline</span>';
+            }
+          })
+          .catch(error => {
+            statusElement.innerHTML = '<span class="status offline">Offline</span> - Error: ' + error.message;
+          });
+      }
+      
+      // Load statistics
+      function loadStats() {
+        if (!statsElement) return;
+        
+        statsElement.innerHTML = 'Loading statistics...';
+        
+        fetch(API_ENDPOINTS.STATS)
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              let statsHtml = '<table>';
+              statsHtml += '<tr><th>Entity</th><th>Count</th><th>Last Sync</th><th>Status</th></tr>';
+              
+              for (const [entity, stats] of Object.entries(data.stats)) {
+                statsHtml += '<tr>';
+                statsHtml += '<td>' + entity.charAt(0).toUpperCase() + entity.slice(1) + '</td>';
+                statsHtml += '<td>' + stats.totalCount + '</td>';
+                statsHtml += '<td>' + new Date(stats.lastSyncDate).toLocaleString() + '</td>';
+                statsHtml += '<td>' + stats.status + '</td>';
+                statsHtml += '</tr>';
+              }
+              
+              statsHtml += '</table>';
+              statsElement.innerHTML = statsHtml;
+            } else {
+              statsElement.innerHTML = 'Error loading statistics: ' + data.error;
+            }
+          })
+          .catch(error => {
+            statsElement.innerHTML = 'Error loading statistics: ' + error.message;
+          });
+      }
+      
+      // Load sync history
+      function loadHistory() {
+        if (!historyElement) return;
+        
+        historyElement.innerHTML = 'Loading history...';
+        
+        fetch(API_ENDPOINTS.HISTORY)
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              let historyHtml = '<table>';
+              historyHtml += '<tr><th>Entity</th><th>Timestamp</th><th>Status</th><th>Count</th></tr>';
+              
+              for (const item of data.history) {
+                historyHtml += '<tr>';
+                historyHtml += '<td>' + item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1) + '</td>';
+                historyHtml += '<td>' + new Date(item.timestamp).toLocaleString() + '</td>';
+                historyHtml += '<td>' + (item.success ? 'Success' : 'Failed') + '</td>';
+                historyHtml += '<td>' + (item.count || 0) + '</td>';
+                historyHtml += '</tr>';
+              }
+              
+              historyHtml += '</table>';
+              historyElement.innerHTML = historyHtml;
+            } else {
+              historyElement.innerHTML = 'Error loading history: ' + data.error;
+            }
+          })
+          .catch(error => {
+            historyElement.innerHTML = 'Error loading history: ' + error.message;
+          });
+      }
+      
+      // Create endpoint status table
+      function createEndpointStatusTable() {
+        if (!endpointStatusElement) return;
+        
+        // Define endpoints to monitor
+        const endpoints = [
+          { name: 'Status', url: API_ENDPOINTS.STATUS, method: 'GET' },
+          { name: 'Stats', url: API_ENDPOINTS.STATS, method: 'GET' },
+          { name: 'Logs', url: API_ENDPOINTS.LOGS, method: 'GET' },
+          { name: 'History', url: API_ENDPOINTS.HISTORY, method: 'GET' },
+          { name: 'Sync', url: API_ENDPOINTS.SYNC, method: 'POST' },
+          { name: 'Products Sync', url: API_ENDPOINTS.SYNC_PRODUCTS, method: 'POST' },
+          { name: 'Picklists Sync', url: API_ENDPOINTS.SYNC_PICKLISTS, method: 'POST' },
+          { name: 'Warehouses Sync', url: API_ENDPOINTS.SYNC_WAREHOUSES, method: 'POST' },
+          { name: 'Users Sync', url: API_ENDPOINTS.SYNC_USERS, method: 'POST' },
+          { name: 'Suppliers Sync', url: API_ENDPOINTS.SYNC_SUPPLIERS, method: 'POST' },
+          { name: 'Batches Sync', url: API_ENDPOINTS.SYNC_BATCHES, method: 'POST' }
+        ];
+        
+        // Create table
+        let tableHtml = '<table>';
+        tableHtml += '<tr><th>Endpoint</th><th>URL</th><th>Status</th><th>Response Time</th></tr>';
+        
+        // Add rows for each endpoint
+        endpoints.forEach(endpoint => {
+          tableHtml += '<tr data-endpoint="' + endpoint.url + '">';
+          tableHtml += '<td>' + endpoint.name + '</td>';
+          tableHtml += '<td>' + endpoint.url + '</td>';
+          tableHtml += '<td class="endpoint-status">Checking...</td>';
+          tableHtml += '<td class="endpoint-response-time">-</td>';
+          tableHtml += '</tr>';
+        });
+        
+        tableHtml += '</table>';
+        endpointStatusElement.innerHTML = tableHtml;
+        
+        // Check endpoints
+        checkEndpoints(endpoints);
+        
+        // Set interval to check endpoints every 60 seconds
+        setInterval(function() {
+          checkEndpoints(endpoints);
+        }, 60000);
+      }
+      
+      // Check endpoints
+      function checkEndpoints(endpoints) {
+        endpoints.forEach(endpoint => {
+          checkEndpoint(endpoint);
+        });
+      }
+      
+      // Check endpoint
+      function checkEndpoint(endpoint) {
+        // Find endpoint row
+        const row = document.querySelector('tr[data-endpoint="' + endpoint.url + '"]');
+        
+        // If row exists, check endpoint
+        if (row) {
+          // Find status and response time cells
+          const statusCell = row.querySelector('.endpoint-status');
+          const responseTimeCell = row.querySelector('.endpoint-response-time');
+          
+          // Update status to checking
+          statusCell.textContent = 'Checking...';
+          statusCell.className = 'endpoint-status checking';
+          
+          // Start timer
+          const startTime = performance.now();
+          
+          // Send request to endpoint
+          fetch(endpoint.url, { method: endpoint.method === 'POST' ? 'HEAD' : 'GET' })
+            .then(response => {
+              // Calculate response time
+              const endTime = performance.now();
+              const responseTime = Math.round(endTime - startTime);
+              
+              // Update status and response time
+              if (response.ok) {
+                statusCell.textContent = 'Online';
+                statusCell.className = 'endpoint-status online';
+              } else {
+                statusCell.textContent = 'Error (' + response.status + ')';
+                statusCell.className = 'endpoint-status error';
+              }
+              
+              responseTimeCell.textContent = responseTime + ' ms';
+            })
+            .catch(error => {
+              // Calculate response time
+              const endTime = performance.now();
+              const responseTime = Math.round(endTime - startTime);
+              
+              // Update status and response time
+              statusCell.textContent = 'Offline';
+              statusCell.className = 'endpoint-status offline';
+              responseTimeCell.textContent = responseTime + ' ms';
+            });
+        }
+      }
+      
+      // Sync all entities
+      function syncAll() {
+        if (confirm('Are you sure you want to sync all entities? This may take some time.')) {
+          fetch(API_ENDPOINTS.SYNC, { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+              alert(data.message);
+              // Reload data after sync
+              setTimeout(function() {
+                loadStatus();
+                loadStats();
+                loadHistory();
+              }, 2000);
+            })
+            .catch(error => {
+              alert('Error: ' + error.message);
+            });
+        }
+      }
+      
+      // Sync specific entity
+      function syncEntity(entity) {
+        if (confirm('Are you sure you want to sync ' + entity + '? This may take some time.')) {
+          fetch(API_ENDPOINTS.SYNC + '/' + entity, { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+              alert(data.message);
+              // Reload data after sync
+              setTimeout(function() {
+                loadStatus();
+                loadStats();
+                loadHistory();
+              }, 2000);
+            })
+            .catch(error => {
+              alert('Error: ' + error.message);
+            });
+        }
+      }
+    });
+  </script>
 </body>
 </html>
   `;
-  // FIX: Use basicDashboardHtml instead of content
-  fs.writeFileSync(dashboardHtmlPath, basicDashboardHtml);
+  fs.writeFileSync(dashboardHtmlPath, dashboardHtml);
 }
 
 // Serve static files from the dashboard directory
