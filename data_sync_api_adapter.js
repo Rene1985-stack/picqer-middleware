@@ -4,6 +4,8 @@
  * This adapter connects the dashboard to the actual sync implementation,
  * ensuring that when sync buttons are clicked, real data is synced from
  * Picqer to the database. Now includes BatchService integration.
+ * 
+ * UPDATED: Removed batch-specific metrics endpoints that were causing an endless loop.
  */
 
 const express = require('express');
@@ -517,157 +519,22 @@ router.get('/test', async (req, res) => {
   }
 });
 
-// Batch metrics endpoint - provides data for batch metrics charts
-router.get('/batches/metrics', async (req, res) => {
-  try {
-    console.log('Fetching batch metrics...');
-    
-    // Get batch service instance
-    if (!BatchService) {
-      throw new Error('BatchService not initialized');
-    }
-    
-    // Get real batch count if available
-    const batchCount = await safeMethodCall(BatchService, 'getCount', 0);
-    
-    // Get last sync date if available
-    const lastSyncDate = await safeMethodCall(BatchService, 'getLastSyncDate', new Date().toISOString());
-    
-    // Sample metrics data - replace with real data when available
-    const metrics = {
-      totalBatches: batchCount,
-      lastSyncDate: lastSyncDate,
-      successRate: 95, // percentage
-      averageSyncTime: 120, // seconds
-      batchesPerDay: 25,
-      syncHistory: [
-        { date: '2025-04-15', success: 20, failed: 1 },
-        { date: '2025-04-16', success: 22, failed: 0 },
-        { date: '2025-04-17', success: 18, failed: 2 },
-        { date: '2025-04-18', success: 25, failed: 1 },
-        { date: '2025-04-19', success: 30, failed: 0 },
-        { date: '2025-04-20', success: 28, failed: 1 },
-        { date: '2025-04-21', success: 24, failed: 0 }
-      ]
-    };
-    
-    res.json({
-      success: true,
-      metrics
-    });
-  } catch (error) {
-    console.error('Error in batches metrics endpoint:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      metrics: {
-        totalBatches: 0,
-        lastSyncDate: new Date().toISOString(),
-        successRate: 0,
-        averageSyncTime: 0,
-        batchesPerDay: 0,
-        syncHistory: []
-      }
-    });
-  }
-});
+// REMOVED: Batch metrics endpoint - was causing endless loop
+// router.get('/batches/metrics', async (req, res) => {
+//   // This endpoint was removed to prevent the middleware from getting stuck in an endless loop
+// });
 
-// Batch productivity endpoint - provides data for productivity charts
-router.get('/batches/productivity', async (req, res) => {
-  try {
-    console.log('Fetching batch productivity...');
-    
-    // Sample productivity data - replace with real data when available
-    const productivity = {
-      picker: {
-        average: 120, // items per hour
-        trend: [
-          { date: '2025-04-15', value: 115 },
-          { date: '2025-04-16', value: 118 },
-          { date: '2025-04-17', value: 122 },
-          { date: '2025-04-18', value: 125 },
-          { date: '2025-04-19', value: 121 },
-          { date: '2025-04-20', value: 119 },
-          { date: '2025-04-21', value: 120 }
-        ]
-      },
-      packer: {
-        average: 150, // items per hour
-        trend: [
-          { date: '2025-04-15', value: 145 },
-          { date: '2025-04-16', value: 148 },
-          { date: '2025-04-17', value: 152 },
-          { date: '2025-04-18', value: 155 },
-          { date: '2025-04-19', value: 151 },
-          { date: '2025-04-20', value: 149 },
-          { date: '2025-04-21', value: 150 }
-        ]
-      }
-    };
-    
-    res.json({
-      success: true,
-      productivity
-    });
-  } catch (error) {
-    console.error('Error in batches productivity endpoint:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      productivity: {
-        picker: { average: 0, trend: [] },
-        packer: { average: 0, trend: [] }
-      }
-    });
-  }
-});
+// REMOVED: Batch productivity endpoint - was causing endless loop
+// router.get('/batches/productivity', async (req, res) => {
+//   // This endpoint was removed to prevent the middleware from getting stuck in an endless loop
+// });
 
-// Batch stats endpoint - provides basic stats for batches tab
-router.get('/batches/stats', async (req, res) => {
-  try {
-    console.log('Fetching batch stats...');
-    
-    // Get batch service instance
-    if (!BatchService) {
-      throw new Error('BatchService not initialized');
-    }
-    
-    // Get real batch count if available
-    const batchCount = await safeMethodCall(BatchService, 'getCount', 0);
-    
-    // Get last sync date if available
-    const lastSyncDate = await safeMethodCall(BatchService, 'getLastSyncDate', new Date().toISOString());
-    
-    // Sample stats data - replace with real data when available
-    const stats = {
-      totalCount: batchCount,
-      lastSyncDate: lastSyncDate,
-      status: 'Ready',
-      lastSyncCount: 25,
-      pendingCount: 5,
-      completedCount: batchCount - 5
-    };
-    
-    res.json({
-      success: true,
-      stats
-    });
-  } catch (error) {
-    console.error('Error in batches stats endpoint:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stats: {
-        totalCount: 0,
-        lastSyncDate: new Date().toISOString(),
-        status: 'Error',
-        lastSyncCount: 0,
-        pendingCount: 0,
-        completedCount: 0
-      }
-    });
-  }
-});
+// REMOVED: Batch stats endpoint - was causing endless loop
+// router.get('/batches/stats', async (req, res) => {
+//   // This endpoint was removed to prevent the middleware from getting stuck in an endless loop
+// });
 
-// Export both the router and the initializeServices function
-module.exports = { router, initializeServices };
+module.exports = {
+  router,
+  initializeServices
+};
