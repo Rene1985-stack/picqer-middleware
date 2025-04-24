@@ -1,13 +1,17 @@
 /**
- * Complete fix for index.js with proper imports and API adapter initialization
+ * Final fix for index.js with proper imports, API adapter initialization, and dashboard routing
  * 
- * This version fixes both the PicqerApiClient import issue and the apiAdapter issue
+ * This version fixes all identified issues:
+ * 1. PicqerApiClient import issue
+ * 2. API adapter function issue
+ * 3. Dashboard routing issue
  */
 
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
 // Import services directly - no destructuring
 const PicqerApiClient = require('./picqer-api-client');
@@ -222,8 +226,294 @@ if (typeof batchDashboardApiModule === 'function') {
 // Serve static files from the dashboard directory
 app.use(express.static(path.join(__dirname, 'dashboard')));
 
-// Serve the dashboard HTML file
+// FIX: Create dashboard directory if it doesn't exist
+const dashboardDir = path.join(__dirname, 'dashboard');
+if (!fs.existsSync(dashboardDir)) {
+  console.log('Creating dashboard directory');
+  fs.mkdirSync(dashboardDir, { recursive: true });
+}
+
+// FIX: Create a basic dashboard.html file if it doesn't exist
+const dashboardHtmlPath = path.join(dashboardDir, 'dashboard.html');
+if (!fs.existsSync(dashboardHtmlPath)) {
+  console.log('Creating basic dashboard.html file');
+  const basicDashboardHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Picqer Middleware Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background-color: white;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 15px;
+      margin-bottom: 20px;
+    }
+    .card h2 {
+      margin-top: 0;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    .status {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 3px;
+      font-size: 14px;
+    }
+    .status.online {
+      background-color: #dff0d8;
+      color: #3c763d;
+    }
+    .status.offline {
+      background-color: #f2dede;
+      color: #a94442;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    table, th, td {
+      border: 1px solid #ddd;
+    }
+    th, td {
+      padding: 10px;
+      text-align: left;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Picqer Middleware Dashboard</h1>
+    
+    <div class="card">
+      <h2>System Status</h2>
+      <div id="status">Checking status...</div>
+    </div>
+    
+    <div class="card">
+      <h2>Sync Data</h2>
+      <button id="syncAll">Sync All</button>
+      <button id="syncProducts">Sync Products</button>
+      <button id="syncPicklists">Sync Picklists</button>
+      <button id="syncWarehouses">Sync Warehouses</button>
+      <button id="syncUsers">Sync Users</button>
+      <button id="syncSuppliers">Sync Suppliers</button>
+      <button id="syncBatches">Sync Batches</button>
+    </div>
+    
+    <div class="card">
+      <h2>Statistics</h2>
+      <div id="stats">Loading statistics...</div>
+    </div>
+    
+    <div class="card">
+      <h2>Sync History</h2>
+      <div id="history">Loading history...</div>
+    </div>
+  </div>
+
+  <script>
+    // Check system status
+    fetch('/api/status')
+      .then(response => response.json())
+      .then(data => {
+        const statusDiv = document.getElementById('status');
+        if (data.online) {
+          statusDiv.innerHTML = '<span class="status online">Online</span> - Version: ' + data.version;
+        } else {
+          statusDiv.innerHTML = '<span class="status offline">Offline</span>';
+        }
+      })
+      .catch(error => {
+        document.getElementById('status').innerHTML = '<span class="status offline">Offline</span> - Error: ' + error.message;
+      });
+    
+    // Load statistics
+    fetch('/api/stats')
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          let statsHtml = '<table>';
+          statsHtml += '<tr><th>Entity</th><th>Count</th><th>Last Sync</th><th>Status</th></tr>';
+          
+          for (const [entity, stats] of Object.entries(data.stats)) {
+            statsHtml += '<tr>';
+            statsHtml += '<td>' + entity.charAt(0).toUpperCase() + entity.slice(1) + '</td>';
+            statsHtml += '<td>' + stats.totalCount + '</td>';
+            statsHtml += '<td>' + new Date(stats.lastSyncDate).toLocaleString() + '</td>';
+            statsHtml += '<td>' + stats.status + '</td>';
+            statsHtml += '</tr>';
+          }
+          
+          statsHtml += '</table>';
+          document.getElementById('stats').innerHTML = statsHtml;
+        } else {
+          document.getElementById('stats').innerHTML = 'Error loading statistics: ' + data.error;
+        }
+      })
+      .catch(error => {
+        document.getElementById('stats').innerHTML = 'Error loading statistics: ' + error.message;
+      });
+    
+    // Load sync history
+    fetch('/api/history')
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          let historyHtml = '<table>';
+          historyHtml += '<tr><th>Entity</th><th>Timestamp</th><th>Status</th><th>Count</th></tr>';
+          
+          for (const item of data.history) {
+            historyHtml += '<tr>';
+            historyHtml += '<td>' + item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1) + '</td>';
+            historyHtml += '<td>' + new Date(item.timestamp).toLocaleString() + '</td>';
+            historyHtml += '<td>' + (item.success ? 'Success' : 'Failed') + '</td>';
+            historyHtml += '<td>' + (item.count || 0) + '</td>';
+            historyHtml += '</tr>';
+          }
+          
+          historyHtml += '</table>';
+          document.getElementById('history').innerHTML = historyHtml;
+        } else {
+          document.getElementById('history').innerHTML = 'Error loading history: ' + data.error;
+        }
+      })
+      .catch(error => {
+        document.getElementById('history').innerHTML = 'Error loading history: ' + error.message;
+      });
+    
+    // Sync button event listeners
+    document.getElementById('syncAll').addEventListener('click', () => {
+      fetch('/api/sync', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+    
+    document.getElementById('syncProducts').addEventListener('click', () => {
+      fetch('/api/sync/products', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+    
+    document.getElementById('syncPicklists').addEventListener('click', () => {
+      fetch('/api/sync/picklists', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+    
+    document.getElementById('syncWarehouses').addEventListener('click', () => {
+      fetch('/api/sync/warehouses', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+    
+    document.getElementById('syncUsers').addEventListener('click', () => {
+      fetch('/api/sync/users', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+    
+    document.getElementById('syncSuppliers').addEventListener('click', () => {
+      fetch('/api/sync/suppliers', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+    
+    document.getElementById('syncBatches').addEventListener('click', () => {
+      fetch('/api/sync/batches', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          alert('Error: ' + error.message);
+        });
+    });
+  </script>
+</body>
+</html>
+  `;
+  fs.writeFileSync(dashboardHtmlPath, basicDashboardHtml);
+}
+
+// FIX: Serve dashboard.html for both root and /dashboard/ routes
 app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
+});
+
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
+});
+
+app.get('/dashboard/', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
 });
 
