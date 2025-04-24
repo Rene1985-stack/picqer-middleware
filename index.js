@@ -1,10 +1,11 @@
 /**
- * Final fix for index.js with proper imports, API adapter initialization, and dashboard routing
+ * Final comprehensive fix for index.js with proper imports, API adapter initialization, dashboard routing, and dashboard files
  * 
  * This version fixes all identified issues:
  * 1. PicqerApiClient import issue
  * 2. API adapter function issue
  * 3. Dashboard routing issue
+ * 4. Missing dashboard JavaScript files
  */
 
 require('dotenv').config();
@@ -223,14 +224,30 @@ if (typeof batchDashboardApiModule === 'function') {
   }
 }
 
-// Serve static files from the dashboard directory
-app.use(express.static(path.join(__dirname, 'dashboard')));
-
 // FIX: Create dashboard directory if it doesn't exist
 const dashboardDir = path.join(__dirname, 'dashboard');
 if (!fs.existsSync(dashboardDir)) {
   console.log('Creating dashboard directory');
   fs.mkdirSync(dashboardDir, { recursive: true });
+}
+
+// FIX: Create all required JavaScript files for the dashboard
+const dashboardJsFiles = {
+  'dashboard-api.js': fs.readFileSync(path.join(__dirname, 'dashboard-api.js'), 'utf8'),
+  'batch-ui-components.js': fs.readFileSync(path.join(__dirname, 'batch-ui-components.js'), 'utf8'),
+  'batch-charts.js': fs.readFileSync(path.join(__dirname, 'batch-charts.js'), 'utf8'),
+  'sync-button-verifier.js': fs.readFileSync(path.join(__dirname, 'sync-button-verifier.js'), 'utf8'),
+  'dashboard-date-formatter.js': fs.readFileSync(path.join(__dirname, 'dashboard-date-formatter.js'), 'utf8'),
+  'api-endpoint-monitor.js': fs.readFileSync(path.join(__dirname, 'api-endpoint-monitor.js'), 'utf8')
+};
+
+// Write all JavaScript files to the dashboard directory
+for (const [filename, content] of Object.entries(dashboardJsFiles)) {
+  const filePath = path.join(dashboardDir, filename);
+  if (!fs.existsSync(filePath)) {
+    console.log(`Creating ${filename} in dashboard directory`);
+    fs.writeFileSync(filePath, content);
+  }
 }
 
 // FIX: Create a basic dashboard.html file if it doesn't exist
@@ -348,161 +365,28 @@ if (!fs.existsSync(dashboardHtmlPath)) {
       <h2>Sync History</h2>
       <div id="history">Loading history...</div>
     </div>
+    
+    <div class="card">
+      <h2>API Endpoint Status</h2>
+      <div id="endpoint-status">Loading endpoint status...</div>
+    </div>
   </div>
 
-  <script>
-    // Check system status
-    fetch('/api/status')
-      .then(response => response.json())
-      .then(data => {
-        const statusDiv = document.getElementById('status');
-        if (data.online) {
-          statusDiv.innerHTML = '<span class="status online">Online</span> - Version: ' + data.version;
-        } else {
-          statusDiv.innerHTML = '<span class="status offline">Offline</span>';
-        }
-      })
-      .catch(error => {
-        document.getElementById('status').innerHTML = '<span class="status offline">Offline</span> - Error: ' + error.message;
-      });
-    
-    // Load statistics
-    fetch('/api/stats')
-      .then(response => response.json())
-      .then(data => {
-        if (data.success) {
-          let statsHtml = '<table>';
-          statsHtml += '<tr><th>Entity</th><th>Count</th><th>Last Sync</th><th>Status</th></tr>';
-          
-          for (const [entity, stats] of Object.entries(data.stats)) {
-            statsHtml += '<tr>';
-            statsHtml += '<td>' + entity.charAt(0).toUpperCase() + entity.slice(1) + '</td>';
-            statsHtml += '<td>' + stats.totalCount + '</td>';
-            statsHtml += '<td>' + new Date(stats.lastSyncDate).toLocaleString() + '</td>';
-            statsHtml += '<td>' + stats.status + '</td>';
-            statsHtml += '</tr>';
-          }
-          
-          statsHtml += '</table>';
-          document.getElementById('stats').innerHTML = statsHtml;
-        } else {
-          document.getElementById('stats').innerHTML = 'Error loading statistics: ' + data.error;
-        }
-      })
-      .catch(error => {
-        document.getElementById('stats').innerHTML = 'Error loading statistics: ' + error.message;
-      });
-    
-    // Load sync history
-    fetch('/api/history')
-      .then(response => response.json())
-      .then(data => {
-        if (data.success) {
-          let historyHtml = '<table>';
-          historyHtml += '<tr><th>Entity</th><th>Timestamp</th><th>Status</th><th>Count</th></tr>';
-          
-          for (const item of data.history) {
-            historyHtml += '<tr>';
-            historyHtml += '<td>' + item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1) + '</td>';
-            historyHtml += '<td>' + new Date(item.timestamp).toLocaleString() + '</td>';
-            historyHtml += '<td>' + (item.success ? 'Success' : 'Failed') + '</td>';
-            historyHtml += '<td>' + (item.count || 0) + '</td>';
-            historyHtml += '</tr>';
-          }
-          
-          historyHtml += '</table>';
-          document.getElementById('history').innerHTML = historyHtml;
-        } else {
-          document.getElementById('history').innerHTML = 'Error loading history: ' + data.error;
-        }
-      })
-      .catch(error => {
-        document.getElementById('history').innerHTML = 'Error loading history: ' + error.message;
-      });
-    
-    // Sync button event listeners
-    document.getElementById('syncAll').addEventListener('click', () => {
-      fetch('/api/sync', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-    
-    document.getElementById('syncProducts').addEventListener('click', () => {
-      fetch('/api/sync/products', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-    
-    document.getElementById('syncPicklists').addEventListener('click', () => {
-      fetch('/api/sync/picklists', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-    
-    document.getElementById('syncWarehouses').addEventListener('click', () => {
-      fetch('/api/sync/warehouses', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-    
-    document.getElementById('syncUsers').addEventListener('click', () => {
-      fetch('/api/sync/users', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-    
-    document.getElementById('syncSuppliers').addEventListener('click', () => {
-      fetch('/api/sync/suppliers', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-    
-    document.getElementById('syncBatches').addEventListener('click', () => {
-      fetch('/api/sync/batches', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          alert(data.message);
-        })
-        .catch(error => {
-          alert('Error: ' + error.message);
-        });
-    });
-  </script>
+  <!-- JavaScript files -->
+  <script src="dashboard-api.js"></script>
+  <script src="batch-ui-components.js"></script>
+  <script src="batch-charts.js"></script>
+  <script src="sync-button-verifier.js"></script>
+  <script src="dashboard-date-formatter.js"></script>
+  <script src="api-endpoint-monitor.js"></script>
 </body>
 </html>
   `;
-  fs.writeFileSync(dashboardHtmlPath, basicDashboardHtml);
+  fs.writeFileSync(dashboardHtmlPath, content);
 }
+
+// Serve static files from the dashboard directory
+app.use(express.static(path.join(__dirname, 'dashboard')));
 
 // FIX: Serve dashboard.html for both root and /dashboard/ routes
 app.get('/', (req, res) => {
