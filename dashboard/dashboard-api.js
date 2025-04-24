@@ -1,6 +1,8 @@
 /**
  * Dashboard API JavaScript for Picqer Middleware
  * This file provides the API interaction functionality for the dashboard
+ * 
+ * UPDATED: Standardized button IDs to match sync-button-verifier.js expectations
  */
 
 // API endpoints
@@ -36,18 +38,86 @@ class DashboardAPI {
   
   // Initialize event listeners for sync buttons
   initEventListeners() {
-    document.getElementById('syncAll').addEventListener('click', () => this.syncAll());
-    document.getElementById('syncProducts').addEventListener('click', () => this.syncEntity('products'));
-    document.getElementById('syncPicklists').addEventListener('click', () => this.syncEntity('picklists'));
-    document.getElementById('syncWarehouses').addEventListener('click', () => this.syncEntity('warehouses'));
-    document.getElementById('syncUsers').addEventListener('click', () => this.syncEntity('users'));
-    document.getElementById('syncSuppliers').addEventListener('click', () => this.syncEntity('suppliers'));
-    document.getElementById('syncBatches').addEventListener('click', () => this.syncEntity('batches'));
+    // UPDATED: Changed button IDs to match sync-button-verifier.js expectations
+    
+    // Main sync buttons
+    const syncBtn = document.getElementById('sync-btn');
+    if (syncBtn) {
+      syncBtn.addEventListener('click', () => this.syncAll());
+      syncBtn.setAttribute('data-has-click-listener', 'true');
+    }
+    
+    const fullSyncBtn = document.getElementById('full-sync-btn');
+    if (fullSyncBtn) {
+      fullSyncBtn.addEventListener('click', () => this.syncAll(true));
+      fullSyncBtn.setAttribute('data-has-click-listener', 'true');
+    }
+    
+    // Entity-specific sync buttons
+    this.setupEntitySyncButton('products');
+    this.setupEntitySyncButton('picklists');
+    this.setupEntitySyncButton('warehouses');
+    this.setupEntitySyncButton('users');
+    this.setupEntitySyncButton('suppliers');
+    this.setupEntitySyncButton('batches');
     
     // Add refresh button event listener if it exists
     const refreshButton = document.getElementById('refreshData');
     if (refreshButton) {
       refreshButton.addEventListener('click', () => this.loadAllData());
+    }
+    
+    // BACKWARD COMPATIBILITY: Also handle old button IDs
+    const oldSyncAll = document.getElementById('syncAll');
+    if (oldSyncAll) {
+      oldSyncAll.addEventListener('click', () => this.syncAll());
+    }
+    
+    const oldSyncProducts = document.getElementById('syncProducts');
+    if (oldSyncProducts) {
+      oldSyncProducts.addEventListener('click', () => this.syncEntity('products'));
+    }
+    
+    const oldSyncPicklists = document.getElementById('syncPicklists');
+    if (oldSyncPicklists) {
+      oldSyncPicklists.addEventListener('click', () => this.syncEntity('picklists'));
+    }
+    
+    const oldSyncWarehouses = document.getElementById('syncWarehouses');
+    if (oldSyncWarehouses) {
+      oldSyncWarehouses.addEventListener('click', () => this.syncEntity('warehouses'));
+    }
+    
+    const oldSyncUsers = document.getElementById('syncUsers');
+    if (oldSyncUsers) {
+      oldSyncUsers.addEventListener('click', () => this.syncEntity('users'));
+    }
+    
+    const oldSyncSuppliers = document.getElementById('syncSuppliers');
+    if (oldSyncSuppliers) {
+      oldSyncSuppliers.addEventListener('click', () => this.syncEntity('suppliers'));
+    }
+    
+    const oldSyncBatches = document.getElementById('syncBatches');
+    if (oldSyncBatches) {
+      oldSyncBatches.addEventListener('click', () => this.syncEntity('batches'));
+    }
+  }
+  
+  // Setup entity sync button
+  setupEntitySyncButton(entity) {
+    // Regular sync button
+    const syncEntityBtn = document.getElementById(`sync-${entity}-btn`);
+    if (syncEntityBtn) {
+      syncEntityBtn.addEventListener('click', () => this.syncEntity(entity));
+      syncEntityBtn.setAttribute('data-has-click-listener', 'true');
+    }
+    
+    // Full sync button
+    const fullSyncEntityBtn = document.getElementById(`full-sync-${entity}-btn`);
+    if (fullSyncEntityBtn) {
+      fullSyncEntityBtn.addEventListener('click', () => this.syncEntity(entity, true));
+      fullSyncEntityBtn.setAttribute('data-has-click-listener', 'true');
     }
   }
   
@@ -178,11 +248,13 @@ class DashboardAPI {
   }
   
   // Sync all entities
-  syncAll() {
-    fetch(API_ENDPOINTS.SYNC, { method: 'POST' })
+  syncAll(fullSync = false) {
+    const url = API_ENDPOINTS.SYNC + (fullSync ? '?full=true' : '');
+    
+    fetch(url, { method: 'POST' })
       .then(response => response.json())
       .then(data => {
-        alert(data.message);
+        alert(data.message || 'Sync started');
         // Reload data after sync
         setTimeout(() => this.loadAllData(), 2000);
       })
@@ -192,11 +264,13 @@ class DashboardAPI {
   }
   
   // Sync specific entity
-  syncEntity(entity) {
-    fetch(`${API_ENDPOINTS.SYNC}/${entity}`, { method: 'POST' })
+  syncEntity(entity, fullSync = false) {
+    const url = `${API_ENDPOINTS.SYNC}/${entity}` + (fullSync ? '?full=true' : '');
+    
+    fetch(url, { method: 'POST' })
       .then(response => response.json())
       .then(data => {
-        alert(data.message);
+        alert(data.message || `${entity} sync started`);
         // Reload data after sync
         setTimeout(() => this.loadAllData(), 2000);
       })
