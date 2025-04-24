@@ -13,7 +13,7 @@ const SupplierService = require('./supplier_service');
 
 // Configuration
 const apiKey = process.env.PICQER_API_KEY;
-const baseUrl = process.env.PICQER_API_URL || 'https://skapa-global.picqer.com/api/v1';
+const baseUrl = process.env.PICQER_BASE_URL || process.env.PICQER_API_URL || 'https://skapa-global.picqer.com/api/v1';
 const sqlConfig = {
     server: process.env.DB_SERVER,
     database: process.env.DB_NAME,
