@@ -6,6 +6,7 @@
  * 2. API adapter function issue
  * 3. Dashboard routing issue
  * 4. Missing dashboard JavaScript files
+ * 5. Dashboard HTML creation issue
  */
 
 require('dotenv').config();
@@ -382,7 +383,8 @@ if (!fs.existsSync(dashboardHtmlPath)) {
 </body>
 </html>
   `;
-  fs.writeFileSync(dashboardHtmlPath, content);
+  // FIX: Use basicDashboardHtml instead of content
+  fs.writeFileSync(dashboardHtmlPath, basicDashboardHtml);
 }
 
 // Serve static files from the dashboard directory
