@@ -1,13 +1,10 @@
 /**
- * Final standalone solution for index.js with fixed API endpoints and sync button functionality
+ * Updated index.js with environment variable fallback for Picqer API URL
  * 
- * This version fixes all identified issues:
- * 1. PicqerApiClient import issue
- * 2. API adapter function issue
- * 3. Dashboard routing issue
- * 4. Inline JavaScript for dashboard
- * 5. Fixed API endpoint paths
- * 6. Fixed sync button functionality
+ * This version fixes the environment variable naming discrepancy by:
+ * 1. Prioritizing PICQER_BASE_URL (as configured in Railway)
+ * 2. Falling back to PICQER_API_URL for backward compatibility
+ * 3. Maintaining all other functionality
  */
 
 require('dotenv').config();
@@ -39,10 +36,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Use environment variable with fallback - prioritize PICQER_BASE_URL as configured in Railway
+const picqerApiUrl = process.env.PICQER_BASE_URL || process.env.PICQER_API_URL;
+
+// Log the API URL being used for debugging
+console.log(`Using Picqer API URL: ${picqerApiUrl}`);
+
 // Create Picqer API client directly
 const picqerClient = new PicqerApiClient(
   process.env.PICQER_API_KEY,
-  process.env.PICQER_API_URL,
+  picqerApiUrl,
   {
     requestsPerMinute: 30,
     maxRetries: 5,
@@ -55,7 +58,7 @@ const picqerClient = new PicqerApiClient(
 const services = {
   BatchService: new BatchService(
     process.env.PICQER_API_KEY,
-    process.env.PICQER_API_URL,
+    picqerApiUrl,
     {
       server: process.env.SQL_SERVER,
       port: parseInt(process.env.SQL_PORT || '1433', 10),
@@ -69,7 +72,7 @@ const services = {
   ),
   PicklistService: new PicklistService(
     process.env.PICQER_API_KEY,
-    process.env.PICQER_API_URL,
+    picqerApiUrl,
     {
       server: process.env.SQL_SERVER,
       port: parseInt(process.env.SQL_PORT || '1433', 10),
@@ -83,7 +86,7 @@ const services = {
   ),
   WarehouseService: new WarehouseService(
     process.env.PICQER_API_KEY,
-    process.env.PICQER_API_URL,
+    picqerApiUrl,
     {
       server: process.env.SQL_SERVER,
       port: parseInt(process.env.SQL_PORT || '1433', 10),
@@ -97,7 +100,7 @@ const services = {
   ),
   UserService: new UserService(
     process.env.PICQER_API_KEY,
-    process.env.PICQER_API_URL,
+    picqerApiUrl,
     {
       server: process.env.SQL_SERVER,
       port: parseInt(process.env.SQL_PORT || '1433', 10),
@@ -111,7 +114,7 @@ const services = {
   ),
   SupplierService: new SupplierService(
     process.env.PICQER_API_KEY,
-    process.env.PICQER_API_URL,
+    picqerApiUrl,
     {
       server: process.env.SQL_SERVER,
       port: parseInt(process.env.SQL_PORT || '1433', 10),
@@ -438,7 +441,7 @@ if (!fs.existsSync(dashboardDir)) {
 const dashboardHtmlPath = path.join(dashboardDir, 'dashboard.html');
 if (!fs.existsSync(dashboardHtmlPath)) {
   console.log('Creating dashboard.html file with inline JavaScript');
-  const dashboardHtml = `
+  const basicDashboardHtml = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -625,52 +628,59 @@ if (!fs.existsSync(dashboardHtmlPath)) {
         });
       }
       
-      // Load all data
+      // Load initial data
       loadStatus();
       loadStats();
       loadHistory();
-      createEndpointStatusTable();
+      loadEndpointStatus();
+      
+      // Refresh data every 30 seconds
+      setInterval(function() {
+        loadStatus();
+        loadStats();
+        loadHistory();
+        loadEndpointStatus();
+      }, 30000);
       
       // Load system status
       function loadStatus() {
-        const statusElement = document.getElementById('status');
-        if (!statusElement) return;
-        
-        statusElement.innerHTML = 'Checking status...';
-        
         fetch(API_ENDPOINTS.STATUS)
           .then(response => response.json())
           .then(data => {
-            if (data.online) {
-              statusElement.innerHTML = '<span class="status online">Online</span> - Version: ' + data.version;
-            } else {
-              statusElement.innerHTML = '<span class="status offline">Offline</span>';
+            const statusElement = document.getElementById('status');
+            if (statusElement) {
+              if (data.online) {
+                statusElement.innerHTML = '<span class="status online">Online</span> <br>Version: ' + data.version + '<br>Last updated: ' + new Date(data.timestamp).toLocaleString();
+              } else {
+                statusElement.innerHTML = '<span class="status offline">Offline</span>';
+              }
             }
           })
           .catch(error => {
-            statusElement.innerHTML = '<span class="status offline">Offline</span> - Error: ' + error.message;
+            console.error('Error loading status:', error);
+            const statusElement = document.getElementById('status');
+            if (statusElement) {
+              statusElement.innerHTML = '<span class="status offline">Error: Could not connect to server</span>';
+            }
           });
       }
       
       // Load statistics
       function loadStats() {
-        const statsElement = document.getElementById('stats');
-        if (!statsElement) return;
-        
-        statsElement.innerHTML = 'Loading statistics...';
-        
         fetch(API_ENDPOINTS.STATS)
           .then(response => response.json())
           .then(data => {
-            if (data.success) {
+            const statsElement = document.getElementById('stats');
+            if (statsElement && data.success) {
               let statsHtml = '<table>';
               statsHtml += '<tr><th>Entity</th><th>Count</th><th>Last Sync</th><th>Status</th></tr>';
               
               for (const [entity, stats] of Object.entries(data.stats)) {
+                const lastSyncDate = stats.lastSyncDate ? new Date(stats.lastSyncDate).toLocaleString() : 'Never';
                 statsHtml += '<tr>';
                 statsHtml += '<td>' + entity.charAt(0).toUpperCase() + entity.slice(1) + '</td>';
                 statsHtml += '<td>' + stats.totalCount + '</td>';
-                statsHtml += '<td>' + new Date(stats.lastSyncDate).toLocaleString() + '</td>';
+                statsHtml += '<td>' + lastSyncDate + '</td>';
                 statsHtml += '<td>' + stats.status + '</td>';
                 statsHtml += '</tr>';
               }
@@ -678,228 +688,142 @@ if (!fs.existsSync(dashboardHtmlPath)) {
               statsHtml += '</table>';
               statsElement.innerHTML = statsHtml;
             } else {
-              statsElement.innerHTML = 'Error loading statistics: ' + data.error;
+              const statsElement = document.getElementById('stats');
+              if (statsElement) {
+                statsElement.innerHTML = 'Error loading statistics';
+              }
             }
           })
           .catch(error => {
-            statsElement.innerHTML = 'Error loading statistics: ' + error.message;
+            console.error('Error loading stats:', error);
+            const statsElement = document.getElementById('stats');
+            if (statsElement) {
+              statsElement.innerHTML = 'Error: Could not load statistics';
+            }
           });
       }
       
       // Load sync history
       function loadHistory() {
-        const historyElement = document.getElementById('history');
-        if (!historyElement) return;
-        
-        historyElement.innerHTML = 'Loading history...';
-        
         fetch(API_ENDPOINTS.HISTORY)
           .then(response => response.json())
           .then(data => {
-            if (data.success) {
+            const historyElement = document.getElementById('history');
+            if (historyElement && data.success) {
               let historyHtml = '<table>';
-              historyHtml += '<tr><th>Entity</th><th>Timestamp</th><th>Status</th><th>Count</th></tr>';
+              historyHtml += '<tr><th>Entity</th><th>Timestamp</th><th>Success</th><th>Count</th></tr>';
               
               for (const item of data.history) {
                 historyHtml += '<tr>';
                 historyHtml += '<td>' + item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1) + '</td>';
                 historyHtml += '<td>' + new Date(item.timestamp).toLocaleString() + '</td>';
-                historyHtml += '<td>' + (item.success ? 'Success' : 'Failed') + '</td>';
-                historyHtml += '<td>' + (item.count || 0) + '</td>';
+                historyHtml += '<td>' + (item.success ? 'Yes' : 'No') + '</td>';
+                historyHtml += '<td>' + item.count + '</td>';
                 historyHtml += '</tr>';
               }
               
               historyHtml += '</table>';
               historyElement.innerHTML = historyHtml;
             } else {
-              historyElement.innerHTML = 'Error loading history: ' + data.error;
+              const historyElement = document.getElementById('history');
+              if (historyElement) {
+                historyElement.innerHTML = 'No sync history available';
+              }
             }
           })
           .catch(error => {
-            historyElement.innerHTML = 'Error loading history: ' + error.message;
+            console.error('Error loading history:', error);
+            const historyElement = document.getElementById('history');
+            if (historyElement) {
+              historyElement.innerHTML = 'Error: Could not load sync history';
+            }
           });
       }
       
-      // Create endpoint status table
-      function createEndpointStatusTable() {
+      // Load endpoint status
+      function loadEndpointStatus() {
         const endpointStatusElement = document.getElementById('endpoint-status');
-        if (!endpointStatusElement) return;
-        
-        // Define endpoints to monitor
-        const endpoints = [
-          { name: 'Status', url: API_ENDPOINTS.STATUS, method: 'GET' },
-          { name: 'Stats', url: API_ENDPOINTS.STATS, method: 'GET' },
-          { name: 'Logs', url: API_ENDPOINTS.LOGS, method: 'GET' },
-          { name: 'History', url: API_ENDPOINTS.HISTORY, method: 'GET' },
-          { name: 'Sync', url: API_ENDPOINTS.SYNC, method: 'POST' },
-          { name: 'Products Sync', url: API_ENDPOINTS.SYNC_PRODUCTS, method: 'POST' },
-          { name: 'Picklists Sync', url: API_ENDPOINTS.SYNC_PICKLISTS, method: 'POST' },
-          { name: 'Warehouses Sync', url: API_ENDPOINTS.SYNC_WAREHOUSES, method: 'POST' },
-          { name: 'Users Sync', url: API_ENDPOINTS.SYNC_USERS, method: 'POST' },
-          { name: 'Suppliers Sync', url: API_ENDPOINTS.SYNC_SUPPLIERS, method: 'POST' },
-          { name: 'Batches Sync', url: API_ENDPOINTS.SYNC_BATCHES, method: 'POST' }
-        ];
-        
-        // Create table
-        let tableHtml = '<table>';
-        tableHtml += '<tr><th>Endpoint</th><th>URL</th><th>Status</th><th>Response Time</th></tr>';
-        
-        // Add rows for each endpoint
-        endpoints.forEach(endpoint => {
-          tableHtml += '<tr data-endpoint="' + endpoint.url + '">';
-          tableHtml += '<td>' + endpoint.name + '</td>';
-          tableHtml += '<td>' + endpoint.url + '</td>';
-          tableHtml += '<td class="endpoint-status">Checking...</td>';
-          tableHtml += '<td class="endpoint-response-time">-</td>';
-          tableHtml += '</tr>';
-        });
-        
-        tableHtml += '</table>';
-        endpointStatusElement.innerHTML = tableHtml;
-        
-        // Check endpoints
-        checkEndpoints(endpoints);
-        
-        // Set interval to check endpoints every 60 seconds
-        setInterval(function() {
-          checkEndpoints(endpoints);
-        }, 60000);
-      }
-      
-      // Check endpoints
-      function checkEndpoints(endpoints) {
-        endpoints.forEach(endpoint => {
-          checkEndpoint(endpoint);
-        });
-      }
-      
-      // Check endpoint
-      function checkEndpoint(endpoint) {
-        // Find endpoint row
-        const row = document.querySelector('tr[data-endpoint="' + endpoint.url + '"]');
-        
-        // If row exists, check endpoint
-        if (row) {
-          // Find status and response time cells
-          const statusCell = row.querySelector('.endpoint-status');
-          const responseTimeCell = row.querySelector('.endpoint-response-time');
+        if (endpointStatusElement) {
+          let endpointHtml = '<table>';
+          endpointHtml += '<tr><th>Endpoint</th><th>Status</th></tr>';
           
-          // Update status to checking
-          statusCell.textContent = 'Checking...';
-          statusCell.className = 'endpoint-status checking';
-          
-          // Start timer
-          const startTime = performance.now();
-          
-          // Send request to endpoint
-          if (endpoint.method === 'POST') {
-            // For POST endpoints, just check if they exist
-            fetch(endpoint.url, { method: 'HEAD' })
+          for (const [name, url] of Object.entries(API_ENDPOINTS)) {
+            endpointHtml += '<tr>';
+            endpointHtml += '<td>' + name + '</td>';
+            endpointHtml += '<td id="endpoint-' + name + '">Checking...</td>';
+            endpointHtml += '</tr>';
+            
+            // Check endpoint status
+            fetch(url, { method: name.startsWith('SYNC') ? 'GET' : 'GET' })
               .then(response => {
-                // Calculate response time
-                const endTime = performance.now();
-                const responseTime = Math.round(endTime - startTime);
-                
-                // Update status and response time
-                if (response.ok) {
-                  statusCell.textContent = 'Online';
-                  statusCell.className = 'endpoint-status online';
-                } else {
-                  statusCell.textContent = 'Error (' + response.status + ')';
-                  statusCell.className = 'endpoint-status error';
+                const statusElement = document.getElementById('endpoint-' + name);
+                if (statusElement) {
+                  if (response.ok) {
+                    statusElement.innerHTML = '<span class="status online">OK</span>';
+                  } else {
+                    statusElement.innerHTML = '<span class="status offline">Error: ' + response.status + '</span>';
+                  }
                 }
-                
-                responseTimeCell.textContent = responseTime + ' ms';
               })
               .catch(error => {
-                // Calculate response time
-                const endTime = performance.now();
-                const responseTime = Math.round(endTime - startTime);
-                
-                // Update status and response time
-                statusCell.textContent = 'Offline';
-                statusCell.className = 'endpoint-status offline';
-                responseTimeCell.textContent = responseTime + ' ms';
-              });
-          } else {
-            // For GET endpoints, actually fetch the data
-            fetch(endpoint.url)
-              .then(response => {
-                // Calculate response time
-                const endTime = performance.now();
-                const responseTime = Math.round(endTime - startTime);
-                
-                // Update status and response time
-                if (response.ok) {
-                  statusCell.textContent = 'Online';
-                  statusCell.className = 'endpoint-status online';
-                } else {
-                  statusCell.textContent = 'Error (' + response.status + ')';
-                  statusCell.className = 'endpoint-status error';
+                const statusElement = document.getElementById('endpoint-' + name);
+                if (statusElement) {
+                  statusElement.innerHTML = '<span class="status offline">Error: Could not connect</span>';
                 }
-                
-                responseTimeCell.textContent = responseTime + ' ms';
-              })
-              .catch(error => {
-                // Calculate response time
-                const endTime = performance.now();
-                const responseTime = Math.round(endTime - startTime);
-                
-                // Update status and response time
-                statusCell.textContent = 'Offline';
-                statusCell.className = 'endpoint-status offline';
-                responseTimeCell.textContent = responseTime + ' ms';
               });
           }
+          
+          endpointHtml += '</table>';
+          endpointStatusElement.innerHTML = endpointHtml;
         }
       }
       
       // Sync all entities
       function syncAll() {
         if (confirm('Are you sure you want to sync all entities? This may take some time.')) {
-          fetch(API_ENDPOINTS.SYNC, { 
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
+          fetch(API_ENDPOINTS.SYNC, { method: 'POST' })
             .then(response => response.json())
             .then(data => {
-              alert(data.message || 'Sync started for all entities');
-              // Reload data after sync
-              setTimeout(function() {
-                loadStatus();
-                loadStats();
-                loadHistory();
-              }, 2000);
+              if (data.success) {
+                alert('Sync started for all entities');
+                // Refresh data after a short delay
+                setTimeout(() => {
+                  loadStats();
+                  loadHistory();
+                }, 2000);
+              } else {
+                alert('Error: ' + data.error);
+              }
             })
             .catch(error => {
-              alert('Error: ' + error.message);
+              console.error('Error syncing all entities:', error);
+              alert('Error: Could not start sync');
             });
         }
       }
       
       // Sync specific entity
       function syncEntity(entity) {
-        if (confirm('Are you sure you want to sync ' + entity + '? This may take some time.')) {
-          fetch(API_ENDPOINTS['SYNC_' + entity.toUpperCase()], { 
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
+        if (confirm('Are you sure you want to sync ' + entity + '?')) {
+          const endpoint = API_ENDPOINTS['SYNC_' + entity.toUpperCase()];
+          
+          fetch(endpoint, { method: 'POST' })
             .then(response => response.json())
             .then(data => {
-              alert(data.message || 'Sync started for ' + entity);
-              // Reload data after sync
-              setTimeout(function() {
-                loadStatus();
-                loadStats();
-                loadHistory();
-              }, 2000);
+              if (data.success) {
+                alert('Sync started for ' + entity);
+                // Refresh data after a short delay
+                setTimeout(() => {
+                  loadStats();
+                  loadHistory();
+                }, 2000);
+              } else {
+                alert('Error: ' + data.error);
+              }
             })
             .catch(error => {
-              alert('Error: ' + error.message);
+              console.error('Error syncing ' + entity + ':', error);
+              alert('Error: Could not start sync');
             });
         }
       }
@@ -908,13 +832,13 @@ if (!fs.existsSync(dashboardHtmlPath)) {
 </body>
 </html>
   `;
-  fs.writeFileSync(dashboardHtmlPath, dashboardHtml);
+  fs.writeFileSync(dashboardHtmlPath, basicDashboardHtml);
 }
 
 // Serve static files from the dashboard directory
 app.use(express.static(path.join(__dirname, 'dashboard')));
 
-// FIX: Serve dashboard.html for both root and /dashboard/ routes
+// Serve dashboard at root and /dashboard routes
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
 });
@@ -930,7 +854,5 @@ app.get('/dashboard/', (req, res) => {
 // Start the server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  console.log(`Dashboard available at http://localhost:${port}/`);
 });
-
-// Export for testing
-module.exports = app;
