@@ -1,5 +1,5 @@
 /**
- * Updated index.js with sync method integration
+ * Updated index.js with sync method integration and fixed PicqerApiClient import
  * 
  * This file integrates the sync methods into the service classes
  * and ensures proper parameter validation.
@@ -9,7 +9,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { PicqerClient } = require('./picqer-service');
+const PicqerApiClient = require('./picqer-api-client');
 const BatchService = require('./batch_service');
 const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
@@ -30,10 +30,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Create Picqer client
-const picqerClient = new PicqerClient(
+// Create Picqer API client
+const picqerClient = new PicqerApiClient(
   process.env.PICQER_API_KEY,
-  process.env.PICQER_API_URL
+  process.env.PICQER_API_URL,
+  {
+    requestsPerMinute: 30,
+    maxRetries: 5,
+    waitOnRateLimit: true,
+    sleepTimeOnRateLimitHitInMs: 20000
+  }
 );
 
 // Create service instances
