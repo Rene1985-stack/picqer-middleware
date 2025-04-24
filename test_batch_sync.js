@@ -24,7 +24,7 @@ const sqlConfig = {
 };
 
 const picqerConfig = {
-  apiUrl: process.env.PICQER_API_URL,
+  apiUrl: process.env.PICQER_BASE_URL || process.env.PICQER_API_URL,
   apiKey: process.env.PICQER_API_KEY
 };
 
