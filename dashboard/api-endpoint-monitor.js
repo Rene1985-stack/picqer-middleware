@@ -3,6 +3,8 @@
  * 
  * This script monitors API endpoints and logs any issues.
  * It helps detect missing or failing endpoints early.
+ * 
+ * UPDATED: Removed problematic batch-specific endpoints
  */
 
 // Add this file to your project and include it in your dashboard.html
@@ -26,12 +28,12 @@ document.addEventListener('DOMContentLoaded', function() {
         '/sync/warehouses',
         '/sync/users',
         '/sync/suppliers',
-        '/sync/batches',
+        '/sync/batches'
         
-        // Batch-specific endpoints
-        '/batches/metrics',
-        '/batches/productivity',
-        '/batches/stats'
+        // Removed problematic batch-specific endpoints
+        // '/batches/metrics',
+        // '/batches/productivity',
+        // '/batches/stats'
     ];
     
     // Check each endpoint
