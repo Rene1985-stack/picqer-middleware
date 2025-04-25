@@ -1,13 +1,14 @@
 /**
  * Fixed index.js with proper initialization of data_sync_api_adapter
+ * and environment variable consistency fix
  * 
  * This version fixes all identified issues:
  * 1. Uses the enhanced SyncImplementation with all required methods
  * 2. Properly initializes data_sync_api_adapter with syncImplementation instance
  * 3. Ensures dashboard routes work correctly
  * 4. Uses the db-connection-adapter for database connectivity
+ * 5. Adds fallback for PICQER_API_URL and PICQER_BASE_URL
  */
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -30,22 +31,29 @@ const apiAdapterModule = require('./api-adapter');
 const dataSyncApiAdapterModule = require('./fixed-data-sync-api-adapter');
 const batchDashboardApiModule = require('./batch_dashboard_api');
 
-// Import enhanced SyncImplementation
-const SyncImplementation = require('./enhanced-sync-implementation');
+// Import sync implementation
+const SyncImplementation = require('./sync-method-implementation');
 
-// Initialize Express app
+// Create Express app
 const app = express();
-const port = process.env.PORT || 3000;
 
-// Middleware
+// Use CORS middleware
 app.use(cors());
+
+// Use JSON middleware
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Use environment variable with fallback - prioritize PICQER_BASE_URL as configured in Railway
-const picqerApiUrl = process.env.PICQER_BASE_URL || process.env.PICQER_API_URL;
+// Get port from environment variable or use default
+const port = process.env.PORT || 8080;
 
-// Log the API URL being used for debugging
+// Environment variable consistency fix for Picqer API URL
+const picqerApiUrl = process.env.PICQER_API_URL || process.env.PICQER_BASE_URL;
+if (!picqerApiUrl) {
+  console.error('ERROR: Neither PICQER_API_URL nor PICQER_BASE_URL environment variables are set');
+  process.exit(1);
+}
+
+// Log for debugging
 console.log(`Using Picqer API URL: ${picqerApiUrl}`);
 
 // Get database configuration that works with both SQL_ and DB_ prefixed variables
