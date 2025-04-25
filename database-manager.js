@@ -105,6 +105,7 @@ class DatabaseManager {
             status VARCHAR(20) NOT NULL,
             started_at DATETIMEOFFSET NOT NULL DEFAULT GETDATE(),
             ended_at DATETIMEOFFSET NULL,
+            last_updated DATETIMEOFFSET NOT NULL DEFAULT GETDATE(),
             count INT DEFAULT 0,
             error NVARCHAR(MAX) NULL
           );
@@ -299,16 +300,35 @@ class DatabaseManager {
       
       // Build the query dynamically based on available columns
       let query = `
-        INSERT INTO SyncProgress (sync_id, entity_type, status, ${startTimeColumn})
-        VALUES (@syncId, @entityType, @status, @startTime)
+        INSERT INTO SyncProgress (sync_id, entity_type, status, ${startTimeColumn}
       `;
       
-      await this.pool.request()
+      // Add last_updated if it exists
+      if (columns.includes('last_updated')) {
+        query += `, last_updated`;
+      }
+      
+      query += `) VALUES (@syncId, @entityType, @status, @startTime`;
+      
+      // Add last_updated value if it exists
+      if (columns.includes('last_updated')) {
+        query += `, @lastUpdated`;
+      }
+      
+      query += `)`;
+      
+      const request = this.pool.request()
         .input('syncId', sql.VarChar, syncId)
         .input('entityType', sql.VarChar, entityType)
         .input('status', sql.VarChar, 'in_progress')
-        .input('startTime', sql.DateTimeOffset, new Date())
-        .query(query);
+        .input('startTime', sql.DateTimeOffset, new Date());
+      
+      // Add last_updated parameter if needed
+      if (columns.includes('last_updated')) {
+        request.input('lastUpdated', sql.DateTimeOffset, new Date());
+      }
+      
+      await request.query(query);
       
       console.log(`Created sync progress record for ${entityType} with ID ${syncId}`);
       return true;
@@ -353,6 +373,11 @@ class DatabaseManager {
             ${endTimeColumn} = @endTime
       `;
       
+      // Add last_updated if it exists
+      if (columns.includes('last_updated')) {
+        query += `, last_updated = @lastUpdated`;
+      }
+      
       // Add count column if it exists
       if (countColumn) {
         query += `, ${countColumn} = @count`;
@@ -365,13 +390,19 @@ class DatabaseManager {
       
       query += ` WHERE sync_id = @syncId`;
       
-      await this.pool.request()
+      const request = this.pool.request()
         .input('syncId', sql.VarChar, syncId)
         .input('status', sql.VarChar, status)
         .input('endTime', sql.DateTimeOffset, new Date())
         .input('count', sql.Int, count)
-        .input('error', sql.NVarChar, error)
-        .query(query);
+        .input('error', sql.NVarChar, error);
+      
+      // Add last_updated parameter if needed
+      if (columns.includes('last_updated')) {
+        request.input('lastUpdated', sql.DateTimeOffset, new Date());
+      }
+      
+      await request.query(query);
       
       console.log(`Updated sync progress record ${syncId} with status ${status}`);
       return true;
