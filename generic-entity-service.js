@@ -53,14 +53,23 @@ class GenericEntityService {
       // Get entities from Picqer
       const response = await this.apiClient.get(this.apiEndpoint, params);
       
-      if (!response || !response.data) {
+      // Handle different response formats
+      let entities = [];
+      if (response && response.data) {
+        // Some endpoints return { data: [...] }
+        entities = response.data;
+      } else if (Array.isArray(response)) {
+        // Some endpoints return the array directly
+        entities = response;
+      } else if (response && typeof response === 'object') {
+        // Some endpoints might return the object directly
+        entities = [response];
+      } else {
         console.error(`Invalid response format from Picqer API for ${this.entityType}`);
         return [];
       }
       
-      const entities = response.data;
       console.log(`Fetched ${entities.length} ${this.entityType} entities from Picqer API`);
-      
       return entities;
     } catch (error) {
       console.error(`Error fetching ${this.entityType} entities from Picqer:`, error.message);
