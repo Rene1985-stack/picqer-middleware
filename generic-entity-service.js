@@ -1,14 +1,15 @@
 /**
- * Generic Entity Service with Pagination and Rate Limiting Support
+ * Enhanced Generic Entity Service with Entity-Specific Attributes
  * 
- * A unified service for handling all entity types between Picqer and SQL database.
- * This version includes pagination support for handling large datasets.
+ * This service handles synchronization between Picqer and SQL database
+ * with support for entity-specific attributes, pagination, and rate limiting.
  */
 const sql = require('mssql');
+const entityAttributes = require('./entity-attributes');
 
-class GenericEntityService {
+class EnhancedGenericEntityService {
   /**
-   * Create a new generic entity service
+   * Create a new enhanced generic entity service
    * @param {Object} entityConfig - Entity configuration
    * @param {Object} apiClient - Picqer API client
    * @param {Object} dbManager - Database manager
@@ -22,6 +23,18 @@ class GenericEntityService {
     this.nameField = entityConfig.nameField || 'name';
     this.apiClient = apiClient;
     this.dbManager = dbManager;
+    
+    // Get entity-specific attributes
+    this.attributes = entityAttributes[this.entityType] || [];
+    
+    // Validate attributes
+    if (!this.attributes || this.attributes.length === 0) {
+      console.warn(`No specific attributes defined for entity type ${this.entityType}, using minimal schema`);
+      this.attributes = [
+        { apiField: this.idField, dbColumn: 'id', type: 'string', required: true },
+        { apiField: this.nameField, dbColumn: 'name', type: 'string', required: true }
+      ];
+    }
   }
 
   /**
@@ -52,14 +65,89 @@ class GenericEntityService {
       // Get entities from Picqer with automatic pagination
       const entities = await this.apiClient.get(this.apiEndpoint, params, true);
       
-      // Log the total number of entities fetched
-      console.log(`Fetched ${Array.isArray(entities) ? entities.length : 0} ${this.entityType} entities from Picqer API`);
+      // Handle different response formats
+      let processedEntities = [];
+      if (Array.isArray(entities)) {
+        processedEntities = entities;
+      } else if (entities && entities.data && Array.isArray(entities.data)) {
+        processedEntities = entities.data;
+      } else if (entities && typeof entities === 'object') {
+        processedEntities = [entities];
+      }
       
-      return Array.isArray(entities) ? entities : [];
+      // Log the total number of entities fetched
+      console.log(`Fetched ${processedEntities.length} ${this.entityType} entities from Picqer API`);
+      
+      return processedEntities;
     } catch (error) {
       console.error(`Error fetching ${this.entityType} entities from Picqer:`, error.message);
       throw error;
     }
+  }
+
+  /**
+   * Extract entity attributes from API response
+   * @param {Object} entity - Entity object from API
+   * @returns {Object} - Extracted attributes
+   */
+  extractEntityAttributes(entity) {
+    const extractedAttributes = {};
+    
+    // Extract each defined attribute
+    for (const attr of this.attributes) {
+      const apiValue = this.getNestedValue(entity, attr.apiField);
+      
+      // Skip undefined required fields
+      if (attr.required && apiValue === undefined) {
+        console.warn(`Required field ${attr.apiField} missing in ${this.entityType} entity`);
+        continue;
+      }
+      
+      // Convert value based on type
+      let dbValue = apiValue;
+      if (apiValue !== undefined && apiValue !== null) {
+        switch (attr.type) {
+          case 'string':
+            dbValue = String(apiValue);
+            break;
+          case 'number':
+            dbValue = Number(apiValue);
+            break;
+          case 'boolean':
+            dbValue = Boolean(apiValue);
+            break;
+          case 'datetime':
+            dbValue = apiValue; // SQL Server can handle ISO date strings
+            break;
+          default:
+            dbValue = apiValue;
+        }
+      }
+      
+      extractedAttributes[attr.dbColumn] = dbValue;
+    }
+    
+    return extractedAttributes;
+  }
+  
+  /**
+   * Get nested value from object using dot notation
+   * @param {Object} obj - Object to extract from
+   * @param {string} path - Path to value using dot notation
+   * @returns {*} - Extracted value
+   */
+  getNestedValue(obj, path) {
+    if (!obj || !path) return undefined;
+    
+    const keys = path.split('.');
+    let value = obj;
+    
+    for (const key of keys) {
+      if (value === null || value === undefined) return undefined;
+      value = value[key];
+    }
+    
+    return value;
   }
 
   /**
@@ -75,47 +163,101 @@ class GenericEntityService {
       }
       
       const pool = this.dbManager.pool;
-      const entityId = String(entity[this.idField]); // Ensure ID is a string
-      const entityName = entity[this.nameField] || '';
+      
+      // Extract entity attributes
+      const attributes = this.extractEntityAttributes(entity);
+      
+      // Ensure ID is present
+      if (!attributes.id) {
+        console.error(`Missing ID for ${this.entityType} entity`);
+        return false;
+      }
       
       // Check if entity already exists
       const existingEntity = await pool.request()
-        .input('entityId', sql.VarChar, entityId)
+        .input('entityId', sql.VarChar, attributes.id)
         .query(`
-          SELECT ${this.idField}
+          SELECT id
           FROM ${this.tableName}
-          WHERE ${this.idField} = @entityId
+          WHERE id = @entityId
         `);
       
       if (existingEntity.recordset.length > 0) {
-        // Update existing entity - MINIMAL SCHEMA VERSION
-        await pool.request()
-          .input('entityId', sql.VarChar, entityId)
-          .input('name', sql.NVarChar, entityName)
-          .query(`
-            UPDATE ${this.tableName}
-            SET name = @name
-            WHERE ${this.idField} = @entityId
-          `);
+        // Update existing entity
+        const updateColumns = Object.keys(attributes)
+          .filter(key => key !== 'id') // Exclude ID from update
+          .map(key => `${key} = @${key}`)
+          .join(', ');
         
-        console.log(`Updated ${this.entityType} ${entityId} in database`);
+        if (!updateColumns) {
+          console.log(`No columns to update for ${this.entityType} ${attributes.id}`);
+          return true;
+        }
+        
+        const updateRequest = pool.request()
+          .input('entityId', sql.VarChar, attributes.id);
+        
+        // Add parameters for each attribute
+        for (const [key, value] of Object.entries(attributes)) {
+          if (key !== 'id') { // Skip ID in SET clause
+            updateRequest.input(key, this.getSqlType(value), value);
+          }
+        }
+        
+        await updateRequest.query(`
+          UPDATE ${this.tableName}
+          SET ${updateColumns}
+          WHERE id = @entityId
+        `);
+        
+        console.log(`Updated ${this.entityType} ${attributes.id} in database`);
       } else {
-        // Insert new entity - MINIMAL SCHEMA VERSION
-        await pool.request()
-          .input('entityId', sql.VarChar, entityId)
-          .input('name', sql.NVarChar, entityName)
-          .query(`
-            INSERT INTO ${this.tableName} (${this.idField}, name)
-            VALUES (@entityId, @name)
-          `);
+        // Insert new entity
+        const columns = Object.keys(attributes).join(', ');
+        const paramNames = Object.keys(attributes).map(key => `@${key}`).join(', ');
         
-        console.log(`Inserted new ${this.entityType} ${entityId} into database`);
+        const insertRequest = pool.request();
+        
+        // Add parameters for each attribute
+        for (const [key, value] of Object.entries(attributes)) {
+          insertRequest.input(key, this.getSqlType(value), value);
+        }
+        
+        await insertRequest.query(`
+          INSERT INTO ${this.tableName} (${columns})
+          VALUES (${paramNames})
+        `);
+        
+        console.log(`Inserted new ${this.entityType} ${attributes.id} into database`);
       }
       
       return true;
     } catch (error) {
-      console.error(`Error saving ${this.entityType} ${entity[this.idField]}:`, error.message);
+      console.error(`Error saving ${this.entityType} entity:`, error.message);
       throw error;
+    }
+  }
+  
+  /**
+   * Get SQL type for a value
+   * @param {*} value - Value to get type for
+   * @returns {*} - SQL type
+   */
+  getSqlType(value) {
+    if (value === null || value === undefined) return sql.VarChar;
+    
+    switch (typeof value) {
+      case 'string':
+        return sql.NVarChar;
+      case 'number':
+        return Number.isInteger(value) ? sql.Int : sql.Float;
+      case 'boolean':
+        return sql.Bit;
+      case 'object':
+        if (value instanceof Date) return sql.DateTimeOffset;
+        return sql.NVarChar;
+      default:
+        return sql.VarChar;
     }
   }
 
@@ -150,7 +292,7 @@ class GenericEntityService {
             console.log(`Progress: Synced ${count}/${entities.length} ${this.entityType} entities...`);
           }
         } catch (error) {
-          console.error(`Error saving ${this.entityType} ${entity[this.idField]}:`, error.message);
+          console.error(`Error saving ${this.entityType} entity:`, error.message);
         }
       }
       
@@ -215,4 +357,4 @@ class GenericEntityService {
   }
 }
 
-module.exports = GenericEntityService;
+module.exports = EnhancedGenericEntityService;
