@@ -1,8 +1,9 @@
 /**
- * Enhanced API Server with Entity-Specific Attributes
+ * Picqer to SQL DB Synchronization API with Enhanced Functionality
  * 
  * This file sets up an Express server with API endpoints for syncing entities
- * with support for entity-specific attributes, pagination, and rate limiting.
+ * between Picqer and SQL database with support for entity-specific attributes,
+ * pagination, and rate limiting.
  */
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -12,10 +13,12 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config();
 
-// Import components
-const EnhancedPicqerApiClient = require('./enhanced-picqer-api-client');
+// Import components with original filenames but enhanced functionality
+const PicqerApiClient = require('./picqer-api-client');
 const DatabaseManager = require('./database-manager');
-const EnhancedSyncManager = require('./enhanced-sync-manager');
+const SyncManager = require('./sync-manager');
+const entityConfigs = require('./entity-configs');
+const entityAttributes = require('./entity-attributes');
 
 // Create Express app
 const app = express();
@@ -26,11 +29,11 @@ app.use(bodyParser.json());
 app.use(cors());
 
 // Initialize components
-const apiClient = new EnhancedPicqerApiClient({
+const apiClient = new PicqerApiClient({
   apiUrl: process.env.PICQER_API_URL || process.env.PICQER_BASE_URL,
   apiKey: process.env.PICQER_API_KEY,
   waitOnRateLimit: process.env.PICQER_RATE_LIMIT_WAIT === 'true',
-  sleepTimeOnRateLimitHit: parseInt(process.env.PICQER_RATE_LIMIT_SLEEP_MS || '20000'),
+  sleepTimeOnRateLimitHitInSeconds: parseInt(process.env.PICQER_RATE_LIMIT_SLEEP_MS || '20000') / 1000,
   requestDelay: parseInt(process.env.PICQER_REQUEST_DELAY_MS || '100')
 });
 
@@ -46,7 +49,7 @@ const dbManager = new DatabaseManager({
   }
 });
 
-const syncManager = new EnhancedSyncManager(apiClient, dbManager);
+const syncManager = new SyncManager(apiClient, dbManager);
 
 // API routes
 app.get('/', (req, res) => {
@@ -110,6 +113,7 @@ app.get('/api/sync/status', async (req, res) => {
 // Start server
 app.listen(port, () => {
   console.log(`Enhanced Picqer Sync API server running on port ${port}`);
+  console.log(`Using entity-specific attributes for: ${Object.keys(entityAttributes).join(', ')}`);
 });
 
 module.exports = app;
