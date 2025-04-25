@@ -1,10 +1,9 @@
 /**
- * Updated index.js with environment variable compatibility for database connection
+ * Fixed index.js with dashboard routing and database connection adapter
  * 
- * This version fixes the environment variable naming discrepancy by:
- * 1. Using the db-connection-adapter to support both SQL_ and DB_ prefixed variables
- * 2. Maintaining Picqer API URL fallback (PICQER_BASE_URL or PICQER_API_URL)
- * 3. Improving error handling for database connections
+ * This version fixes both issues:
+ * 1. Adds explicit route handler for '/dashboard/' path
+ * 2. Uses the db-connection-adapter to support both SQL_ and DB_ prefixed variables
  */
 
 require('dotenv').config();
@@ -400,8 +399,24 @@ if (typeof batchDashboardApiModule === 'function') {
   }
 }
 
+// FIX: Create dashboard directory if it doesn't exist
+const dashboardDir = path.join(__dirname, 'dashboard');
+if (!fs.existsSync(dashboardDir)) {
+  console.log('Creating dashboard directory');
+  fs.mkdirSync(dashboardDir, { recursive: true });
+}
+
 // Serve static dashboard files
 app.use(express.static(path.join(__dirname, 'dashboard')));
+
+// FIX: Add explicit route for /dashboard/ path
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
+});
+
+app.get('/dashboard/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
+});
 
 // Serve dashboard at root
 app.get('/', (req, res) => {
