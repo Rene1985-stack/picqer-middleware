@@ -64,29 +64,55 @@ class DatabaseManager {
         await this.connect();
       }
       
-      // Create SyncProgress table
-      await this.pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress')
-        BEGIN
+      // Check if SyncProgress table exists and get its columns
+      const tableResult = await this.pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncProgress'
+      `);
+      
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (syncTableExists) {
+        // Get column information
+        const columnResult = await this.pool.request().query(`
+          SELECT COLUMN_NAME 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_NAME = 'SyncProgress'
+        `);
+        
+        const columns = columnResult.recordset.map(record => record.COLUMN_NAME);
+        console.log('Existing SyncProgress columns:', columns);
+        
+        // Check if we need to add the count column
+        if (!columns.includes('count')) {
+          try {
+            await this.pool.request().query(`
+              ALTER TABLE SyncProgress ADD count INT DEFAULT 0
+            `);
+            console.log('Added count column to SyncProgress table');
+          } catch (error) {
+            console.error('Error adding count column:', error.message);
+          }
+        }
+      } else {
+        // Create SyncProgress table
+        await this.pool.request().query(`
           CREATE TABLE SyncProgress (
             id INT IDENTITY(1,1) PRIMARY KEY,
             sync_id VARCHAR(100) NOT NULL,
             entity_type VARCHAR(50) NOT NULL,
             status VARCHAR(20) NOT NULL,
-            start_time DATETIMEOFFSET NOT NULL DEFAULT GETDATE(),
-            end_time DATETIMEOFFSET NULL,
+            started_at DATETIMEOFFSET NOT NULL DEFAULT GETDATE(),
+            ended_at DATETIMEOFFSET NULL,
             count INT DEFAULT 0,
             error NVARCHAR(MAX) NULL
           );
           PRINT 'Created SyncProgress table';
-        END
-        ELSE
-        BEGIN
-          PRINT 'SyncProgress table already exists';
-        END
-      `);
+        `);
+      }
       
-      // Create SyncStatus table
+      // Create SyncStatus table if it doesn't exist
       await this.pool.request().query(`
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncStatus')
         BEGIN
@@ -259,15 +285,30 @@ class DatabaseManager {
         await this.connect();
       }
       
+      // Get column information to determine correct column names
+      const columnResult = await this.pool.request().query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'SyncProgress'
+      `);
+      
+      const columns = columnResult.recordset.map(record => record.COLUMN_NAME);
+      
+      // Determine the correct column names
+      const startTimeColumn = columns.includes('started_at') ? 'started_at' : 'start_time';
+      
+      // Build the query dynamically based on available columns
+      let query = `
+        INSERT INTO SyncProgress (sync_id, entity_type, status, ${startTimeColumn})
+        VALUES (@syncId, @entityType, @status, @startTime)
+      `;
+      
       await this.pool.request()
         .input('syncId', sql.VarChar, syncId)
         .input('entityType', sql.VarChar, entityType)
         .input('status', sql.VarChar, 'in_progress')
         .input('startTime', sql.DateTimeOffset, new Date())
-        .query(`
-          INSERT INTO SyncProgress (sync_id, entity_type, status, start_time)
-          VALUES (@syncId, @entityType, @status, @startTime)
-        `);
+        .query(query);
       
       console.log(`Created sync progress record for ${entityType} with ID ${syncId}`);
       return true;
@@ -292,20 +333,45 @@ class DatabaseManager {
         await this.connect();
       }
       
+      // Get column information to determine correct column names
+      const columnResult = await this.pool.request().query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'SyncProgress'
+      `);
+      
+      const columns = columnResult.recordset.map(record => record.COLUMN_NAME);
+      
+      // Determine the correct column names
+      const endTimeColumn = columns.includes('ended_at') ? 'ended_at' : 'end_time';
+      const countColumn = columns.includes('count') ? 'count' : null;
+      
+      // Build the query dynamically based on available columns
+      let query = `
+        UPDATE SyncProgress
+        SET status = @status,
+            ${endTimeColumn} = @endTime
+      `;
+      
+      // Add count column if it exists
+      if (countColumn) {
+        query += `, ${countColumn} = @count`;
+      }
+      
+      // Add error column if it exists
+      if (columns.includes('error')) {
+        query += `, error = @error`;
+      }
+      
+      query += ` WHERE sync_id = @syncId`;
+      
       await this.pool.request()
         .input('syncId', sql.VarChar, syncId)
         .input('status', sql.VarChar, status)
         .input('endTime', sql.DateTimeOffset, new Date())
         .input('count', sql.Int, count)
         .input('error', sql.NVarChar, error)
-        .query(`
-          UPDATE SyncProgress
-          SET status = @status,
-              end_time = @endTime,
-              count = @count,
-              error = @error
-          WHERE sync_id = @syncId
-        `);
+        .query(query);
       
       console.log(`Updated sync progress record ${syncId} with status ${status}`);
       return true;
