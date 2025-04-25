@@ -1,301 +1,181 @@
-console.log('Starting middleware application...');
-console.log('Environment variables loaded:', {
-  PICQER_BASE_URL: process.env.PICQER_BASE_URL,
-  SQL_SERVER: process.env.SQL_SERVER,
-  SQL_DATABASE: process.env.SQL_DATABASE,
-  SQL_PORT: process.env.SQL_PORT,
-  SQL_USER: process.env.SQL_USER
-});
-
 /**
- * Simplified index.js
+ * Simplified Picqer to SQL DB Synchronization
  * 
- * This is a streamlined version of the middleware that:
- * 1. Initializes services
- * 2. Sets up basic API routes
- * 3. Includes database schema fixes directly
+ * This is the main entry point for the simplified synchronization service
+ * between Picqer and SQL database.
  */
 require('dotenv').config();
 const express = require('express');
+const cron = require('node-cron');
+const bodyParser = require('body-parser');
 const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
 
-// Import database connection adapter
-const dbAdapter = require('./db-connection-adapter');
-
-// Import services
+// Import components
+const ConfigManager = require('./config-manager');
 const PicqerApiClient = require('./picqer-api-client');
-const BatchService = require('./batch_service');
-const PicklistService = require('./picklist-service');
-const WarehouseService = require('./warehouse_service');
-const UserService = require('./user_service');
-const SupplierService = require('./supplier_service');
-
-// Import API adapters
-const apiAdapterModule = require('./api-adapter');
-const batchDashboardApiModule = require('./batch_dashboard_api');
-
-// Import sync module
-const syncModule = require('./sync');
+const DatabaseManager = require('./database-manager');
+const GenericEntityService = require('./generic-entity-service');
+const SyncManager = require('./sync-manager');
+const entityConfigs = require('./entity-configs');
 
 // Create Express app
 const app = express();
-
-// Use CORS middleware
+app.use(bodyParser.json());
 app.use(cors());
 
-// Use JSON middleware
-app.use(express.json());
+// Initialize components
+const configManager = new ConfigManager();
+let apiClient;
+let dbManager;
+let syncManager;
 
-// Get port from environment variable or use default
-const port = process.env.PORT || 8080;
-
-// Environment variable consistency fix for Picqer API URL
-const picqerApiUrl = process.env.PICQER_API_URL || process.env.PICQER_BASE_URL;
-if (!picqerApiUrl) {
-  console.error('ERROR: Neither PICQER_API_URL nor PICQER_BASE_URL environment variables are set');
-  process.exit(1);
-}
-
-// Log for debugging
-console.log(`Using Picqer API URL: ${picqerApiUrl}`);
-
-// Get database configuration
-const dbConfig = dbAdapter.getDatabaseConfig();
-
-// Validate database configuration
-try {
-  dbAdapter.validateDatabaseConfig(dbConfig);
-  console.log('Database configuration validated successfully');
-} catch (error) {
-  console.error('Database configuration validation failed:', error.message);
-  console.error('The middleware will start, but database operations will likely fail');
-}
-
-// Create Picqer API client
-const picqerClient = new PicqerApiClient(
-  process.env.PICQER_API_KEY,
-  picqerApiUrl,
-  {
-    requestsPerMinute: 30,
-    maxRetries: 5,
-    waitOnRateLimit: true,
-    sleepTimeOnRateLimitHitInMs: 20000
-  }
-);
-
-// Create service instances
-const services = {
-  BatchService: new BatchService(
-    process.env.PICQER_API_KEY,
-    picqerApiUrl,
-    dbConfig
-  ),
-  PicklistService: new PicklistService(
-    process.env.PICQER_API_KEY,
-    picqerApiUrl,
-    dbConfig
-  ),
-  WarehouseService: new WarehouseService(
-    process.env.PICQER_API_KEY,
-    picqerApiUrl,
-    dbConfig
-  ),
-  UserService: new UserService(
-    process.env.PICQER_API_KEY,
-    picqerApiUrl,
-    dbConfig
-  ),
-  SupplierService: new SupplierService(
-    process.env.PICQER_API_KEY,
-    picqerApiUrl,
-    dbConfig
-  )
-};
-
-// Initialize services
-async function initializeServices() {
+/**
+ * Initialize the application
+ * @returns {Promise<boolean>} - Success status
+ */
+async function initialize() {
   try {
-    console.log('Initializing services...');
+    console.log('Initializing application...');
     
-    // Initialize database schema
-    await syncModule.fixDatabaseSchema(dbConfig);
+    // Validate configuration
+    configManager.validateApiConfig();
+    configManager.validateDatabaseConfig();
     
-    // Initialize each service
-    for (const [serviceName, service] of Object.entries(services)) {
-      if (typeof service.initialize === 'function') {
-        await service.initialize();
-        console.log(`${serviceName} initialized successfully`);
-      }
+    // Initialize API client
+    apiClient = new PicqerApiClient(
+      configManager.getApiConfig().apiKey,
+      configManager.getApiConfig().baseUrl,
+      configManager.getApiConfig().rateLimits
+    );
+    
+    // Initialize database manager
+    dbManager = new DatabaseManager(configManager.getDatabaseConfig());
+    await dbManager.connect();
+    await dbManager.initializeSchema();
+    
+    // Initialize sync manager
+    syncManager = new SyncManager(apiClient, dbManager);
+    
+    // Register entity services
+    for (const [entityType, config] of Object.entries(entityConfigs)) {
+      const entityService = new GenericEntityService(config, apiClient, dbManager);
+      syncManager.registerEntityService(entityType, entityService);
     }
     
-    console.log('All services initialized successfully');
+    // Initialize all entity services
+    await syncManager.initialize();
+    
+    console.log('Application initialized successfully');
+    return true;
   } catch (error) {
-    console.error('Error initializing services:', error.message);
+    console.error('Error initializing application:', error.message);
+    return false;
   }
 }
 
-// Initialize services on startup
-initializeServices();
-
-// Create API router
-const apiRouter = express.Router();
-
-// Status endpoint
-apiRouter.get('/status', (req, res) => {
+// Set up API endpoints
+app.get('/', (req, res) => {
   res.json({
-    online: true,
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
+    status: 'ok',
+    message: 'Picqer to SQL DB Synchronization Service',
+    version: '2.0.0'
   });
 });
 
-// Sync endpoints
-apiRouter.post('/sync/warehouses', async (req, res) => {
+// Sync all entities
+app.post('/api/sync/all', async (req, res) => {
   try {
-    console.log('Warehouse sync request received');
-    const result = await syncModule.syncWarehouses(services.WarehouseService);
+    const result = await syncManager.syncAll();
     res.json(result);
   } catch (error) {
-    console.error('Error syncing warehouses:', error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-apiRouter.post('/sync/users', async (req, res) => {
-  try {
-    console.log('Users sync request received');
-    const result = await syncModule.syncUsers(services.UserService);
-    res.json(result);
-  } catch (error) {
-    console.error('Error syncing users:', error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-apiRouter.post('/sync/suppliers', async (req, res) => {
-  try {
-    console.log('Suppliers sync request received');
-    const result = await syncModule.syncSuppliers(services.SupplierService);
-    res.json(result);
-  } catch (error) {
-    console.error('Error syncing suppliers:', error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-apiRouter.post('/sync/picklists', async (req, res) => {
-  try {
-    console.log('Picklists sync request received');
-    const result = await syncModule.syncPicklists(services.PicklistService);
-    res.json(result);
-  } catch (error) {
-    console.error('Error syncing picklists:', error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-apiRouter.post('/sync/batches', async (req, res) => {
-  try {
-    console.log('Batches sync request received');
-    const result = await syncModule.syncBatches(services.BatchService);
-    res.json(result);
-  } catch (error) {
-    console.error('Error syncing batches:', error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Sync all entities endpoint
-apiRouter.post('/sync/all', async (req, res) => {
-  try {
-    console.log('Sync all request received');
-    
-    const results = {
-      warehouses: await syncModule.syncWarehouses(services.WarehouseService),
-      users: await syncModule.syncUsers(services.UserService),
-      suppliers: await syncModule.syncSuppliers(services.SupplierService),
-      picklists: await syncModule.syncPicklists(services.PicklistService),
-      batches: await syncModule.syncBatches(services.BatchService)
-    };
-    
-    const success = Object.values(results).every(result => result.success);
-    
-    res.json({
-      success,
-      message: success ? 'All entities synced successfully' : 'Some entities failed to sync',
-      results
+    res.status(500).json({
+      success: false,
+      message: `Error syncing all entities: ${error.message}`,
+      error: error.message
     });
-  } catch (error) {
-    console.error('Error syncing all entities:', error.message);
-    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Get sync status endpoint
-apiRouter.get('/sync/status', async (req, res) => {
+// Sync specific entity type
+app.post('/api/sync/:entityType', async (req, res) => {
+  const { entityType } = req.params;
+  
+  if (!entityConfigs[entityType]) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid entity type: ${entityType}`,
+      error: 'Invalid entity type'
+    });
+  }
+  
   try {
-    const status = await syncModule.getSyncStatus(dbConfig);
+    const result = await syncManager.syncEntity(entityType);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: `Error syncing ${entityType}: ${error.message}`,
+      error: error.message
+    });
+  }
+});
+
+// Get sync status
+app.get('/api/sync/status', async (req, res) => {
+  try {
+    const status = await syncManager.getSyncStatus();
     res.json(status);
   } catch (error) {
-    console.error('Error getting sync status:', error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: `Error getting sync status: ${error.message}`,
+      error: error.message
+    });
   }
 });
 
-// Use our API router
-app.use('/api', apiRouter);
-
-// Initialize API adapters
-if (apiAdapterModule && typeof apiAdapterModule.initializeServices === 'function') {
-  apiAdapterModule.initializeServices(services);
+// Start the application
+async function startApp() {
+  const initialized = await initialize();
+  
+  if (!initialized) {
+    console.error('Failed to initialize application');
+    process.exit(1);
+  }
+  
+  // Start the server
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+  
+  // Schedule daily sync at 1:00 AM
+  cron.schedule('0 1 * * *', async () => {
+    console.log('Running scheduled sync...');
+    try {
+      await syncManager.syncAll();
+      console.log('Scheduled sync completed successfully');
+    } catch (error) {
+      console.error('Error in scheduled sync:', error.message);
+    }
+  });
 }
 
-// Initialize batch dashboard API adapter
-if (batchDashboardApiModule && typeof batchDashboardApiModule.initializeServices === 'function') {
-  batchDashboardApiModule.initializeServices(services);
-}
-
-// Use API routers
-if (apiAdapterModule && apiAdapterModule.router) {
-  app.use('/api', apiAdapterModule.router);
-}
-
-// Use batch dashboard API router
-if (batchDashboardApiModule && batchDashboardApiModule.router) {
-  app.use('/api', batchDashboardApiModule.router);
-}
-
-// Create dashboard directory if it doesn't exist
-const dashboardDir = path.join(__dirname, 'dashboard');
-if (!fs.existsSync(dashboardDir)) {
-  console.log('Creating dashboard directory');
-  fs.mkdirSync(dashboardDir, { recursive: true });
-}
-
-// Serve static dashboard files
-app.use(express.static(path.join(__dirname, 'dashboard')));
-
-// Add explicit route for /dashboard/ path
-app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  
+  if (dbManager) {
+    await dbManager.close();
+  }
+  
+  process.exit(0);
 });
 
-app.get('/dashboard/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
-});
-
-// Serve dashboard at root
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard', 'dashboard.html'));
-});
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Picqer middleware server running on port ${port}`);
-  console.log(`Dashboard available at: http://localhost:${port}/dashboard/`);
-  console.log(`API available at: http://localhost:${port}/api/`);
+// Start the application
+startApp().catch(error => {
+  console.error('Error starting application:', error);
+  process.exit(1);
 });
 
 module.exports = app;
