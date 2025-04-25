@@ -1,10 +1,9 @@
 /**
- * Fixed index.js with proper initialization of data_sync_api_adapter
- * and environment variable consistency fix
+ * Fixed index.js with proper sync method integration
  * 
  * This version fixes all identified issues:
- * 1. Uses the enhanced SyncImplementation with all required methods
- * 2. Properly initializes data_sync_api_adapter with syncImplementation instance
+ * 1. Uses the existing sync-method-integration.js to integrate sync methods
+ * 2. Properly initializes data_sync_api_adapter with services
  * 3. Ensures dashboard routes work correctly
  * 4. Uses the db-connection-adapter for database connectivity
  * 5. Adds fallback for PICQER_API_URL and PICQER_BASE_URL
@@ -31,8 +30,8 @@ const apiAdapterModule = require('./api-adapter');
 const dataSyncApiAdapterModule = require('./fixed-data-sync-api-adapter');
 const batchDashboardApiModule = require('./batch_dashboard_api');
 
-// Import sync implementation
-const SyncImplementation = require('./sync-method-implementation');
+// Import sync method integration
+const { integrateSyncMethods } = require('./sync-method-integration');
 
 // Create Express app
 const app = express();
@@ -109,8 +108,8 @@ const services = {
   )
 };
 
-// Create sync implementation with services
-const syncImplementation = new SyncImplementation(services);
+// Integrate sync methods into service classes
+integrateSyncMethods(services);
 
 // Initialize services
 async function initializeServices() {
@@ -171,9 +170,9 @@ if (apiAdapterModule && typeof apiAdapterModule.initializeServices === 'function
   apiAdapterModule.initializeServices(services);
 }
 
-// Initialize data sync API adapter with services AND syncImplementation
+// Initialize data sync API adapter with services
 if (dataSyncApiAdapterModule && typeof dataSyncApiAdapterModule.initializeServices === 'function') {
-  dataSyncApiAdapterModule.initializeServices(services, syncImplementation);
+  dataSyncApiAdapterModule.initializeServices(services);
 }
 
 // Initialize batch dashboard API adapter
