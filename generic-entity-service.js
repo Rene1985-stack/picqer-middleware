@@ -1,8 +1,8 @@
 /**
- * Generic Entity Service (Minimal Schema Version)
+ * Generic Entity Service with Pagination and Rate Limiting Support
  * 
- * A highly simplified service for handling all entity types between Picqer and SQL database.
- * This version works with minimal database schema, requiring only ID and name columns.
+ * A unified service for handling all entity types between Picqer and SQL database.
+ * This version includes pagination support for handling large datasets.
  */
 const sql = require('mssql');
 
@@ -41,7 +41,7 @@ class GenericEntityService {
   }
 
   /**
-   * Fetch entities from Picqer API
+   * Fetch entities from Picqer API with pagination
    * @param {Object} params - Query parameters
    * @returns {Promise<Array>} - Array of entity objects
    */
@@ -49,27 +49,13 @@ class GenericEntityService {
     try {
       console.log(`Fetching ${this.entityType} entities from Picqer API...`);
       
-      // Get entities from Picqer
-      const response = await this.apiClient.get(this.apiEndpoint, params);
+      // Get entities from Picqer with automatic pagination
+      const entities = await this.apiClient.get(this.apiEndpoint, params, true);
       
-      // Handle different response formats
-      let entities = [];
-      if (response && response.data) {
-        // Some endpoints return { data: [...] }
-        entities = response.data;
-      } else if (Array.isArray(response)) {
-        // Some endpoints return the array directly
-        entities = response;
-      } else if (response && typeof response === 'object') {
-        // Some endpoints might return the object directly
-        entities = [response];
-      } else {
-        console.error(`Invalid response format from Picqer API for ${this.entityType}`);
-        return [];
-      }
+      // Log the total number of entities fetched
+      console.log(`Fetched ${Array.isArray(entities) ? entities.length : 0} ${this.entityType} entities from Picqer API`);
       
-      console.log(`Fetched ${entities.length} ${this.entityType} entities from Picqer API`);
-      return entities;
+      return Array.isArray(entities) ? entities : [];
     } catch (error) {
       console.error(`Error fetching ${this.entityType} entities from Picqer:`, error.message);
       throw error;
@@ -134,7 +120,7 @@ class GenericEntityService {
   }
 
   /**
-   * Sync entities from Picqer to database
+   * Sync entities from Picqer to database with pagination and rate limiting
    * @returns {Promise<Object>} - Sync result
    */
   async syncEntities() {
@@ -149,7 +135,7 @@ class GenericEntityService {
       const syncId = `${this.entityType}_${Date.now()}`;
       await this.dbManager.createSyncProgressRecord(syncId, this.entityType);
       
-      // Fetch entities from Picqer
+      // Fetch entities from Picqer with pagination
       const entities = await this.fetchEntities();
       
       // Save entities to database
@@ -159,9 +145,9 @@ class GenericEntityService {
           await this.saveEntity(entity);
           count++;
           
-          // Add delay between requests to prevent overwhelming the database
-          if (count % 10 === 0) {
-            await new Promise(resolve => setTimeout(resolve, 100));
+          // Update progress periodically (every 50 entities)
+          if (count % 50 === 0) {
+            console.log(`Progress: Synced ${count}/${entities.length} ${this.entityType} entities...`);
           }
         } catch (error) {
           console.error(`Error saving ${this.entityType} ${entity[this.idField]}:`, error.message);
@@ -174,11 +160,19 @@ class GenericEntityService {
       // Update sync progress
       await this.dbManager.updateSyncProgressRecord(syncId, 'completed', count);
       
+      // Get API client statistics
+      const stats = this.apiClient.getStats ? this.apiClient.getStats() : {};
+      
       console.log(`${this.entityType} sync completed. Synced ${count} entities.`);
+      if (stats.rateLimitHits) {
+        console.log(`Rate limit statistics: ${stats.rateLimitHits} hits, ${stats.retries} retries`);
+      }
+      
       return {
         success: true,
         message: `Synced ${count} ${this.entityType} entities successfully`,
-        count
+        count,
+        stats
       };
     } catch (error) {
       console.error(`Error syncing ${this.entityType}:`, error.message);
