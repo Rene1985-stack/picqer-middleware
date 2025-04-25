@@ -1,40 +1,27 @@
 /**
  * Picqer Rate Limiter
  * 
- * This module provides rate limiting functionality for the Picqer API
- * to prevent "Rate limit exceeded" errors. It implements Picqer's recommended
- * approach for handling rate limits with automatic retry.
- * 
- * Features:
- * 1. Request queuing to control API request flow
- * 2. Configurable delays between requests
- * 3. Automatic retry on rate limit hits (Picqer style)
- * 4. Comprehensive error handling and statistics
+ * Implements rate limiting for Picqer API requests to prevent "Rate limit exceeded" errors.
+ * Follows Picqer's recommended approach for handling rate limits.
  */
-
 class PicqerRateLimiter {
   /**
    * Create a new rate limiter
    * @param {Object} options - Rate limiting options
    */
   constructor(options = {}) {
-    // Queue configuration
+    // Configuration
     this.requestsPerMinute = options.requestsPerMinute || 30;
-    this.delayBetweenRequestsMs = Math.ceil(60000 / this.requestsPerMinute);
-    
-    // Retry configuration
     this.maxRetries = options.maxRetries || 5;
     this.initialBackoffMs = options.initialBackoffMs || 2000;
-    
-    // Picqer-style configuration
     this.waitOnRateLimit = options.waitOnRateLimit !== undefined ? options.waitOnRateLimit : true;
-    this.sleepTimeOnRateLimitHitInMs = options.sleepTimeOnRateLimitHitInMs || 20000; // 20 seconds, like Picqer's default
+    this.sleepTimeOnRateLimitHitInMs = options.sleepTimeOnRateLimitHitInMs || 20000;
     
     // Logging functions
-    this.logFunction = options.logFunction || console.log;
-    this.errorFunction = options.errorFunction || console.error;
+    this.log = options.logFunction || ((msg) => console.log(`[Rate Limiter] ${msg}`));
+    this.error = options.errorFunction || ((msg) => console.error(`[Rate Limiter Error] ${msg}`));
     
-    // Queue state
+    // Queue and state
     this.queue = [];
     this.processing = false;
     this.lastRequestTime = 0;
@@ -44,15 +31,9 @@ class PicqerRateLimiter {
       totalRequests: 0,
       successfulRequests: 0,
       failedRequests: 0,
-      rateLimitHits: 0,
-      retryAttempts: 0,
-      totalWaitTimeMs: 0
+      retries: 0,
+      rateLimitHits: 0
     };
-    
-    this.logFunction(`Picqer rate limiter initialized with ${this.requestsPerMinute} requests per minute`);
-    this.logFunction(`Delay between requests: ${this.delayBetweenRequestsMs}ms`);
-    this.logFunction(`Auto-retry on rate limit: ${this.waitOnRateLimit ? 'Enabled' : 'Disabled'}`);
-    this.logFunction(`Sleep time on rate limit hit: ${this.sleepTimeOnRateLimitHitInMs}ms`);
   }
 
   /**
@@ -62,18 +43,9 @@ class PicqerRateLimiter {
    */
   async execute(fn) {
     return new Promise((resolve, reject) => {
-      // Add request to queue
-      this.queue.push({
-        fn,
-        resolve,
-        reject,
-        retryCount: 0
-      });
-      
-      // Start processing queue if not already processing
-      if (!this.processing) {
-        this.processQueue();
-      }
+      // Add to queue
+      this.queue.push({ fn, resolve, reject });
+      this.processQueue();
     });
   }
 
@@ -82,81 +54,101 @@ class PicqerRateLimiter {
    * @private
    */
   async processQueue() {
-    if (this.queue.length === 0) {
-      this.processing = false;
+    if (this.processing || this.queue.length === 0) {
       return;
     }
     
     this.processing = true;
     
-    // Get next request from queue
-    const request = this.queue.shift();
-    
     try {
-      // Calculate time to wait before making request
+      // Calculate delay to maintain rate limit
       const now = Date.now();
-      const timeToWait = Math.max(0, this.lastRequestTime + this.delayBetweenRequestsMs - now);
+      const timeSinceLastRequest = now - this.lastRequestTime;
+      const minTimeBetweenRequests = (60 * 1000) / this.requestsPerMinute;
+      const delay = Math.max(0, minTimeBetweenRequests - timeSinceLastRequest);
       
-      if (timeToWait > 0) {
-        this.stats.totalWaitTimeMs += timeToWait;
-        await new Promise(resolve => setTimeout(resolve, timeToWait));
+      if (delay > 0) {
+        this.log(`Delaying request for ${delay}ms to maintain rate limit`);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
       
-      // Update last request time
-      this.lastRequestTime = Date.now();
+      // Get next request from queue
+      const { fn, resolve, reject } = this.queue.shift();
       
-      // Execute the function
-      this.stats.totalRequests++;
-      const result = await request.fn();
+      // Execute with retry logic
+      let result;
+      let retries = 0;
+      let success = false;
       
-      // Request succeeded
-      this.stats.successfulRequests++;
-      request.resolve(result);
-    } catch (error) {
-      // Check if this is a rate limit error (HTTP 429)
-      const isRateLimitError = error.response && error.response.status === 429;
-      
-      if (isRateLimitError) {
-        this.stats.rateLimitHits++;
-        this.logFunction(`Rate limit hit (429 Too Many Requests)`);
-        
-        // Check if we should retry automatically (Picqer style)
-        if (this.waitOnRateLimit && request.retryCount < this.maxRetries) {
-          this.stats.retryAttempts++;
-          request.retryCount++;
+      while (!success && retries <= this.maxRetries) {
+        try {
+          this.stats.totalRequests++;
+          this.lastRequestTime = Date.now();
           
-          // Calculate sleep time (Picqer style: fixed sleep time)
-          const sleepTime = this.sleepTimeOnRateLimitHitInMs;
-          
-          this.logFunction(`Waiting ${sleepTime}ms before retry (attempt ${request.retryCount}/${this.maxRetries})`);
-          this.stats.totalWaitTimeMs += sleepTime;
-          
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, sleepTime));
-          
-          // Add request back to the front of the queue
-          this.queue.unshift(request);
-        } else {
-          // Max retries reached or auto-retry disabled
-          this.stats.failedRequests++;
-          
-          if (request.retryCount >= this.maxRetries) {
-            this.errorFunction(`Max retries (${this.maxRetries}) reached for rate limited request`);
+          result = await fn();
+          success = true;
+          this.stats.successfulRequests++;
+        } catch (error) {
+          if (this.isRateLimitError(error) && this.waitOnRateLimit && retries < this.maxRetries) {
+            retries++;
+            this.stats.retries++;
+            this.stats.rateLimitHits++;
+            
+            const backoffTime = this.calculateBackoff(retries);
+            this.error(`Rate limit hit, retrying in ${backoffTime}ms (retry ${retries}/${this.maxRetries})`);
+            
+            await new Promise(resolve => setTimeout(resolve, backoffTime));
           } else {
-            this.errorFunction(`Auto-retry disabled for rate limited request`);
+            this.stats.failedRequests++;
+            reject(error);
+            break;
           }
-          
-          request.reject(error);
         }
-      } else {
-        // Not a rate limit error
-        this.stats.failedRequests++;
-        request.reject(error);
+      }
+      
+      if (success) {
+        resolve(result);
+      }
+    } catch (error) {
+      this.error(`Unexpected error in rate limiter: ${error.message}`);
+    } finally {
+      this.processing = false;
+      
+      // Process next request if any
+      if (this.queue.length > 0) {
+        this.processQueue();
       }
     }
+  }
+
+  /**
+   * Check if an error is a rate limit error
+   * @param {Error} error - The error to check
+   * @returns {boolean} - Whether it's a rate limit error
+   * @private
+   */
+  isRateLimitError(error) {
+    return (
+      error.response &&
+      error.response.status === 429
+    );
+  }
+
+  /**
+   * Calculate backoff time with exponential backoff
+   * @param {number} retryCount - Current retry count
+   * @returns {number} - Backoff time in milliseconds
+   * @private
+   */
+  calculateBackoff(retryCount) {
+    if (this.waitOnRateLimit) {
+      return this.sleepTimeOnRateLimitHitInMs;
+    }
     
-    // Continue processing queue
-    setImmediate(() => this.processQueue());
+    return Math.min(
+      this.initialBackoffMs * Math.pow(2, retryCount - 1),
+      60000 // Max 1 minute
+    );
   }
 
   /**
@@ -164,7 +156,6 @@ class PicqerRateLimiter {
    */
   enableRetryOnRateLimitHit() {
     this.waitOnRateLimit = true;
-    this.logFunction('Picqer rate limit auto-retry enabled');
   }
 
   /**
@@ -172,7 +163,6 @@ class PicqerRateLimiter {
    */
   disableRetryOnRateLimitHit() {
     this.waitOnRateLimit = false;
-    this.logFunction('Picqer rate limit auto-retry disabled');
   }
 
   /**
@@ -181,7 +171,6 @@ class PicqerRateLimiter {
    */
   setSleepTimeOnRateLimitHit(ms) {
     this.sleepTimeOnRateLimitHitInMs = ms;
-    this.logFunction(`Picqer rate limit sleep time set to ${ms}ms`);
   }
 
   /**
@@ -189,14 +178,7 @@ class PicqerRateLimiter {
    * @returns {Object} - Statistics object
    */
   getStats() {
-    return {
-      ...this.stats,
-      queueLength: this.queue.length,
-      requestsPerMinute: this.requestsPerMinute,
-      delayBetweenRequestsMs: this.delayBetweenRequestsMs,
-      waitOnRateLimit: this.waitOnRateLimit,
-      sleepTimeOnRateLimitHitInMs: this.sleepTimeOnRateLimitHitInMs
-    };
+    return { ...this.stats };
   }
 
   /**
@@ -207,9 +189,8 @@ class PicqerRateLimiter {
       totalRequests: 0,
       successfulRequests: 0,
       failedRequests: 0,
-      rateLimitHits: 0,
-      retryAttempts: 0,
-      totalWaitTimeMs: 0
+      retries: 0,
+      rateLimitHits: 0
     };
   }
 }
