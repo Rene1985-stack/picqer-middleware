@@ -1,11 +1,8 @@
 /**
- * Optimized Warehouse service with performance enhancements
- * Includes performance optimizations:
- * 1. 30-day rolling window for incremental syncs
- * 2. Increased batch size for database operations
- * 3. Optimized database operations with bulk inserts
- * 4. Newest-first processing to prioritize recent data
- * 5. Resumable sync to continue from last position after restarts
+ * Updated Warehouse Service
+ * 
+ * This service handles all warehouse-related operations between Picqer and SQL database.
+ * It includes methods for fetching warehouses from Picqer and saving them to the database.
  */
 const axios = require('axios');
 const sql = require('mssql');
@@ -281,7 +278,95 @@ class WarehouseService {
     }
   }
 
-  // Rest of your WarehouseService implementation...
+  /**
+   * Fetch warehouses from Picqer API
+   * @returns {Promise<Array>} - Array of warehouse objects
+   */
+  async fetchWarehouses() {
+    try {
+      console.log('Fetching warehouses from Picqer API...');
+      
+      // Get warehouses from Picqer
+      const response = await this.client.get('/warehouses');
+      
+      if (!response.data || !response.data.data) {
+        console.error('Invalid response format from Picqer API');
+        return [];
+      }
+      
+      const warehouses = response.data.data;
+      console.log(`Fetched ${warehouses.length} warehouses from Picqer API`);
+      
+      return warehouses;
+    } catch (error) {
+      console.error('Error fetching warehouses from Picqer:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save a warehouse to the database
+   * @param {Object} warehouse - Warehouse object from Picqer
+   * @returns {Promise<boolean>} - Success status
+   */
+  async saveWarehouse(warehouse) {
+    try {
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for saveWarehouse() in WarehouseService...');
+        this.pool = await this.initializePool();
+      }
+      
+      // Check if warehouse already exists
+      const existingWarehouse = await this.pool.request()
+        .input('warehouseId', sql.VarChar, warehouse.idwarehouse)
+        .query(`
+          SELECT idwarehouse
+          FROM Warehouses
+          WHERE idwarehouse = @warehouseId
+        `);
+      
+      if (existingWarehouse.recordset.length > 0) {
+        // Update existing warehouse
+        await this.pool.request()
+          .input('warehouseId', sql.VarChar, warehouse.idwarehouse)
+          .input('name', sql.NVarChar, warehouse.name || '')
+          .input('updatedAt', sql.DateTimeOffset, new Date())
+          .input('data', sql.NVarChar, JSON.stringify(warehouse))
+          .input('lastSyncDate', sql.DateTimeOffset, new Date())
+          .query(`
+            UPDATE Warehouses
+            SET name = @name,
+                updated = @updatedAt,
+                data = @data,
+                last_sync_date = @lastSyncDate
+            WHERE idwarehouse = @warehouseId
+          `);
+        
+        console.log(`Updated warehouse ${warehouse.idwarehouse} in database`);
+      } else {
+        // Insert new warehouse
+        await this.pool.request()
+          .input('warehouseId', sql.VarChar, warehouse.idwarehouse)
+          .input('name', sql.NVarChar, warehouse.name || '')
+          .input('createdAt', sql.DateTimeOffset, new Date())
+          .input('updatedAt', sql.DateTimeOffset, new Date())
+          .input('data', sql.NVarChar, JSON.stringify(warehouse))
+          .input('lastSyncDate', sql.DateTimeOffset, new Date())
+          .query(`
+            INSERT INTO Warehouses (idwarehouse, name, created, updated, data, last_sync_date)
+            VALUES (@warehouseId, @name, @createdAt, @updatedAt, @data, @lastSyncDate)
+          `);
+        
+        console.log(`Inserted new warehouse ${warehouse.idwarehouse} into database`);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error saving warehouse ${warehouse.idwarehouse}:`, error.message);
+      throw error;
+    }
+  }
 }
 
 module.exports = WarehouseService;
