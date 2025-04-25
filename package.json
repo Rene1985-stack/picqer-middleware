@@ -1,6 +1,3 @@
-/**
- * Package.json for simplified Picqer to SQL DB synchronization
- */
 {
   "name": "picqer-middleware-simplified",
   "version": "2.0.0",
