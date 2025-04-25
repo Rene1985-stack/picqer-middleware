@@ -1,18 +1,14 @@
 /**
- * Robust SQL Parameter Supplier service with comprehensive parameter handling
- * Includes automatic schema management and parameter declaration safety:
- * 1. Automatically creates missing columns when needed
- * 2. Ensures all SQL parameters are properly declared
- * 3. Safely handles null or missing values in API responses
- * 4. Provides detailed error logging for troubleshooting
- * 5. Implements retry mechanisms for API failures
+ * Updated Supplier Service
+ * 
+ * This service handles all supplier-related operations between Picqer and SQL database.
+ * It includes methods for fetching suppliers from Picqer and saving them to the database.
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
 const suppliersSchema = require('./suppliers_schema');
 const syncProgressSchema = require('./sync_progress_schema');
-const SchemaManager = require('./schema_manager');
 
 class SupplierService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -20,7 +16,6 @@ class SupplierService {
     this.baseUrl = baseUrl;
     this.sqlConfig = sqlConfig;
     this.batchSize = 100; // Use larger batch size for better performance
-    this.schemaManager = new SchemaManager(sqlConfig);
     this.pool = null; // Added for connection pool management
     
     // Create Base64 encoded credentials (apiKey + ":")
@@ -216,9 +211,9 @@ class SupplierService {
       // Create Suppliers table
       await this.pool.request().query(suppliersSchema.createSuppliersTableSQL);
       
-      // Create SyncProgress table for resumable sync
+      // Create SyncProgress table for resumable sync if it doesn't exist
       await this.pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
-      console.log('✅ Created SyncProgress table for resumable sync functionality');
+      console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
       
       // Check if SyncStatus table exists
       const tableResult = await this.pool.request().query(`
@@ -280,7 +275,95 @@ class SupplierService {
     }
   }
 
-  // Rest of your SupplierService implementation...
+  /**
+   * Fetch suppliers from Picqer API
+   * @returns {Promise<Array>} - Array of supplier objects
+   */
+  async fetchSuppliers() {
+    try {
+      console.log('Fetching suppliers from Picqer API...');
+      
+      // Get suppliers from Picqer
+      const response = await this.client.get('/suppliers');
+      
+      if (!response.data || !response.data.data) {
+        console.error('Invalid response format from Picqer API');
+        return [];
+      }
+      
+      const suppliers = response.data.data;
+      console.log(`Fetched ${suppliers.length} suppliers from Picqer API`);
+      
+      return suppliers;
+    } catch (error) {
+      console.error('Error fetching suppliers from Picqer:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save a supplier to the database
+   * @param {Object} supplier - Supplier object from Picqer
+   * @returns {Promise<boolean>} - Success status
+   */
+  async saveSupplier(supplier) {
+    try {
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for saveSupplier() in SupplierService...');
+        this.pool = await this.initializePool();
+      }
+      
+      // Check if supplier already exists
+      const existingSupplier = await this.pool.request()
+        .input('supplierId', sql.VarChar, supplier.idsupplier)
+        .query(`
+          SELECT idsupplier
+          FROM Suppliers
+          WHERE idsupplier = @supplierId
+        `);
+      
+      if (existingSupplier.recordset.length > 0) {
+        // Update existing supplier
+        await this.pool.request()
+          .input('supplierId', sql.VarChar, supplier.idsupplier)
+          .input('name', sql.NVarChar, supplier.name || '')
+          .input('updatedAt', sql.DateTimeOffset, new Date())
+          .input('data', sql.NVarChar, JSON.stringify(supplier))
+          .input('lastSyncDate', sql.DateTimeOffset, new Date())
+          .query(`
+            UPDATE Suppliers
+            SET name = @name,
+                updated = @updatedAt,
+                data = @data,
+                last_sync_date = @lastSyncDate
+            WHERE idsupplier = @supplierId
+          `);
+        
+        console.log(`Updated supplier ${supplier.idsupplier} in database`);
+      } else {
+        // Insert new supplier
+        await this.pool.request()
+          .input('supplierId', sql.VarChar, supplier.idsupplier)
+          .input('name', sql.NVarChar, supplier.name || '')
+          .input('createdAt', sql.DateTimeOffset, new Date())
+          .input('updatedAt', sql.DateTimeOffset, new Date())
+          .input('data', sql.NVarChar, JSON.stringify(supplier))
+          .input('lastSyncDate', sql.DateTimeOffset, new Date())
+          .query(`
+            INSERT INTO Suppliers (idsupplier, name, created, updated, data, last_sync_date)
+            VALUES (@supplierId, @name, @createdAt, @updatedAt, @data, @lastSyncDate)
+          `);
+        
+        console.log(`Inserted new supplier ${supplier.idsupplier} into database`);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error saving supplier ${supplier.idsupplier}:`, error.message);
+      throw error;
+    }
+  }
 }
 
 module.exports = SupplierService;
