@@ -1,16 +1,9 @@
 /**
  * Picqer API Client with Rate Limiting
  * 
- * This module enhances the existing API adapter with rate limiting capabilities
- * to prevent "Rate limit exceeded" errors when interacting with the Picqer API.
- * 
- * It wraps the existing API client with a rate limiter that:
- * 1. Queues requests to control the flow
- * 2. Adds configurable delays between requests
- * 3. Implements Picqer's recommended approach for handling rate limits
- * 4. Provides proper error handling and logging
+ * This module provides a client for interacting with the Picqer API
+ * with built-in rate limiting to prevent "Rate limit exceeded" errors.
  */
-
 const axios = require('axios');
 const PicqerRateLimiter = require('./picqer-rate-limiter');
 
@@ -38,14 +31,11 @@ class PicqerApiClient {
     
     // Create rate limiter with custom options or defaults
     this.rateLimiter = new PicqerRateLimiter({
-      requestsPerMinute: options.requestsPerMinute || 30, // Conservative default: 30 requests per minute
+      requestsPerMinute: options.requestsPerMinute || 30,
       maxRetries: options.maxRetries || 5,
       initialBackoffMs: options.initialBackoffMs || 2000,
-      logFunction: options.logFunction || ((msg) => console.log(`[Picqer API] ${msg}`)),
-      errorFunction: options.errorFunction || ((msg) => console.error(`[Picqer API Error] ${msg}`)),
-      // Picqer-style configuration options
       waitOnRateLimit: options.waitOnRateLimit !== undefined ? options.waitOnRateLimit : true,
-      sleepTimeOnRateLimitHitInMs: options.sleepTimeOnRateLimitHitInMs || 20000 // 20 seconds, like Picqer's default
+      sleepTimeOnRateLimitHitInMs: options.sleepTimeOnRateLimitHitInMs || 20000
     });
     
     // Statistics
@@ -171,28 +161,6 @@ class PicqerApiClient {
       // Something happened in setting up the request that triggered an Error
       console.error(`[Picqer API Error] ${method} ${endpoint} failed: ${error.message}`);
     }
-  }
-
-  /**
-   * Enable automatic retry on rate limit hit (Picqer style)
-   */
-  enableRetryOnRateLimitHit() {
-    this.rateLimiter.enableRetryOnRateLimitHit();
-  }
-
-  /**
-   * Disable automatic retry on rate limit hit
-   */
-  disableRetryOnRateLimitHit() {
-    this.rateLimiter.disableRetryOnRateLimitHit();
-  }
-
-  /**
-   * Set the sleep time on rate limit hit
-   * @param {number} ms - Milliseconds to sleep
-   */
-  setSleepTimeOnRateLimitHit(ms) {
-    this.rateLimiter.setSleepTimeOnRateLimitHit(ms);
   }
 
   /**
