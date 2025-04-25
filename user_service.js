@@ -1,42 +1,61 @@
 /**
- * Enhanced User Service with Rate Limiting and Sync Methods
+ * Updated User Service
  * 
- * This service handles user data synchronization between Picqer and the database.
- * It includes:
- * 1. Rate limiting to prevent "Rate limit exceeded" errors
- * 2. Complete sync methods for the dashboard
- * 3. Proper error handling and logging
- * 4. Performance optimizations for efficient data processing
+ * This service handles all user-related operations between Picqer and SQL database.
+ * It includes methods for fetching users from Picqer and saving them to the database.
  */
+const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
 const usersSchema = require('./users_schema');
 const syncProgressSchema = require('./sync_progress_schema');
-const PicqerApiClient = require('./picqer-api-client');
 
 class UserService {
-  /**
-   * Initialize the UserService
-   * @param {string} apiKey - Picqer API key
-   * @param {string} baseUrl - Picqer API base URL
-   * @param {Object} dbConfig - Database configuration
-   */
-  constructor(apiKey, baseUrl, dbConfig) {
+  constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
-    this.dbConfig = dbConfig;
+    this.sqlConfig = sqlConfig;
     this.batchSize = 100; // Use larger batch size for better performance
     this.pool = null; // Added for connection pool management
     
-    // Initialize API client with rate limiting
-    this.apiClient = new PicqerApiClient(apiKey, baseUrl, {
-      requestsPerMinute: 30, // Adjust based on your Picqer plan
-      maxRetries: 5,
-      waitOnRateLimit: true,
-      sleepTimeOnRateLimitHitInMs: 20000 // 20 seconds, like Picqer's default
+    // Create Base64 encoded credentials (apiKey + ":")
+    const credentials = `${this.apiKey}:`;
+    const encodedCredentials = Buffer.from(credentials).toString('base64');
+    
+    // Create client with Basic Authentication header
+    this.client = axios.create({
+      baseURL: baseUrl,
+      headers: {
+        'Authorization': `Basic ${encodedCredentials}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'PicqerMiddleware (middleware@skapa-global.com)'
+      }
     });
     
-    console.log('UserService initialized with rate-limited Picqer API client');
+    // Add request interceptor for debugging
+    this.client.interceptors.request.use(request => {
+      console.log('Making request to:', request.baseURL + request.url);
+      return request;
+    });
+    
+    // Add response interceptor for debugging
+    this.client.interceptors.response.use(
+      response => {
+        console.log('Response status:', response.status);
+        return response;
+      },
+      error => {
+        console.error('Request failed:');
+        if (error.response) {
+          console.error('Response status:', error.response.status);
+        } else if (error.request) {
+          console.error('No response received');
+        } else {
+          console.error('Error message:', error.message);
+        }
+        return Promise.reject(error);
+      }
+    );
   }
 
   /**
@@ -75,7 +94,7 @@ class UserService {
       while (retries > 0) {
         try {
           console.log(`Attempting to initialize database connection pool (${retries} retries left)...`);
-          this.pool = await new sql.ConnectionPool(this.dbConfig).connect();
+          this.pool = await new sql.ConnectionPool(this.sqlConfig).connect();
           console.log('Database connection pool initialized successfully');
           return this.pool;
         } catch (error) {
@@ -192,9 +211,9 @@ class UserService {
       // Create Users table
       await this.pool.request().query(usersSchema.createUsersTableSQL);
       
-      // Create SyncProgress table for resumable sync
+      // Create SyncProgress table for resumable sync if it doesn't exist
       await this.pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
-      console.log('✅ Created SyncProgress table for resumable sync functionality');
+      console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
       
       // Check if SyncStatus table exists
       const tableResult = await this.pool.request().query(`
@@ -256,7 +275,98 @@ class UserService {
     }
   }
 
-  // Rest of your UserService implementation...
+  /**
+   * Fetch users from Picqer API
+   * @returns {Promise<Array>} - Array of user objects
+   */
+  async fetchUsers() {
+    try {
+      console.log('Fetching users from Picqer API...');
+      
+      // Get users from Picqer
+      const response = await this.client.get('/users');
+      
+      if (!response.data || !response.data.data) {
+        console.error('Invalid response format from Picqer API');
+        return [];
+      }
+      
+      const users = response.data.data;
+      console.log(`Fetched ${users.length} users from Picqer API`);
+      
+      return users;
+    } catch (error) {
+      console.error('Error fetching users from Picqer:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save a user to the database
+   * @param {Object} user - User object from Picqer
+   * @returns {Promise<boolean>} - Success status
+   */
+  async saveUser(user) {
+    try {
+      // Ensure pool is initialized
+      if (!this.pool) {
+        console.log('Initializing pool for saveUser() in UserService...');
+        this.pool = await this.initializePool();
+      }
+      
+      // Check if user already exists
+      const existingUser = await this.pool.request()
+        .input('userId', sql.VarChar, user.iduser)
+        .query(`
+          SELECT iduser
+          FROM Users
+          WHERE iduser = @userId
+        `);
+      
+      if (existingUser.recordset.length > 0) {
+        // Update existing user
+        await this.pool.request()
+          .input('userId', sql.VarChar, user.iduser)
+          .input('name', sql.NVarChar, user.name || '')
+          .input('email', sql.NVarChar, user.email || '')
+          .input('updatedAt', sql.DateTimeOffset, new Date())
+          .input('data', sql.NVarChar, JSON.stringify(user))
+          .input('lastSyncDate', sql.DateTimeOffset, new Date())
+          .query(`
+            UPDATE Users
+            SET name = @name,
+                email = @email,
+                updated = @updatedAt,
+                data = @data,
+                last_sync_date = @lastSyncDate
+            WHERE iduser = @userId
+          `);
+        
+        console.log(`Updated user ${user.iduser} in database`);
+      } else {
+        // Insert new user
+        await this.pool.request()
+          .input('userId', sql.VarChar, user.iduser)
+          .input('name', sql.NVarChar, user.name || '')
+          .input('email', sql.NVarChar, user.email || '')
+          .input('createdAt', sql.DateTimeOffset, new Date())
+          .input('updatedAt', sql.DateTimeOffset, new Date())
+          .input('data', sql.NVarChar, JSON.stringify(user))
+          .input('lastSyncDate', sql.DateTimeOffset, new Date())
+          .query(`
+            INSERT INTO Users (iduser, name, email, created, updated, data, last_sync_date)
+            VALUES (@userId, @name, @email, @createdAt, @updatedAt, @data, @lastSyncDate)
+          `);
+        
+        console.log(`Inserted new user ${user.iduser} into database`);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error saving user ${user.iduser}:`, error.message);
+      throw error;
+    }
+  }
 }
 
 module.exports = UserService;
