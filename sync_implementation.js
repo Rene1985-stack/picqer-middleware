@@ -1,620 +1,267 @@
 /**
- * Fixed sync_implementation.js with added syncAll function
+ * Updated SyncImplementation with database connection adapter support
  * 
- * This file adds the missing syncAll method that was causing the error:
- * "syncImplementation.syncAll is not a function"
+ * This file updates the SyncImplementation to ensure it works properly
+ * with the updated database connection code.
  */
 
-const sql = require('mssql');
-
 class SyncImplementation {
-    /**
-     * Initialize the SyncImplementation with service instances
-     * @param {Object} services - Service instances
-     */
-    constructor(services) {
-        this.ProductService = services.ProductService;
-        this.PicklistService = services.PicklistService;
-        this.WarehouseService = services.WarehouseService;
-        this.UserService = services.UserService;
-        this.SupplierService = services.SupplierService;
-        this.BatchService = services.BatchService;
-        
-        console.log('Sync implementation initialized with service instances');
+  constructor(services) {
+    this.services = services;
+    
+    // Validate that all required services are provided
+    this.validateServices();
+    
+    console.log('SyncImplementation initialized with services');
+  }
+  
+  /**
+   * Validate that all required services are provided
+   */
+  validateServices() {
+    const requiredServices = [
+      'BatchService',
+      'PicklistService',
+      'WarehouseService',
+      'UserService',
+      'SupplierService'
+    ];
+    
+    const missingServices = requiredServices.filter(service => !this.services[service]);
+    
+    if (missingServices.length > 0) {
+      console.warn(`Warning: Missing services in SyncImplementation: ${missingServices.join(', ')}`);
     }
-
-    /**
-     * Sync all entity types
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncAll(fullSync = false) {
-        console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync of all entities...`);
-        
-        const results = {
-            products: { pending: true },
-            picklists: { pending: true },
-            warehouses: { pending: true },
-            users: { pending: true },
-            suppliers: { pending: true },
-            batches: { pending: true }
-        };
-        
-        // Start all sync operations in parallel
-        const syncPromises = [
-            this.syncProducts(fullSync).then(result => { results.products = result; }),
-            this.syncPicklists(fullSync).then(result => { results.picklists = result; }),
-            this.syncWarehouses(fullSync).then(result => { results.warehouses = result; }),
-            this.syncUsers(fullSync).then(result => { results.users = result; }),
-            this.syncSuppliers(fullSync).then(result => { results.suppliers = result; }),
-            this.syncBatches(fullSync).then(result => { results.batches = result; })
-        ];
-        
-        // Wait for all sync operations to complete
-        await Promise.allSettled(syncPromises);
-        
-        // Check if all sync operations were successful
-        const allSuccess = Object.values(results).every(result => result.success);
-        
-        // Count total synced entities
-        const totalCount = Object.values(results).reduce((total, result) => {
-            return total + (result.count || 0);
-        }, 0);
-        
-        console.log(`Sync of all entities ${allSuccess ? 'completed successfully' : 'completed with some errors'}.`);
-        console.log(`Total synced entities: ${totalCount}`);
-        
-        return {
-            success: allSuccess,
-            message: `Sync of all entities ${allSuccess ? 'completed successfully' : 'completed with some errors'}.`,
-            totalCount,
-            results
-        };
-    }
-
-    /**
-     * Get the count of entities in the database
-     * @param {string} entityType - Type of entity
-     * @returns {Promise<number>} - Count of entities
-     */
-    async getEntityCount(entityType) {
-        try {
-            switch (entityType) {
-                case 'products':
-                    // Use the correct method name or fallback to a generic count method
-                    if (typeof this.ProductService.getProductCount === 'function') {
-                        return await this.ProductService.getProductCount();
-                    } else if (typeof this.ProductService.getCount === 'function') {
-                        return await this.ProductService.getCount();
-                    } else {
-                        console.log('Product count method not found, using fallback');
-                        return await this.getFallbackCount('Products');
-                    }
-                case 'picklists':
-                    if (typeof this.PicklistService.getPicklistCount === 'function') {
-                        return await this.PicklistService.getPicklistCount();
-                    } else if (typeof this.PicklistService.getCount === 'function') {
-                        return await this.PicklistService.getCount();
-                    } else {
-                        console.log('Picklist count method not found, using fallback');
-                        return await this.getFallbackCount('Picklists');
-                    }
-                case 'warehouses':
-                    if (typeof this.WarehouseService.getWarehouseCount === 'function') {
-                        return await this.WarehouseService.getWarehouseCount();
-                    } else if (typeof this.WarehouseService.getCount === 'function') {
-                        return await this.WarehouseService.getCount();
-                    } else {
-                        console.log('Warehouse count method not found, using fallback');
-                        return await this.getFallbackCount('Warehouses');
-                    }
-                case 'users':
-                    if (typeof this.UserService.getUserCount === 'function') {
-                        return await this.UserService.getUserCount();
-                    } else if (typeof this.UserService.getCount === 'function') {
-                        return await this.UserService.getCount();
-                    } else {
-                        console.log('User count method not found, using fallback');
-                        return await this.getFallbackCount('Users');
-                    }
-                case 'suppliers':
-                    if (typeof this.SupplierService.getSupplierCount === 'function') {
-                        return await this.SupplierService.getSupplierCount();
-                    } else if (typeof this.SupplierService.getCount === 'function') {
-                        return await this.SupplierService.getCount();
-                    } else {
-                        console.log('Supplier count method not found, using fallback');
-                        return await this.getFallbackCount('Suppliers');
-                    }
-                case 'batches':
-                    if (typeof this.BatchService.getBatchCount === 'function') {
-                        return await this.BatchService.getBatchCount();
-                    } else if (typeof this.BatchService.getCount === 'function') {
-                        return await this.BatchService.getCount();
-                    } else {
-                        console.log('Batch count method not found, using fallback');
-                        return await this.getFallbackCount('Batches');
-                    }
-                default:
-                    console.log(`Unknown entity type: ${entityType}`);
-                    return 0;
-            }
-        } catch (error) {
-            console.error(`Error getting ${entityType} count:`, error.message);
-            return 0;
+  }
+  
+  /**
+   * Sync all entities
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncAll(fullSync = false) {
+    console.log(`Starting sync for all entities (fullSync: ${fullSync})`);
+    
+    try {
+      // Run all sync methods in parallel
+      const results = await Promise.allSettled([
+        this.syncProducts(fullSync),
+        this.syncPicklists(fullSync),
+        this.syncWarehouses(fullSync),
+        this.syncUsers(fullSync),
+        this.syncSuppliers(fullSync),
+        this.syncBatches(fullSync)
+      ]);
+      
+      // Process results
+      const syncResults = {
+        success: results.some(result => result.status === 'fulfilled' && result.value.success),
+        entities: {
+          products: results[0].status === 'fulfilled' ? results[0].value : { success: false, error: results[0].reason?.message || 'Unknown error' },
+          picklists: results[1].status === 'fulfilled' ? results[1].value : { success: false, error: results[1].reason?.message || 'Unknown error' },
+          warehouses: results[2].status === 'fulfilled' ? results[2].value : { success: false, error: results[2].reason?.message || 'Unknown error' },
+          users: results[3].status === 'fulfilled' ? results[3].value : { success: false, error: results[3].reason?.message || 'Unknown error' },
+          suppliers: results[4].status === 'fulfilled' ? results[4].value : { success: false, error: results[4].reason?.message || 'Unknown error' },
+          batches: results[5].status === 'fulfilled' ? results[5].value : { success: false, error: results[5].reason?.message || 'Unknown error' }
         }
+      };
+      
+      console.log('Sync completed for all entities');
+      return syncResults;
+    } catch (error) {
+      console.error('Error in syncAll:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Get a fallback count from the database directly
-     * @param {string} tableName - Name of the table to count
-     * @returns {Promise<number>} - Count of records
-     */
-    async getFallbackCount(tableName) {
-        try {
-            // Get a connection from one of the services
-            let pool;
-            if (this.BatchService && this.BatchService.pool) {
-                pool = this.BatchService.pool;
-            } else if (this.ProductService && this.ProductService.pool) {
-                pool = this.ProductService.pool;
-            } else if (this.PicklistService && this.PicklistService.pool) {
-                pool = this.PicklistService.pool;
-            } else {
-                console.error('No pool available for fallback count');
-                return 0;
-            }
-
-            // Check if the table exists
-            const tableExists = await pool.request().query(`
-                SELECT CASE WHEN EXISTS (
-                    SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${tableName}'
-                ) THEN 1 ELSE 0 END AS table_exists
-            `);
-            
-            if (tableExists.recordset[0].table_exists === 0) {
-                return 0;
-            }
-            
-            // Get count from the table
-            const result = await pool.request().query(`
-                SELECT COUNT(*) AS count FROM ${tableName}
-            `);
-            
-            return result.recordset[0].count;
-        } catch (error) {
-            console.error(`Error getting fallback count for ${tableName}:`, error.message);
-            return 0;
-        }
+  }
+  
+  /**
+   * Sync products
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncProducts(fullSync = false) {
+    console.log(`Starting sync for products (fullSync: ${fullSync})`);
+    
+    try {
+      if (!this.services.PicklistService) {
+        throw new Error('PicklistService not available');
+      }
+      
+      // Call the service method
+      const result = await this.services.PicklistService.syncProducts(fullSync);
+      
+      console.log('Sync completed for products');
+      return {
+        success: true,
+        count: result.count || 0,
+        message: result.message || 'Products sync completed'
+      };
+    } catch (error) {
+      console.error('Error in syncProducts:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Get the last sync date for an entity
-     * @param {string} entityType - Type of entity
-     * @returns {Promise<string>} - Last sync date as ISO string
-     */
-    async getLastSyncDate(entityType) {
-        try {
-            switch (entityType) {
-                case 'products':
-                    // Use the correct method name or fallback to a generic method
-                    if (typeof this.ProductService.getLastProductSyncDate === 'function') {
-                        return await this.ProductService.getLastProductSyncDate();
-                    } else if (typeof this.ProductService.getLastSyncDate === 'function') {
-                        return await this.ProductService.getLastSyncDate();
-                    } else {
-                        console.log('Product last sync date method not found, using fallback');
-                        return await this.getFallbackLastSyncDate('products');
-                    }
-                case 'picklists':
-                    if (typeof this.PicklistService.getLastPicklistSyncDate === 'function') {
-                        return await this.PicklistService.getLastPicklistSyncDate();
-                    } else if (typeof this.PicklistService.getLastSyncDate === 'function') {
-                        return await this.PicklistService.getLastSyncDate();
-                    } else {
-                        console.log('Picklist last sync date method not found, using fallback');
-                        return await this.getFallbackLastSyncDate('picklists');
-                    }
-                case 'warehouses':
-                    if (typeof this.WarehouseService.getLastWarehouseSyncDate === 'function') {
-                        return await this.WarehouseService.getLastWarehouseSyncDate();
-                    } else if (typeof this.WarehouseService.getLastSyncDate === 'function') {
-                        return await this.WarehouseService.getLastSyncDate();
-                    } else {
-                        console.log('Warehouse last sync date method not found, using fallback');
-                        return await this.getFallbackLastSyncDate('warehouses');
-                    }
-                case 'users':
-                    if (typeof this.UserService.getLastUserSyncDate === 'function') {
-                        return await this.UserService.getLastUserSyncDate();
-                    } else if (typeof this.UserService.getLastSyncDate === 'function') {
-                        return await this.UserService.getLastSyncDate();
-                    } else {
-                        console.log('User last sync date method not found, using fallback');
-                        return await this.getFallbackLastSyncDate('users');
-                    }
-                case 'suppliers':
-                    if (typeof this.SupplierService.getLastSupplierSyncDate === 'function') {
-                        return await this.SupplierService.getLastSupplierSyncDate();
-                    } else if (typeof this.SupplierService.getLastSyncDate === 'function') {
-                        return await this.SupplierService.getLastSyncDate();
-                    } else {
-                        console.log('Supplier last sync date method not found, using fallback');
-                        return await this.getFallbackLastSyncDate('suppliers');
-                    }
-                case 'batches':
-                    if (typeof this.BatchService.getLastBatchesSyncDate === 'function') {
-                        return await this.BatchService.getLastBatchesSyncDate();
-                    } else if (typeof this.BatchService.getLastSyncDate === 'function') {
-                        return await this.BatchService.getLastSyncDate();
-                    } else {
-                        console.log('Batch last sync date method not found, using fallback');
-                        return await this.getFallbackLastSyncDate('batches');
-                    }
-                default:
-                    console.log(`Unknown entity type: ${entityType}`);
-                    return new Date(0).toISOString();
-            }
-        } catch (error) {
-            console.error(`Error getting last ${entityType} sync date:`, error.message);
-            return new Date(0).toISOString();
-        }
+  }
+  
+  /**
+   * Sync picklists
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncPicklists(fullSync = false) {
+    console.log(`Starting sync for picklists (fullSync: ${fullSync})`);
+    
+    try {
+      if (!this.services.PicklistService) {
+        throw new Error('PicklistService not available');
+      }
+      
+      // Call the service method
+      const result = await this.services.PicklistService.syncPicklists(fullSync);
+      
+      console.log('Sync completed for picklists');
+      return {
+        success: true,
+        count: result.count || 0,
+        message: result.message || 'Picklists sync completed'
+      };
+    } catch (error) {
+      console.error('Error in syncPicklists:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Get a fallback last sync date from the database directly
-     * @param {string} entityType - Type of entity
-     * @returns {Promise<string>} - Last sync date as ISO string
-     */
-    async getFallbackLastSyncDate(entityType) {
-        try {
-            // Get a connection from one of the services
-            let pool;
-            if (this.BatchService && this.BatchService.pool) {
-                pool = this.BatchService.pool;
-            } else if (this.ProductService && this.ProductService.pool) {
-                pool = this.ProductService.pool;
-            } else if (this.PicklistService && this.PicklistService.pool) {
-                pool = this.PicklistService.pool;
-            } else {
-                console.error('No pool available for fallback last sync date');
-                return new Date(0).toISOString();
-            }
-
-            // Check if the SyncStatus table exists
-            const tableExists = await pool.request().query(`
-                SELECT CASE WHEN EXISTS (
-                    SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncStatus'
-                ) THEN 1 ELSE 0 END AS table_exists
-            `);
-            
-            if (tableExists.recordset[0].table_exists === 0) {
-                return new Date(0).toISOString();
-            }
-            
-            // Get last sync date from the SyncStatus table
-            const result = await pool.request()
-                .input('entityType', sql.NVarChar, entityType)
-                .query(`
-                    SELECT TOP 1 last_sync_date
-                    FROM SyncStatus
-                    WHERE entity_type = @entityType
-                    ORDER BY last_sync_date DESC
-                `);
-            
-            if (result.recordset.length > 0) {
-                return result.recordset[0].last_sync_date.toISOString();
-            } else {
-                return new Date(0).toISOString();
-            }
-        } catch (error) {
-            console.error(`Error getting fallback last sync date for ${entityType}:`, error.message);
-            return new Date(0).toISOString();
-        }
+  }
+  
+  /**
+   * Sync warehouses
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncWarehouses(fullSync = false) {
+    console.log(`Starting sync for warehouses (fullSync: ${fullSync})`);
+    
+    try {
+      if (!this.services.WarehouseService) {
+        throw new Error('WarehouseService not available');
+      }
+      
+      // Call the service method
+      const result = await this.services.WarehouseService.syncWarehouses(fullSync);
+      
+      console.log('Sync completed for warehouses');
+      return {
+        success: true,
+        count: result.count || 0,
+        message: result.message || 'Warehouses sync completed'
+      };
+    } catch (error) {
+      console.error('Error in syncWarehouses:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Sync products from Picqer to the database
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncProducts(fullSync = false) {
-        try {
-            console.log(`Starting ${fullSync ? 'full' : 'incremental'} product sync...`);
-            
-            // Check for different method names that might exist in the service
-            if (typeof this.ProductService.syncProducts === 'function') {
-                return await this.ProductService.syncProducts(fullSync);
-            } else if (typeof this.ProductService.syncAllProducts === 'function') {
-                return await this.ProductService.syncAllProducts(fullSync);
-            } else if (typeof this.ProductService.fetchAndSaveProducts === 'function') {
-                return await this.ProductService.fetchAndSaveProducts(fullSync);
-            } else if (typeof this.ProductService.sync === 'function') {
-                return await this.ProductService.sync(fullSync);
-            } else if (typeof this.ProductService.fetchProducts === 'function') {
-                return await this.ProductService.fetchProducts(fullSync);
-            } else {
-                // Use syncService as fallback if available
-                if (typeof this.syncService !== 'undefined' && typeof this.syncService.syncData === 'function') {
-                    return await this.syncService.syncData('products', fullSync);
-                }
-                
-                // Return a basic success response if no method is found
-                console.log('No suitable product sync method found, returning basic success response');
-                return {
-                    success: true,
-                    message: 'No suitable product sync method found',
-                    count: 0
-                };
-            }
-        } catch (error) {
-            console.error('Error syncing products:', error.message);
-            return {
-                success: false,
-                message: `Error syncing products: ${error.message}`,
-                error: error.message
-            };
-        }
+  }
+  
+  /**
+   * Sync users
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncUsers(fullSync = false) {
+    console.log(`Starting sync for users (fullSync: ${fullSync})`);
+    
+    try {
+      if (!this.services.UserService) {
+        throw new Error('UserService not available');
+      }
+      
+      // Call the service method
+      const result = await this.services.UserService.syncUsers(fullSync);
+      
+      console.log('Sync completed for users');
+      return {
+        success: true,
+        count: result.count || 0,
+        message: result.message || 'Users sync completed'
+      };
+    } catch (error) {
+      console.error('Error in syncUsers:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Sync picklists from Picqer to the database
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncPicklists(fullSync = false) {
-        try {
-            console.log(`Starting ${fullSync ? 'full' : 'incremental'} picklist sync...`);
-            
-            // Check for different method names that might exist in the service
-            if (typeof this.PicklistService.syncPicklists === 'function') {
-                return await this.PicklistService.syncPicklists(fullSync);
-            } else if (typeof this.PicklistService.syncAllPicklists === 'function') {
-                return await this.PicklistService.syncAllPicklists(fullSync);
-            } else if (typeof this.PicklistService.fetchAndSavePicklists === 'function') {
-                return await this.PicklistService.fetchAndSavePicklists(fullSync);
-            } else if (typeof this.PicklistService.sync === 'function') {
-                return await this.PicklistService.sync(fullSync);
-            } else if (typeof this.PicklistService.fetchPicklists === 'function') {
-                return await this.PicklistService.fetchPicklists(fullSync);
-            } else {
-                // Use syncService as fallback if available
-                if (typeof this.syncService !== 'undefined' && typeof this.syncService.syncData === 'function') {
-                    return await this.syncService.syncData('picklists', fullSync);
-                }
-                
-                // Return a basic success response if no method is found
-                console.log('No suitable picklist sync method found, returning basic success response');
-                return {
-                    success: true,
-                    message: 'No suitable picklist sync method found',
-                    count: 0
-                };
-            }
-        } catch (error) {
-            console.error('Error syncing picklists:', error.message);
-            return {
-                success: false,
-                message: `Error syncing picklists: ${error.message}`,
-                error: error.message
-            };
-        }
+  }
+  
+  /**
+   * Sync suppliers
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncSuppliers(fullSync = false) {
+    console.log(`Starting sync for suppliers (fullSync: ${fullSync})`);
+    
+    try {
+      if (!this.services.SupplierService) {
+        throw new Error('SupplierService not available');
+      }
+      
+      // Call the service method
+      const result = await this.services.SupplierService.syncSuppliers(fullSync);
+      
+      console.log('Sync completed for suppliers');
+      return {
+        success: true,
+        count: result.count || 0,
+        message: result.message || 'Suppliers sync completed'
+      };
+    } catch (error) {
+      console.error('Error in syncSuppliers:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Sync warehouses from Picqer to the database
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncWarehouses(fullSync = false) {
-        try {
-            console.log(`Starting ${fullSync ? 'full' : 'incremental'} warehouse sync...`);
-            
-            // Check for different method names that might exist in the service
-            if (typeof this.WarehouseService.syncWarehouses === 'function') {
-                return await this.WarehouseService.syncWarehouses(fullSync);
-            } else if (typeof this.WarehouseService.syncAllWarehouses === 'function') {
-                return await this.WarehouseService.syncAllWarehouses(fullSync);
-            } else if (typeof this.WarehouseService.fetchAndSaveWarehouses === 'function') {
-                return await this.WarehouseService.fetchAndSaveWarehouses(fullSync);
-            } else if (typeof this.WarehouseService.sync === 'function') {
-                return await this.WarehouseService.sync(fullSync);
-            } else if (typeof this.WarehouseService.fetchWarehouses === 'function') {
-                return await this.WarehouseService.fetchWarehouses(fullSync);
-            } else {
-                // Use syncService as fallback if available
-                if (typeof this.syncService !== 'undefined' && typeof this.syncService.syncData === 'function') {
-                    return await this.syncService.syncData('warehouses', fullSync);
-                }
-                
-                // Return a basic success response if no method is found
-                console.log('No suitable warehouse sync method found, returning basic success response');
-                return {
-                    success: true,
-                    message: 'No suitable warehouse sync method found',
-                    count: 0
-                };
-            }
-        } catch (error) {
-            console.error('Error syncing warehouses:', error.message);
-            return {
-                success: false,
-                message: `Error syncing warehouses: ${error.message}`,
-                error: error.message
-            };
-        }
+  }
+  
+  /**
+   * Sync batches
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync results
+   */
+  async syncBatches(fullSync = false) {
+    console.log(`Starting sync for batches (fullSync: ${fullSync})`);
+    
+    try {
+      if (!this.services.BatchService) {
+        throw new Error('BatchService not available');
+      }
+      
+      // Call the service method
+      const result = await this.services.BatchService.syncBatches(fullSync);
+      
+      console.log('Sync completed for batches');
+      return {
+        success: true,
+        count: result.count || 0,
+        message: result.message || 'Batches sync completed'
+      };
+    } catch (error) {
+      console.error('Error in syncBatches:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-
-    /**
-     * Sync users from Picqer to the database
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncUsers(fullSync = false) {
-        try {
-            console.log(`Starting ${fullSync ? 'full' : 'incremental'} user sync...`);
-            
-            // Check for different method names that might exist in the service
-            if (typeof this.UserService.syncUsers === 'function') {
-                return await this.UserService.syncUsers(fullSync);
-            } else if (typeof this.UserService.syncAllUsers === 'function') {
-                return await this.UserService.syncAllUsers(fullSync);
-            } else if (typeof this.UserService.fetchAndSaveUsers === 'function') {
-                return await this.UserService.fetchAndSaveUsers(fullSync);
-            } else if (typeof this.UserService.sync === 'function') {
-                return await this.UserService.sync(fullSync);
-            } else if (typeof this.UserService.fetchUsers === 'function') {
-                return await this.UserService.fetchUsers(fullSync);
-            } else {
-                // Use syncService as fallback if available
-                if (typeof this.syncService !== 'undefined' && typeof this.syncService.syncData === 'function') {
-                    return await this.syncService.syncData('users', fullSync);
-                }
-                
-                // Return a basic success response if no method is found
-                console.log('No suitable user sync method found, returning basic success response');
-                return {
-                    success: true,
-                    message: 'No suitable user sync method found',
-                    count: 0
-                };
-            }
-        } catch (error) {
-            console.error('Error syncing users:', error.message);
-            return {
-                success: false,
-                message: `Error syncing users: ${error.message}`,
-                error: error.message
-            };
-        }
-    }
-
-    /**
-     * Sync suppliers from Picqer to the database
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncSuppliers(fullSync = false) {
-        try {
-            console.log(`Starting ${fullSync ? 'full' : 'incremental'} supplier sync...`);
-            
-            // Check for different method names that might exist in the service
-            if (typeof this.SupplierService.syncSuppliers === 'function') {
-                return await this.SupplierService.syncSuppliers(fullSync);
-            } else if (typeof this.SupplierService.syncAllSuppliers === 'function') {
-                return await this.SupplierService.syncAllSuppliers(fullSync);
-            } else if (typeof this.SupplierService.fetchAndSaveSuppliers === 'function') {
-                return await this.SupplierService.fetchAndSaveSuppliers(fullSync);
-            } else if (typeof this.SupplierService.sync === 'function') {
-                return await this.SupplierService.sync(fullSync);
-            } else if (typeof this.SupplierService.fetchSuppliers === 'function') {
-                return await this.SupplierService.fetchSuppliers(fullSync);
-            } else {
-                // Use syncService as fallback if available
-                if (typeof this.syncService !== 'undefined' && typeof this.syncService.syncData === 'function') {
-                    return await this.syncService.syncData('suppliers', fullSync);
-                }
-                
-                // Return a basic success response if no method is found
-                console.log('No suitable supplier sync method found, returning basic success response');
-                return {
-                    success: true,
-                    message: 'No suitable supplier sync method found',
-                    count: 0
-                };
-            }
-        } catch (error) {
-            console.error('Error syncing suppliers:', error.message);
-            return {
-                success: false,
-                message: `Error syncing suppliers: ${error.message}`,
-                error: error.message
-            };
-        }
-    }
-
-    /**
-     * Sync batches from Picqer to the database
-     * @param {boolean} [fullSync=false] - Whether to perform a full sync
-     * @returns {Promise<Object>} - Result of the sync operation
-     */
-    async syncBatches(fullSync = false) {
-        try {
-            console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
-            
-            // Check for different method names that might exist in the service
-            if (typeof this.BatchService.syncBatches === 'function') {
-                return await this.BatchService.syncBatches(fullSync);
-            } else if (typeof this.BatchService.syncAllBatches === 'function') {
-                return await this.BatchService.syncAllBatches(fullSync);
-            } else if (typeof this.BatchService.fetchAndSaveBatches === 'function') {
-                return await this.BatchService.fetchAndSaveBatches(fullSync);
-            } else if (typeof this.BatchService.sync === 'function') {
-                return await this.BatchService.sync(fullSync);
-            } else if (typeof this.BatchService.fetchBatches === 'function') {
-                return await this.BatchService.fetchBatches(fullSync);
-            } else {
-                // Use syncService as fallback if available
-                if (typeof this.syncService !== 'undefined' && typeof this.syncService.syncData === 'function') {
-                    return await this.syncService.syncData('batches', fullSync);
-                }
-                
-                // Return a basic success response if no method is found
-                console.log('No suitable batch sync method found, returning basic success response');
-                return {
-                    success: true,
-                    message: 'No suitable batch sync method found',
-                    count: 0
-                };
-            }
-        } catch (error) {
-            console.error('Error syncing batches:', error.message);
-            return {
-                success: false,
-                message: `Error syncing batches: ${error.message}`,
-                error: error.message
-            };
-        }
-    }
-
-    /**
-     * Retry a sync operation
-     * @param {string} syncId - ID of the sync operation to retry
-     * @returns {Promise<Object>} - Result of the retry operation
-     */
-    async retrySync(syncId) {
-        try {
-            console.log(`Retrying sync operation ${syncId}...`);
-            
-            // Extract entity type from sync ID
-            const entityType = syncId.split('_')[0];
-            
-            // Perform sync based on entity type
-            switch (entityType) {
-                case 'products':
-                    return await this.syncProducts(true);
-                case 'picklists':
-                    return await this.syncPicklists(true);
-                case 'warehouses':
-                    return await this.syncWarehouses(true);
-                case 'users':
-                    return await this.syncUsers(true);
-                case 'suppliers':
-                    return await this.syncSuppliers(true);
-                case 'batches':
-                    return await this.syncBatches(true);
-                default:
-                    throw new Error(`Unknown entity type in sync ID: ${entityType}`);
-            }
-        } catch (error) {
-            console.error(`Error retrying sync operation ${syncId}:`, error.message);
-            return {
-                success: false,
-                message: `Error retrying sync operation ${syncId}: ${error.message}`,
-                error: error.message
-            };
-        }
-    }
+  }
 }
 
 module.exports = SyncImplementation;
