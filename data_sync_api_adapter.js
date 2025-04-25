@@ -1,41 +1,31 @@
 /**
- * Updated Data Sync API Adapter
+ * Fixed Data Sync API Adapter
  * 
  * This adapter connects the dashboard to the actual sync implementation,
  * ensuring that when sync buttons are clicked, real data is synced from
- * Picqer to the database. Now includes BatchService integration.
+ * Picqer to the database.
  * 
- * UPDATED: Removed batch-specific metrics endpoints that were causing an endless loop.
+ * FIXED:
+ * 1. Properly initializes with the provided syncImplementation instance
+ * 2. Handles service naming consistency (ProductService vs PicklistService)
+ * 3. Removed batch-specific metrics endpoints that were causing issues
  */
 
 const express = require('express');
 const router = express.Router();
-const SyncImplementation = require('./sync_implementation');
 
 // Store service instances and sync implementation
-let ProductService, PicklistService, WarehouseService, UserService, SupplierService, BatchService;
+let services = {};
 let syncImplementation;
 
 // Initialize services with dependency injection
-function initializeServices(services) {
-  ProductService = services.ProductService;
-  PicklistService = services.PicklistService;
-  WarehouseService = services.WarehouseService;
-  UserService = services.UserService;
-  SupplierService = services.SupplierService;
-  BatchService = services.BatchService;
+function initializeServices(serviceInstances, syncImpl) {
+  services = serviceInstances || {};
   
-  // Initialize sync implementation with services
-  syncImplementation = new SyncImplementation({
-    ProductService,
-    PicklistService,
-    WarehouseService,
-    UserService,
-    SupplierService,
-    BatchService
-  });
+  // Store the provided syncImplementation instance
+  syncImplementation = syncImpl;
   
-  console.log('API adapter initialized with service instances and sync implementation');
+  console.log('Data Sync API adapter initialized with services and sync implementation');
 }
 
 // Helper function to safely call a method if it exists
@@ -72,41 +62,46 @@ router.get('/status', async (req, res) => {
 // Stats endpoint - maps /api/stats to fetch real stats from services
 router.get('/stats', async (req, res) => {
   try {
+    // Check if syncImplementation is available
+    if (!syncImplementation) {
+      throw new Error('Sync implementation not initialized');
+    }
+    
     // Get real stats from services with fallbacks for missing methods
     const stats = {
       products: {
-        totalCount: await syncImplementation.getEntityCount('products'),
-        lastSyncDate: await syncImplementation.getLastSyncDate('products'),
+        totalCount: await safeMethodCall(syncImplementation, 'getEntityCount', 0, 'products'),
+        lastSyncDate: await safeMethodCall(syncImplementation, 'getLastSyncDate', new Date().toISOString(), 'products'),
         status: 'Ready',
         lastSyncCount: 0
       },
       picklists: {
-        totalCount: await syncImplementation.getEntityCount('picklists'),
-        lastSyncDate: await syncImplementation.getLastSyncDate('picklists'),
+        totalCount: await safeMethodCall(syncImplementation, 'getEntityCount', 0, 'picklists'),
+        lastSyncDate: await safeMethodCall(syncImplementation, 'getLastSyncDate', new Date().toISOString(), 'picklists'),
         status: 'Ready',
         lastSyncCount: 0
       },
       warehouses: {
-        totalCount: await syncImplementation.getEntityCount('warehouses'),
-        lastSyncDate: await syncImplementation.getLastSyncDate('warehouses'),
+        totalCount: await safeMethodCall(syncImplementation, 'getEntityCount', 0, 'warehouses'),
+        lastSyncDate: await safeMethodCall(syncImplementation, 'getLastSyncDate', new Date().toISOString(), 'warehouses'),
         status: 'Ready',
         lastSyncCount: 0
       },
       users: {
-        totalCount: await syncImplementation.getEntityCount('users'),
-        lastSyncDate: await syncImplementation.getLastSyncDate('users'),
+        totalCount: await safeMethodCall(syncImplementation, 'getEntityCount', 0, 'users'),
+        lastSyncDate: await safeMethodCall(syncImplementation, 'getLastSyncDate', new Date().toISOString(), 'users'),
         status: 'Ready',
         lastSyncCount: 0
       },
       suppliers: {
-        totalCount: await syncImplementation.getEntityCount('suppliers'),
-        lastSyncDate: await syncImplementation.getLastSyncDate('suppliers'),
+        totalCount: await safeMethodCall(syncImplementation, 'getEntityCount', 0, 'suppliers'),
+        lastSyncDate: await safeMethodCall(syncImplementation, 'getLastSyncDate', new Date().toISOString(), 'suppliers'),
         status: 'Ready',
         lastSyncCount: 0
       },
       batches: {
-        totalCount: await safeMethodCall(BatchService, 'getCount', 0),
-        lastSyncDate: await safeMethodCall(BatchService, 'getLastSyncDate', new Date().toISOString()),
+        totalCount: await safeMethodCall(syncImplementation, 'getEntityCount', 0, 'batches'),
+        lastSyncDate: await safeMethodCall(syncImplementation, 'getLastSyncDate', new Date().toISOString(), 'batches'),
         status: 'Ready',
         lastSyncCount: 0
       }
@@ -302,41 +297,22 @@ router.post('/sync', async (req, res) => {
   try {
     console.log('Sync request received - triggering actual sync for all entities');
     
+    // Check if syncImplementation is available
+    if (!syncImplementation) {
+      throw new Error('Sync implementation not initialized');
+    }
+    
     // Determine if this is a full sync
     const fullSync = req.query.full === 'true';
     
-    // Start sync processes in background with actual sync implementation
-    if (fullSync) {
-      // Full sync for all entities
-      console.log('Starting full sync for all entities');
-      
-      // Use Promise.all to run syncs in parallel
-      Promise.all([
-        syncImplementation.syncProducts(true),
-        syncImplementation.syncPicklists(true),
-        syncImplementation.syncWarehouses(true),
-        syncImplementation.syncUsers(true),
-        syncImplementation.syncSuppliers(true),
-        safeMethodCall(BatchService, 'syncBatches', { success: false, error: 'Method not available' }, true)
-      ]).catch(error => {
-        console.error('Error in full sync:', error.message);
+    // Start sync process in background
+    console.log(`Starting ${fullSync ? 'full' : 'incremental'} sync for all entities`);
+    
+    // Use the syncAll method of the syncImplementation
+    syncImplementation.syncAll(fullSync)
+      .catch(error => {
+        console.error('Error in sync all:', error.message);
       });
-    } else {
-      // Incremental sync for all entities
-      console.log('Starting incremental sync for all entities');
-      
-      // Use Promise.all to run syncs in parallel
-      Promise.all([
-        syncImplementation.syncProducts(false),
-        syncImplementation.syncPicklists(false),
-        syncImplementation.syncWarehouses(false),
-        syncImplementation.syncUsers(false),
-        syncImplementation.syncSuppliers(false),
-        safeMethodCall(BatchService, 'syncBatches', { success: false, error: 'Method not available' }, false)
-      ]).catch(error => {
-        console.error('Error in incremental sync:', error.message);
-      });
-    }
     
     // Return success immediately since sync is running in background
     res.json({
@@ -358,6 +334,11 @@ router.post('/sync/:entity', async (req, res) => {
   try {
     const entity = req.params.entity;
     console.log(`${entity} sync request received - triggering actual sync`);
+    
+    // Check if syncImplementation is available
+    if (!syncImplementation) {
+      throw new Error('Sync implementation not initialized');
+    }
     
     // Determine if this is a full sync
     const fullSync = req.query.full === 'true';
@@ -382,7 +363,7 @@ router.post('/sync/:entity', async (req, res) => {
         syncPromise = syncImplementation.syncSuppliers(fullSync);
         break;
       case 'batches':
-        syncPromise = safeMethodCall(BatchService, 'syncBatches', { success: false, error: 'Method not available' }, fullSync);
+        syncPromise = syncImplementation.syncBatches(fullSync);
         break;
       default:
         return res.status(400).json({ 
@@ -416,6 +397,11 @@ router.post('/sync/retry/:syncId', async (req, res) => {
   try {
     const syncId = req.params.syncId;
     console.log(`Retry sync request received for ${syncId}`);
+    
+    // Check if syncImplementation is available
+    if (!syncImplementation) {
+      throw new Error('Sync implementation not initialized');
+    }
     
     // Use sync implementation to retry the sync
     const retryPromise = syncImplementation.retrySync(syncId);
@@ -480,34 +466,16 @@ router.post('/email', async (req, res) => {
 router.get('/test', async (req, res) => {
   try {
     // Check if services are initialized
-    const servicesInitialized = ProductService && PicklistService && 
-                               WarehouseService && UserService && 
-                               SupplierService && BatchService;
+    const servicesInitialized = Object.keys(services).length > 0;
     
     // Check if sync implementation is initialized
     const syncImplementationInitialized = !!syncImplementation;
-    
-    // Test Picqer API connection if services are initialized
-    let picqerConnection = false;
-    if (servicesInitialized) {
-      try {
-        if (typeof ProductService.testConnection === 'function') {
-          await ProductService.testConnection();
-          picqerConnection = true;
-        } else {
-          console.log('testConnection method not found in ProductService');
-        }
-      } catch (connectionError) {
-        console.error('Picqer API connection test failed:', connectionError.message);
-      }
-    }
     
     res.json({ 
       success: true, 
       message: 'API adapter is working correctly', 
       servicesInitialized,
       syncImplementationInitialized,
-      picqerConnection,
       timestamp: new Date().toISOString() 
     });
   } catch (error) {
@@ -518,21 +486,6 @@ router.get('/test', async (req, res) => {
     });
   }
 });
-
-// REMOVED: Batch metrics endpoint - was causing endless loop
-// router.get('/batches/metrics', async (req, res) => {
-//   // This endpoint was removed to prevent the middleware from getting stuck in an endless loop
-// });
-
-// REMOVED: Batch productivity endpoint - was causing endless loop
-// router.get('/batches/productivity', async (req, res) => {
-//   // This endpoint was removed to prevent the middleware from getting stuck in an endless loop
-// });
-
-// REMOVED: Batch stats endpoint - was causing endless loop
-// router.get('/batches/stats', async (req, res) => {
-//   // This endpoint was removed to prevent the middleware from getting stuck in an endless loop
-// });
 
 module.exports = {
   router,
