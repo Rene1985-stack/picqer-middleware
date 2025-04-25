@@ -1,11 +1,10 @@
 /**
- * Generic Entity Service
+ * Generic Entity Service (No Data Column Version)
  * 
- * A unified service for handling all entity types between Picqer and SQL database.
- * This replaces the need for separate service files for each entity type.
+ * A simplified service for handling all entity types between Picqer and SQL database.
+ * This version does NOT use the 'data' column and works with existing database schema.
  */
 const sql = require('mssql');
-const { v4: uuidv4 } = require('uuid');
 
 class GenericEntityService {
   /**
@@ -103,35 +102,32 @@ class GenericEntityService {
         `);
       
       if (existingEntity.recordset.length > 0) {
-        // Update existing entity
+        // Update existing entity - WITHOUT using data column
         await pool.request()
           .input('entityId', sql.VarChar, entityId)
           .input('name', sql.NVarChar, entityName)
           .input('updatedAt', sql.DateTimeOffset, new Date())
-          .input('data', sql.NVarChar, JSON.stringify(entity))
           .input('lastSyncDate', sql.DateTimeOffset, new Date())
           .query(`
             UPDATE ${this.tableName}
             SET name = @name,
                 updated = @updatedAt,
-                data = @data,
                 last_sync_date = @lastSyncDate
             WHERE ${this.idField} = @entityId
           `);
         
         console.log(`Updated ${this.entityType} ${entityId} in database`);
       } else {
-        // Insert new entity
+        // Insert new entity - WITHOUT using data column
         await pool.request()
           .input('entityId', sql.VarChar, entityId)
           .input('name', sql.NVarChar, entityName)
           .input('createdAt', sql.DateTimeOffset, new Date())
           .input('updatedAt', sql.DateTimeOffset, new Date())
-          .input('data', sql.NVarChar, JSON.stringify(entity))
           .input('lastSyncDate', sql.DateTimeOffset, new Date())
           .query(`
-            INSERT INTO ${this.tableName} (${this.idField}, name, created, updated, data, last_sync_date)
-            VALUES (@entityId, @name, @createdAt, @updatedAt, @data, @lastSyncDate)
+            INSERT INTO ${this.tableName} (${this.idField}, name, created, updated, last_sync_date)
+            VALUES (@entityId, @name, @createdAt, @updatedAt, @lastSyncDate)
           `);
         
         console.log(`Inserted new ${this.entityType} ${entityId} into database`);
