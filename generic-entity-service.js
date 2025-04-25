@@ -1,8 +1,8 @@
 /**
- * Generic Entity Service (No Data Column Version)
+ * Generic Entity Service (Minimal Schema Version)
  * 
- * A simplified service for handling all entity types between Picqer and SQL database.
- * This version does NOT use the 'data' column and works with existing database schema.
+ * A highly simplified service for handling all entity types between Picqer and SQL database.
+ * This version works with minimal database schema, requiring only ID and name columns.
  */
 const sql = require('mssql');
 
@@ -102,32 +102,25 @@ class GenericEntityService {
         `);
       
       if (existingEntity.recordset.length > 0) {
-        // Update existing entity - WITHOUT using data column
+        // Update existing entity - MINIMAL SCHEMA VERSION
         await pool.request()
           .input('entityId', sql.VarChar, entityId)
           .input('name', sql.NVarChar, entityName)
-          .input('updatedAt', sql.DateTimeOffset, new Date())
-          .input('lastSyncDate', sql.DateTimeOffset, new Date())
           .query(`
             UPDATE ${this.tableName}
-            SET name = @name,
-                updated = @updatedAt,
-                last_sync_date = @lastSyncDate
+            SET name = @name
             WHERE ${this.idField} = @entityId
           `);
         
         console.log(`Updated ${this.entityType} ${entityId} in database`);
       } else {
-        // Insert new entity - WITHOUT using data column
+        // Insert new entity - MINIMAL SCHEMA VERSION
         await pool.request()
           .input('entityId', sql.VarChar, entityId)
           .input('name', sql.NVarChar, entityName)
-          .input('createdAt', sql.DateTimeOffset, new Date())
-          .input('updatedAt', sql.DateTimeOffset, new Date())
-          .input('lastSyncDate', sql.DateTimeOffset, new Date())
           .query(`
-            INSERT INTO ${this.tableName} (${this.idField}, name, created, updated, last_sync_date)
-            VALUES (@entityId, @name, @createdAt, @updatedAt, @lastSyncDate)
+            INSERT INTO ${this.tableName} (${this.idField}, name)
+            VALUES (@entityId, @name)
           `);
         
         console.log(`Inserted new ${this.entityType} ${entityId} into database`);
