@@ -1,8 +1,8 @@
 /**
- * Updated SyncImplementation with database connection adapter support
+ * Enhanced SyncImplementation with additional methods for dashboard compatibility
  * 
- * This file updates the SyncImplementation to ensure it works properly
- * with the updated database connection code.
+ * This file extends the SyncImplementation class to include methods that are
+ * expected by the data_sync_api_adapter.js file, fixing the method mismatch issue.
  */
 
 class SyncImplementation {
@@ -31,6 +31,151 @@ class SyncImplementation {
     
     if (missingServices.length > 0) {
       console.warn(`Warning: Missing services in SyncImplementation: ${missingServices.join(', ')}`);
+    }
+  }
+  
+  /**
+   * Get entity count - NEW METHOD for dashboard compatibility
+   * @param {string} entityType - Type of entity
+   * @returns {Promise<number>} - Entity count
+   */
+  async getEntityCount(entityType) {
+    console.log(`Getting count for entity type: ${entityType}`);
+    
+    try {
+      let count = 0;
+      
+      switch (entityType) {
+        case 'products':
+          if (this.services.PicklistService && typeof this.services.PicklistService.getCount === 'function') {
+            count = await this.services.PicklistService.getCount();
+          }
+          break;
+        case 'picklists':
+          if (this.services.PicklistService && typeof this.services.PicklistService.getCount === 'function') {
+            count = await this.services.PicklistService.getCount();
+          }
+          break;
+        case 'warehouses':
+          if (this.services.WarehouseService && typeof this.services.WarehouseService.getCount === 'function') {
+            count = await this.services.WarehouseService.getCount();
+          }
+          break;
+        case 'users':
+          if (this.services.UserService && typeof this.services.UserService.getCount === 'function') {
+            count = await this.services.UserService.getCount();
+          }
+          break;
+        case 'suppliers':
+          if (this.services.SupplierService && typeof this.services.SupplierService.getCount === 'function') {
+            count = await this.services.SupplierService.getCount();
+          }
+          break;
+        case 'batches':
+          if (this.services.BatchService && typeof this.services.BatchService.getCount === 'function') {
+            count = await this.services.BatchService.getCount();
+          }
+          break;
+        default:
+          console.warn(`Unknown entity type: ${entityType}`);
+      }
+      
+      return count;
+    } catch (error) {
+      console.error(`Error getting count for ${entityType}:`, error.message);
+      return 0;
+    }
+  }
+  
+  /**
+   * Get last sync date - NEW METHOD for dashboard compatibility
+   * @param {string} entityType - Type of entity
+   * @returns {Promise<string>} - Last sync date
+   */
+  async getLastSyncDate(entityType) {
+    console.log(`Getting last sync date for entity type: ${entityType}`);
+    
+    try {
+      let lastSyncDate = null;
+      
+      switch (entityType) {
+        case 'products':
+          if (this.services.PicklistService && typeof this.services.PicklistService.getLastSyncDate === 'function') {
+            lastSyncDate = await this.services.PicklistService.getLastSyncDate();
+          }
+          break;
+        case 'picklists':
+          if (this.services.PicklistService && typeof this.services.PicklistService.getLastSyncDate === 'function') {
+            lastSyncDate = await this.services.PicklistService.getLastSyncDate();
+          }
+          break;
+        case 'warehouses':
+          if (this.services.WarehouseService && typeof this.services.WarehouseService.getLastSyncDate === 'function') {
+            lastSyncDate = await this.services.WarehouseService.getLastSyncDate();
+          }
+          break;
+        case 'users':
+          if (this.services.UserService && typeof this.services.UserService.getLastSyncDate === 'function') {
+            lastSyncDate = await this.services.UserService.getLastSyncDate();
+          }
+          break;
+        case 'suppliers':
+          if (this.services.SupplierService && typeof this.services.SupplierService.getLastSyncDate === 'function') {
+            lastSyncDate = await this.services.SupplierService.getLastSyncDate();
+          }
+          break;
+        case 'batches':
+          if (this.services.BatchService && typeof this.services.BatchService.getLastSyncDate === 'function') {
+            lastSyncDate = await this.services.BatchService.getLastSyncDate();
+          }
+          break;
+        default:
+          console.warn(`Unknown entity type: ${entityType}`);
+      }
+      
+      return lastSyncDate || new Date().toISOString();
+    } catch (error) {
+      console.error(`Error getting last sync date for ${entityType}:`, error.message);
+      return new Date().toISOString();
+    }
+  }
+  
+  /**
+   * Retry sync - NEW METHOD for dashboard compatibility
+   * @param {string} syncId - Sync ID to retry
+   * @returns {Promise<Object>} - Retry result
+   */
+  async retrySync(syncId) {
+    console.log(`Retrying sync with ID: ${syncId}`);
+    
+    try {
+      // Parse entity type from sync ID (format: entity_timestamp)
+      const parts = syncId.split('_');
+      const entityType = parts[0];
+      
+      // Call appropriate sync method based on entity type
+      switch (entityType) {
+        case 'products':
+          return await this.syncProducts(true);
+        case 'picklists':
+          return await this.syncPicklists(true);
+        case 'warehouses':
+          return await this.syncWarehouses(true);
+        case 'users':
+          return await this.syncUsers(true);
+        case 'suppliers':
+          return await this.syncSuppliers(true);
+        case 'batches':
+          return await this.syncBatches(true);
+        default:
+          throw new Error(`Unknown entity type in sync ID: ${entityType}`);
+      }
+    } catch (error) {
+      console.error(`Error retrying sync ${syncId}:`, error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   }
   
