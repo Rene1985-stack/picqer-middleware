@@ -90,7 +90,7 @@ class GenericEntityService {
       }
       
       const pool = this.dbManager.pool;
-      const entityId = entity[this.idField];
+      const entityId = String(entity[this.idField]); // Ensure ID is a string
       const entityName = entity[this.nameField] || '';
       
       // Check if entity already exists
