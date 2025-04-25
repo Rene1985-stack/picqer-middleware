@@ -1,3 +1,12 @@
+console.log('Starting middleware application...');
+console.log('Environment variables loaded:', {
+  PICQER_BASE_URL: process.env.PICQER_BASE_URL,
+  SQL_SERVER: process.env.SQL_SERVER,
+  SQL_DATABASE: process.env.SQL_DATABASE,
+  SQL_PORT: process.env.SQL_PORT,
+  SQL_USER: process.env.SQL_USER
+});
+
 /**
  * Simplified index.js
  * 
