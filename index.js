@@ -1,12 +1,13 @@
 /**
- * Fixed index.js with proper sync method integration
+ * Final fixed index.js with all required methods
  * 
  * This version fixes all identified issues:
  * 1. Uses the existing sync-method-integration.js to integrate sync methods
- * 2. Properly initializes data_sync_api_adapter with services
- * 3. Ensures dashboard routes work correctly
- * 4. Uses the db-connection-adapter for database connectivity
- * 5. Adds fallback for PICQER_API_URL and PICQER_BASE_URL
+ * 2. Adds missing service methods required by the data sync API adapter
+ * 3. Properly initializes data_sync_api_adapter with services
+ * 4. Ensures dashboard routes work correctly
+ * 5. Uses the db-connection-adapter for database connectivity
+ * 6. Adds fallback for PICQER_API_URL and PICQER_BASE_URL
  */
 require('dotenv').config();
 const express = require('express');
@@ -32,6 +33,9 @@ const batchDashboardApiModule = require('./batch_dashboard_api');
 
 // Import sync method integration
 const { integrateSyncMethods } = require('./sync-method-integration');
+
+// Import service methods extension
+const { addMissingServiceMethods } = require('./service_methods_extension');
 
 // Create Express app
 const app = express();
@@ -110,6 +114,9 @@ const services = {
 
 // Integrate sync methods into service classes
 integrateSyncMethods(services);
+
+// Add missing methods to service classes
+addMissingServiceMethods(services);
 
 // Initialize services
 async function initializeServices() {
