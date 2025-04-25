@@ -635,8 +635,9 @@
                 <div class="card-header">
                     <h2 class="card-title">Data Synchronization</h2>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-btn" class="btn btn-primary">Sync All</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncAll" class="btn btn-primary">Sync All</button>
+                        <button id="sync-btn" class="btn btn-primary" style="display:none;">Sync All</button>
                         <button id="full-sync-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -684,8 +685,9 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-products-btn" class="btn btn-primary">Sync Products</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncProducts" class="btn btn-primary">Sync Products</button>
+                        <button id="sync-products-btn" class="btn btn-primary" style="display:none;">Sync Products</button>
                         <button id="full-sync-products-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -702,8 +704,9 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-picklists-btn" class="btn btn-primary">Sync Picklists</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncPicklists" class="btn btn-primary">Sync Picklists</button>
+                        <button id="sync-picklists-btn" class="btn btn-primary" style="display:none;">Sync Picklists</button>
                         <button id="full-sync-picklists-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -720,8 +723,9 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-warehouses-btn" class="btn btn-primary">Sync Warehouses</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncWarehouses" class="btn btn-primary">Sync Warehouses</button>
+                        <button id="sync-warehouses-btn" class="btn btn-primary" style="display:none;">Sync Warehouses</button>
                         <button id="full-sync-warehouses-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -738,8 +742,9 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-users-btn" class="btn btn-primary">Sync Users</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncUsers" class="btn btn-primary">Sync Users</button>
+                        <button id="sync-users-btn" class="btn btn-primary" style="display:none;">Sync Users</button>
                         <button id="full-sync-users-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -756,8 +761,9 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-suppliers-btn" class="btn btn-primary">Sync Suppliers</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncSuppliers" class="btn btn-primary">Sync Suppliers</button>
+                        <button id="sync-suppliers-btn" class="btn btn-primary" style="display:none;">Sync Suppliers</button>
                         <button id="full-sync-suppliers-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -774,8 +780,9 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <!-- Updated button IDs to match sync-button-verifier.js expectations -->
-                        <button id="sync-batches-btn" class="btn btn-primary">Sync Batches</button>
+                        <!-- Use both old and new button IDs for maximum compatibility -->
+                        <button id="syncBatches" class="btn btn-primary">Sync Batches</button>
+                        <button id="sync-batches-btn" class="btn btn-primary" style="display:none;">Sync Batches</button>
                         <button id="full-sync-batches-btn" class="btn btn-outline">Full Sync</button>
                     </div>
                 </div>
@@ -812,21 +819,86 @@
     </div>
     
     <!-- JavaScript files -->
-    <!-- Add the API URL helper first -->
-    <script src="api-url-helper.js"></script>
-    
-    <!-- Then add other dashboard scripts -->
-    <script src="updated-dashboard-api.js"></script>
-    <script src="updated-api-endpoint-monitor.js"></script>
-    <script src="updated-metrics-display.js"></script>
-    <script src="sync-button-verifier.js"></script>
-    <script src="batch-ui-components.js"></script>
-    <script src="batch-charts.js"></script>
-    <script src="error-handling.js"></script>
-    
     <script>
-        // Tab switching functionality
+        // Basic Dashboard API
         document.addEventListener('DOMContentLoaded', function() {
+            // API endpoints
+            const API_BASE = window.location.origin;
+            const API_ENDPOINTS = {
+                STATUS: `${API_BASE}/api/status`,
+                STATS: `${API_BASE}/api/stats`,
+                LOGS: `${API_BASE}/api/logs`,
+                HISTORY: `${API_BASE}/api/history`,
+                SYNC: `${API_BASE}/api/sync`,
+                SYNC_PRODUCTS: `${API_BASE}/api/sync/products`,
+                SYNC_PICKLISTS: `${API_BASE}/api/sync/picklists`,
+                SYNC_WAREHOUSES: `${API_BASE}/api/sync/warehouses`,
+                SYNC_USERS: `${API_BASE}/api/sync/users`,
+                SYNC_SUPPLIERS: `${API_BASE}/api/sync/suppliers`,
+                SYNC_BATCHES: `${API_BASE}/api/sync/batches`
+            };
+            
+            // Initialize event listeners
+            const syncAllButton = document.getElementById('syncAll');
+            if (syncAllButton) {
+                syncAllButton.addEventListener('click', function() {
+                    syncAll();
+                });
+            }
+            
+            const syncProductsButton = document.getElementById('syncProducts');
+            if (syncProductsButton) {
+                syncProductsButton.addEventListener('click', function() {
+                    syncEntity('products');
+                });
+            }
+            
+            const syncPicklistsButton = document.getElementById('syncPicklists');
+            if (syncPicklistsButton) {
+                syncPicklistsButton.addEventListener('click', function() {
+                    syncEntity('picklists');
+                });
+            }
+            
+            const syncWarehousesButton = document.getElementById('syncWarehouses');
+            if (syncWarehousesButton) {
+                syncWarehousesButton.addEventListener('click', function() {
+                    syncEntity('warehouses');
+                });
+            }
+            
+            const syncUsersButton = document.getElementById('syncUsers');
+            if (syncUsersButton) {
+                syncUsersButton.addEventListener('click', function() {
+                    syncEntity('users');
+                });
+            }
+            
+            const syncSuppliersButton = document.getElementById('syncSuppliers');
+            if (syncSuppliersButton) {
+                syncSuppliersButton.addEventListener('click', function() {
+                    syncEntity('suppliers');
+                });
+            }
+            
+            const syncBatchesButton = document.getElementById('syncBatches');
+            if (syncBatchesButton) {
+                syncBatchesButton.addEventListener('click', function() {
+                    syncEntity('batches');
+                });
+            }
+            
+            const refreshButton = document.getElementById('refreshData');
+            if (refreshButton) {
+                refreshButton.addEventListener('click', function() {
+                    loadAllData();
+                });
+            }
+            
+            // Load initial data
+            loadAllData();
+            
+            // Tab switching functionality
             const tabs = document.querySelectorAll('.entity-tab');
             const contents = document.querySelectorAll('.entity-content');
             
@@ -843,6 +915,241 @@
                     document.getElementById(`${entity}-content`).classList.add('active');
                 });
             });
+            
+            // Load all dashboard data
+            function loadAllData() {
+                loadStatus();
+                loadStats();
+                loadHistory();
+                loadLogs();
+            }
+            
+            // Load system status
+            function loadStatus() {
+                const statusElement = document.getElementById('status');
+                if (!statusElement) return;
+                
+                statusElement.innerHTML = 'Checking status...';
+                
+                fetch(API_ENDPOINTS.STATUS)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.online) {
+                            statusElement.innerHTML = '<span class="status-indicator status-online"></span> Online - Version: ' + (data.version || '1.0.0');
+                        } else {
+                            statusElement.innerHTML = '<span class="status-indicator status-offline"></span> Offline';
+                        }
+                    })
+                    .catch(error => {
+                        statusElement.innerHTML = '<span class="status-indicator status-offline"></span> Offline - Error: ' + error.message;
+                    });
+            }
+            
+            // Load statistics
+            function loadStats() {
+                const statsElement = document.getElementById('stats');
+                if (!statsElement) return;
+                
+                statsElement.innerHTML = 'Loading statistics...';
+                
+                fetch(API_ENDPOINTS.STATS)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            let statsHtml = '<table class="data-table">';
+                            statsHtml += '<tr><th>Entity</th><th>Count</th><th>Last Sync</th><th>Status</th></tr>';
+                            
+                            for (const [entity, stats] of Object.entries(data.stats)) {
+                                statsHtml += '<tr>';
+                                statsHtml += '<td>' + entity.charAt(0).toUpperCase() + entity.slice(1) + '</td>';
+                                statsHtml += '<td>' + (stats.totalCount || 0) + '</td>';
+                                statsHtml += '<td>' + (stats.lastSyncDate ? new Date(stats.lastSyncDate).toLocaleString() : 'Never') + '</td>';
+                                statsHtml += '<td>' + (stats.status || 'Ready') + '</td>';
+                                statsHtml += '</tr>';
+                                
+                                // Update entity-specific stats
+                                updateEntityStats(entity, stats);
+                            }
+                            
+                            statsHtml += '</table>';
+                            statsElement.innerHTML = statsHtml;
+                        } else {
+                            statsElement.innerHTML = 'Error loading statistics: ' + (data.error || 'Unknown error');
+                        }
+                    })
+                    .catch(error => {
+                        statsElement.innerHTML = 'Error loading statistics: ' + error.message;
+                    });
+            }
+            
+            // Update entity-specific stats
+            function updateEntityStats(entity, stats) {
+                // Update total count in All tab
+                const totalElement = document.getElementById(`total-${entity}`);
+                if (totalElement) {
+                    totalElement.textContent = stats.totalCount || 0;
+                }
+                
+                // Update entity-specific tab stats
+                const countElement = document.getElementById(`${entity}-count`);
+                if (countElement) {
+                    countElement.textContent = stats.totalCount || 0;
+                }
+                
+                const lastSyncElement = document.getElementById(`${entity}-last-sync`);
+                if (lastSyncElement) {
+                    lastSyncElement.textContent = stats.lastSyncDate ? new Date(stats.lastSyncDate).toLocaleString() : 'Never';
+                }
+                
+                const statusElement = document.getElementById(`${entity}-sync-status`);
+                if (statusElement) {
+                    statusElement.textContent = stats.status || 'Ready';
+                }
+                
+                // Update progress bar if sync is in progress
+                const progressBar = document.getElementById(`${entity}-progress-bar`);
+                if (progressBar && stats.syncProgress) {
+                    const progress = Math.min(
+                        Math.round((stats.syncProgress.itemsProcessed / stats.syncProgress.totalItems) * 100),
+                        100
+                    );
+                    progressBar.style.width = `${progress}%`;
+                    progressBar.setAttribute('title', `${progress}% complete`);
+                } else if (progressBar) {
+                    progressBar.style.width = '0%';
+                    progressBar.setAttribute('title', 'No sync in progress');
+                }
+            }
+            
+            // Load sync history
+            function loadHistory() {
+                const historyElement = document.getElementById('history');
+                if (!historyElement) return;
+                
+                historyElement.innerHTML = 'Loading history...';
+                
+                fetch(API_ENDPOINTS.HISTORY)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            if (data.history && data.history.length > 0) {
+                                let historyHtml = '<ul class="sync-history">';
+                                
+                                for (const item of data.history) {
+                                    historyHtml += '<li class="sync-item">';
+                                    historyHtml += '<div>';
+                                    historyHtml += '<strong>' + (item.entity_type.charAt(0).toUpperCase() + item.entity_type.slice(1)) + '</strong>';
+                                    historyHtml += '<div class="sync-time">' + new Date(item.timestamp).toLocaleString() + '</div>';
+                                    historyHtml += '</div>';
+                                    historyHtml += '<div class="sync-status">';
+                                    
+                                    if (item.success) {
+                                        historyHtml += '<span class="sync-success">Success</span>';
+                                    } else {
+                                        historyHtml += '<span class="sync-error">Failed</span>';
+                                    }
+                                    
+                                    if (item.count !== undefined) {
+                                        historyHtml += '<span class="sync-count">' + item.count + '</span>';
+                                    }
+                                    
+                                    historyHtml += '</div>';
+                                    historyHtml += '</li>';
+                                }
+                                
+                                historyHtml += '</ul>';
+                                historyElement.innerHTML = historyHtml;
+                            } else {
+                                historyElement.innerHTML = '<p>No sync history available</p>';
+                            }
+                        } else {
+                            historyElement.innerHTML = 'Error loading history: ' + (data.error || 'Unknown error');
+                        }
+                    })
+                    .catch(error => {
+                        historyElement.innerHTML = 'Error loading history: ' + error.message;
+                    });
+            }
+            
+            // Load logs
+            function loadLogs() {
+                const logsElement = document.getElementById('logs');
+                if (!logsElement) return;
+                
+                logsElement.innerHTML = 'Loading logs...';
+                
+                fetch(API_ENDPOINTS.LOGS)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            if (data.logs && data.logs.length > 0) {
+                                let logsHtml = '<div class="log-container">';
+                                
+                                for (const log of data.logs) {
+                                    let logClass = 'log-info';
+                                    
+                                    if (log.level === 'error') {
+                                        logClass = 'log-error';
+                                    } else if (log.level === 'warning') {
+                                        logClass = 'log-warning';
+                                    } else if (log.level === 'success') {
+                                        logClass = 'log-success';
+                                    }
+                                    
+                                    logsHtml += '<div class="log-entry ' + logClass + '">';
+                                    logsHtml += '[' + new Date(log.timestamp).toLocaleString() + '] ';
+                                    logsHtml += log.message;
+                                    logsHtml += '</div>';
+                                }
+                                
+                                logsHtml += '</div>';
+                                logsElement.innerHTML = logsHtml;
+                            } else {
+                                logsElement.innerHTML = '<p>No logs available</p>';
+                            }
+                        } else {
+                            logsElement.innerHTML = 'Error loading logs: ' + (data.error || 'Unknown error');
+                        }
+                    })
+                    .catch(error => {
+                        logsElement.innerHTML = 'Error loading logs: ' + error.message;
+                    });
+            }
+            
+            // Sync all entities
+            function syncAll(fullSync = false) {
+                const url = API_ENDPOINTS.SYNC + (fullSync ? '?full=true' : '');
+                
+                fetch(url, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message || 'Sync started');
+                        // Reload data after sync
+                        setTimeout(() => loadAllData(), 2000);
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error.message);
+                    });
+            }
+            
+            // Sync specific entity
+            function syncEntity(entity, fullSync = false) {
+                const url = API_ENDPOINTS[`SYNC_${entity.toUpperCase()}`] + (fullSync ? '?full=true' : '');
+                
+                fetch(url, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message || `${entity} sync started`);
+                        // Reload data after sync
+                        setTimeout(() => loadAllData(), 2000);
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error.message);
+                    });
+            }
+            
+            // Set up polling for updates
+            setInterval(loadAllData, 30000); // Refresh every 30 seconds
         });
     </script>
 </body>
