@@ -1,25 +1,21 @@
 /**
- * Comprehensive fixed index.js with robust method additions
+ * Simplified index.js
  * 
- * This version fixes all identified issues:
- * 1. Uses the existing sync-method-integration.js to integrate sync methods
- * 2. Adds ALL missing service methods using the comprehensive approach
- * 3. Properly initializes data_sync_api_adapter with services
- * 4. Ensures dashboard routes work correctly
- * 5. Uses the db-connection-adapter for database connectivity
- * 6. Adds fallback for PICQER_API_URL and PICQER_BASE_URL
+ * This is a streamlined version of the middleware that:
+ * 1. Initializes services
+ * 2. Sets up basic API routes
+ * 3. Includes database schema fixes directly
  */
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const sql = require('mssql');
 
 // Import database connection adapter
 const dbAdapter = require('./db-connection-adapter');
 
-// Import services directly - no destructuring
+// Import services
 const PicqerApiClient = require('./picqer-api-client');
 const BatchService = require('./batch_service');
 const PicklistService = require('./picklist-service');
@@ -29,175 +25,10 @@ const SupplierService = require('./supplier_service');
 
 // Import API adapters
 const apiAdapterModule = require('./api-adapter');
-const dataSyncApiAdapterModule = require('./fixed-data-sync-api-adapter');
 const batchDashboardApiModule = require('./batch_dashboard_api');
 
-// Import sync method integration
-const { integrateSyncMethods } = require('./sync-method-integration');
-
-// Import comprehensive service methods extension
-// Define the extension inline to ensure it's available
-const addMissingServiceMethods = (services) => {
-  console.log('Adding missing methods to service classes (comprehensive inline version)...');
-  
-  // Add methods to each service
-  Object.keys(services).forEach(serviceKey => {
-    const service = services[serviceKey];
-    
-    // Determine entity type from service key
-    let entityType = serviceKey.replace('Service', '').toLowerCase();
-    
-    console.log(`Adding methods to ${serviceKey} for entity type ${entityType}...`);
-    
-    // Add getLastSync method
-    if (typeof service.getLastSync !== 'function') {
-      service.getLastSync = async function() {
-        try {
-          console.log(`Getting last sync date for ${entityType}...`);
-          
-          // Ensure pool is initialized
-          if (!this.pool) {
-            console.log(`Initializing pool for getLastSync() in ${entityType}Service...`);
-            this.pool = await this.initializePool();
-          }
-          
-          const result = await this.pool.request()
-            .input('entityType', sql.VarChar, entityType)
-            .query(`
-              SELECT TOP 1 last_sync_date
-              FROM SyncStatus
-              WHERE entity_type = @entityType
-              ORDER BY last_sync_date DESC
-            `);
-          
-          if (result.recordset.length > 0) {
-            return new Date(result.recordset[0].last_sync_date);
-          } else {
-            console.log(`No last sync date found for ${entityType}, using default`);
-            return new Date(0); // Default to epoch time if no sync has been performed
-          }
-        } catch (error) {
-          console.error(`Error in getLastSync for ${entityType}:`, error.message);
-          return new Date(0); // Default to epoch time on error
-        }
-      };
-      console.log(`Added getLastSync method to ${serviceKey}`);
-    }
-    
-    // Add getLastSyncDate method (alias for getLastSync)
-    if (typeof service.getLastSyncDate !== 'function') {
-      service.getLastSyncDate = async function() {
-        return await this.getLastSync();
-      };
-      console.log(`Added getLastSyncDate method to ${serviceKey}`);
-    }
-    
-    // Add entity-specific count methods
-    const countMethods = [
-      { entity: 'product', tableName: 'Products' },
-      { entity: 'picklist', tableName: 'Picklists' },
-      { entity: 'warehouse', tableName: 'Warehouses' },
-      { entity: 'user', tableName: 'Users' },
-      { entity: 'supplier', tableName: 'Suppliers' },
-      { entity: 'batch', tableName: 'Batches' }
-    ];
-    
-    countMethods.forEach(({ entity, tableName }) => {
-      const methodName = `get${entity.charAt(0).toUpperCase() + entity.slice(1)}CountFromDatabase`;
-      
-      if (typeof service[methodName] !== 'function') {
-        service[methodName] = async function() {
-          try {
-            console.log(`Getting ${entity} count from database...`);
-            
-            // Ensure pool is initialized
-            if (!this.pool) {
-              console.log(`Initializing pool for ${methodName}() in ${serviceKey}...`);
-              this.pool = await this.initializePool();
-            }
-            
-            const result = await this.pool.request()
-              .query(`
-                SELECT COUNT(*) AS count
-                FROM ${tableName}
-              `);
-            
-            return result.recordset[0].count;
-          } catch (error) {
-            console.error(`Error in ${methodName} for ${entity}:`, error.message);
-            return 0; // Default to 0 on error
-          }
-        };
-        console.log(`Added ${methodName} method to ${serviceKey}`);
-      }
-    });
-    
-    // Add performIncrementalSync method
-    if (typeof service.performIncrementalSync !== 'function') {
-      service.performIncrementalSync = async function(fullSync = false) {
-        try {
-          console.log(`Performing ${fullSync ? 'full' : 'incremental'} sync for ${entityType}...`);
-          
-          // Use the entity-specific sync method if available
-          const syncMethodName = `sync${entityType.charAt(0).toUpperCase() + entityType.slice(1)}s`;
-          
-          if (typeof this[syncMethodName] === 'function') {
-            return await this[syncMethodName](fullSync);
-          } else if (typeof this.sync === 'function') {
-            return await this.sync(fullSync);
-          } else {
-            console.error(`No sync method found for ${entityType}`);
-            return {
-              success: false,
-              message: `No sync method found for ${entityType}`
-            };
-          }
-        } catch (error) {
-          console.error(`Error in performIncrementalSync for ${entityType}:`, error.message);
-          return {
-            success: false,
-            message: `Error syncing ${entityType}: ${error.message}`,
-            error: error.message
-          };
-        }
-      };
-      console.log(`Added performIncrementalSync method to ${serviceKey}`);
-    }
-    
-    // Add initializePool method if it doesn't exist
-    if (typeof service.initializePool !== 'function') {
-      service.initializePool = async function() {
-        try {
-          console.log(`Initializing pool for ${serviceKey}...`);
-          
-          // Use the dbConfig from the service if available
-          const dbConfig = this.dbConfig || this.config || {
-            server: process.env.SQL_SERVER || process.env.DB_HOST,
-            port: parseInt(process.env.SQL_PORT || process.env.DB_PORT || '1433', 10),
-            database: process.env.SQL_DATABASE || process.env.DB_NAME,
-            user: process.env.SQL_USER || process.env.DB_USER,
-            password: process.env.SQL_PASSWORD || process.env.DB_PASSWORD,
-            options: {
-              encrypt: true,
-              trustServerCertificate: false,
-              enableArithAbort: true
-            }
-          };
-          
-          // Create and return the pool
-          return await new sql.ConnectionPool(dbConfig).connect();
-        } catch (error) {
-          console.error(`Error initializing pool for ${serviceKey}:`, error.message);
-          throw error;
-        }
-      };
-      console.log(`Added initializePool method to ${serviceKey}`);
-    }
-  });
-  
-  console.log('All missing methods added to service classes (comprehensive inline version)');
-  return services;
-};
+// Import sync module
+const syncModule = require('./sync');
 
 // Create Express app
 const app = express();
@@ -221,7 +52,7 @@ if (!picqerApiUrl) {
 // Log for debugging
 console.log(`Using Picqer API URL: ${picqerApiUrl}`);
 
-// Get database configuration that works with both SQL_ and DB_ prefixed variables
+// Get database configuration
 const dbConfig = dbAdapter.getDatabaseConfig();
 
 // Validate database configuration
@@ -233,7 +64,7 @@ try {
   console.error('The middleware will start, but database operations will likely fail');
 }
 
-// Create Picqer API client directly
+// Create Picqer API client
 const picqerClient = new PicqerApiClient(
   process.env.PICQER_API_KEY,
   picqerApiUrl,
@@ -245,7 +76,7 @@ const picqerClient = new PicqerApiClient(
   }
 );
 
-// Create service instances with the unified database configuration
+// Create service instances
 const services = {
   BatchService: new BatchService(
     process.env.PICQER_API_KEY,
@@ -274,41 +105,20 @@ const services = {
   )
 };
 
-// Add missing methods to service classes BEFORE integrating sync methods
-// This ensures all required methods are available
-addMissingServiceMethods(services);
-
-// Integrate sync methods into service classes
-integrateSyncMethods(services);
-
 // Initialize services
 async function initializeServices() {
   try {
     console.log('Initializing services...');
     
-    // Initialize BatchService
-    if (typeof services.BatchService.initialize === 'function') {
-      await services.BatchService.initialize();
-    }
+    // Initialize database schema
+    await syncModule.fixDatabaseSchema(dbConfig);
     
-    // Initialize PicklistService
-    if (typeof services.PicklistService.initialize === 'function') {
-      await services.PicklistService.initialize();
-    }
-    
-    // Initialize WarehouseService
-    if (typeof services.WarehouseService.initialize === 'function') {
-      await services.WarehouseService.initialize();
-    }
-    
-    // Initialize UserService
-    if (typeof services.UserService.initialize === 'function') {
-      await services.UserService.initialize();
-    }
-    
-    // Initialize SupplierService
-    if (typeof services.SupplierService.initialize === 'function') {
-      await services.SupplierService.initialize();
+    // Initialize each service
+    for (const [serviceName, service] of Object.entries(services)) {
+      if (typeof service.initialize === 'function') {
+        await service.initialize();
+        console.log(`${serviceName} initialized successfully`);
+      }
     }
     
     console.log('All services initialized successfully');
@@ -320,7 +130,7 @@ async function initializeServices() {
 // Initialize services on startup
 initializeServices();
 
-// Create basic API endpoints for dashboard functionality
+// Create API router
 const apiRouter = express.Router();
 
 // Status endpoint
@@ -332,17 +142,105 @@ apiRouter.get('/status', (req, res) => {
   });
 });
 
+// Sync endpoints
+apiRouter.post('/sync/warehouses', async (req, res) => {
+  try {
+    console.log('Warehouse sync request received');
+    const result = await syncModule.syncWarehouses(services.WarehouseService);
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing warehouses:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+apiRouter.post('/sync/users', async (req, res) => {
+  try {
+    console.log('Users sync request received');
+    const result = await syncModule.syncUsers(services.UserService);
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing users:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+apiRouter.post('/sync/suppliers', async (req, res) => {
+  try {
+    console.log('Suppliers sync request received');
+    const result = await syncModule.syncSuppliers(services.SupplierService);
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing suppliers:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+apiRouter.post('/sync/picklists', async (req, res) => {
+  try {
+    console.log('Picklists sync request received');
+    const result = await syncModule.syncPicklists(services.PicklistService);
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing picklists:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+apiRouter.post('/sync/batches', async (req, res) => {
+  try {
+    console.log('Batches sync request received');
+    const result = await syncModule.syncBatches(services.BatchService);
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing batches:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Sync all entities endpoint
+apiRouter.post('/sync/all', async (req, res) => {
+  try {
+    console.log('Sync all request received');
+    
+    const results = {
+      warehouses: await syncModule.syncWarehouses(services.WarehouseService),
+      users: await syncModule.syncUsers(services.UserService),
+      suppliers: await syncModule.syncSuppliers(services.SupplierService),
+      picklists: await syncModule.syncPicklists(services.PicklistService),
+      batches: await syncModule.syncBatches(services.BatchService)
+    };
+    
+    const success = Object.values(results).every(result => result.success);
+    
+    res.json({
+      success,
+      message: success ? 'All entities synced successfully' : 'Some entities failed to sync',
+      results
+    });
+  } catch (error) {
+    console.error('Error syncing all entities:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get sync status endpoint
+apiRouter.get('/sync/status', async (req, res) => {
+  try {
+    const status = await syncModule.getSyncStatus(dbConfig);
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting sync status:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Use our API router
 app.use('/api', apiRouter);
 
 // Initialize API adapters
 if (apiAdapterModule && typeof apiAdapterModule.initializeServices === 'function') {
   apiAdapterModule.initializeServices(services);
-}
-
-// Initialize data sync API adapter with services
-if (dataSyncApiAdapterModule && typeof dataSyncApiAdapterModule.initializeServices === 'function') {
-  dataSyncApiAdapterModule.initializeServices(services);
 }
 
 // Initialize batch dashboard API adapter
@@ -353,11 +251,6 @@ if (batchDashboardApiModule && typeof batchDashboardApiModule.initializeServices
 // Use API routers
 if (apiAdapterModule && apiAdapterModule.router) {
   app.use('/api', apiAdapterModule.router);
-}
-
-// Use data sync API router
-if (dataSyncApiAdapterModule && dataSyncApiAdapterModule.router) {
-  app.use('/api', dataSyncApiAdapterModule.router);
 }
 
 // Use batch dashboard API router
