@@ -251,23 +251,23 @@ class DatabaseManager {
 
   async createSyncProgressRecord(syncId, entityType) {
     await this.connect();
-    const schema = this.syncProgressSchema || await this.getTableSchema("SyncProgress");
-    const startTimeCol = schema.some(c => c.name.toLowerCase() === "start_time") ? "start_time" : "started_at";
+    // const schema = this.syncProgressSchema || await this.getTableSchema("SyncProgress"); // Not strictly needed for the hardcoded column name
+    // const startTimeCol = schema.some(c => c.name.toLowerCase() === "start_time") ? "start_time" : "started_at"; // Hardcoding to 'started_at'
     const lastUpdatedCol = "last_updated"; // Standardized in initializeSyncProgressTable
 
     const now = new Date(); // Generate timestamp in JS
 
     const query = `
-      INSERT INTO SyncProgress (sync_id, entity_type, status, [${startTimeCol}], [${lastUpdatedCol}])
+      INSERT INTO SyncProgress (sync_id, entity_type, status, [started_at], [${lastUpdatedCol}])
       VALUES (@syncId, @entityType, 'in_progress', @startTimeValue, @lastUpdatedValue);
     `;
     const request = this.pool.request();
     request.input("syncId", sql.VarChar, syncId);
     request.input("entityType", sql.VarChar, entityType);
-    request.input("startTimeValue", sql.DateTimeOffset, now); // Pass JS Date object
-    request.input("lastUpdatedValue", sql.DateTimeOffset, now); // Pass JS Date object
+    request.input("startTimeValue", sql.DateTimeOffset, now); // This value is for 'started_at'
+    request.input("lastUpdatedValue", sql.DateTimeOffset, now);
     await request.query(query);
-    console.log(`[DBManager] Created SyncProgress record for ${syncId} (${entityType}) using ${startTimeCol} with explicit timestamp: ${now.toISOString()}`);
+    console.log(`[DBManager] Created SyncProgress record for ${syncId} (${entityType}) using 'started_at' (hardcoded) with explicit timestamp: ${now.toISOString()}`);
   }
 
   async updateSyncProgressRecord(syncId, status, recordsSynced, errorMessage = null) {
