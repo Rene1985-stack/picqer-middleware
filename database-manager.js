@@ -241,14 +241,7 @@ class DatabaseManager {
             // Check nullability for specific columns we expect to write to, e.g. start_time
             const colMeta = schema.find(c => c.name.toLowerCase() === actualColName.toLowerCase());
             if (colMeta && (actualColName === "start_time" || actualColName === "started_at") && !colMeta.isNullable) {
-                console.warn(`[DBManager] Column ${actualColName} in ${tableName} is NOT NULL. Attempting to make it NULL.`);
-                try {
-                    await this.pool.request().query(`ALTER TABLE ${tableName} ALTER COLUMN [${actualColName}] DATETIMEOFFSET NULL;`);
-                    console.log(`[DBManager] Column ${actualColName} in ${tableName} altered to allow NULLs.`);
-                    schema = await this.getTableSchema(tableName, true); // Refresh schema
-                } catch (alterError) {
-                    console.error(`[DBManager] Failed to alter ${actualColName} to allow NULLs: ${alterError.message}. Manual intervention may be needed if inserts fail.`);
-                }
+                console.warn(`[DBManager] Column ${actualColName} in ${tableName} is NOT NULL. The code is designed to provide a value for this column during INSERT operations.`);
             }
         }
     }
@@ -260,16 +253,21 @@ class DatabaseManager {
     await this.connect();
     const schema = this.syncProgressSchema || await this.getTableSchema("SyncProgress");
     const startTimeCol = schema.some(c => c.name.toLowerCase() === "start_time") ? "start_time" : "started_at";
-    
+    const lastUpdatedCol = "last_updated"; // Standardized in initializeSyncProgressTable
+
+    const now = new Date(); // Generate timestamp in JS
+
     const query = `
-      INSERT INTO SyncProgress (sync_id, entity_type, status, ${startTimeCol}, last_updated)
-      VALUES (@syncId, @entityType, 'in_progress', SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+      INSERT INTO SyncProgress (sync_id, entity_type, status, [${startTimeCol}], [${lastUpdatedCol}])
+      VALUES (@syncId, @entityType, 'in_progress', @startTimeValue, @lastUpdatedValue);
     `;
     const request = this.pool.request();
     request.input("syncId", sql.VarChar, syncId);
     request.input("entityType", sql.VarChar, entityType);
+    request.input("startTimeValue", sql.DateTimeOffset, now); // Pass JS Date object
+    request.input("lastUpdatedValue", sql.DateTimeOffset, now); // Pass JS Date object
     await request.query(query);
-    console.log(`[DBManager] Created SyncProgress record for ${syncId} (${entityType}) using ${startTimeCol}.`);
+    console.log(`[DBManager] Created SyncProgress record for ${syncId} (${entityType}) using ${startTimeCol} with explicit timestamp: ${now.toISOString()}`);
   }
 
   async updateSyncProgressRecord(syncId, status, recordsSynced, errorMessage = null) {
