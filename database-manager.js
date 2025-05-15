@@ -68,7 +68,7 @@ class DatabaseManager {
     await this.connect();
     const request = this.pool.request();
     const query = `
-      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + "." + TABLE_NAME), COLUMN_NAME, "IsIdentity") AS IS_IDENTITY
+      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + "." + TABLE_NAME), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY
       FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_NAME = @tableName;
     `;
