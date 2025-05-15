@@ -1,13 +1,13 @@
 /**
- * Enhanced Generic Entity Service with Entity-Specific Attributes
+ * Enhanced Generic Entity Service with Detailed Logging
  * 
  * This service handles synchronization between Picqer and SQL database
- * with support for entity-specific attributes, pagination, and rate limiting.
+ * with support for entity-specific attributes, pagination, rate limiting, and detailed logging.
  */
-const sql = require('mssql');
-const entityAttributes = require('./entity-attributes');
+const sql = require("mssql");
+const entityAttributes = require("./entity-attributes"); // Assuming user has this file named entity-attributes.js
 
-class EnhancedGenericEntityService {
+class GenericEntityService { // User is using this class name
   /**
    * Create a new enhanced generic entity service
    * @param {Object} entityConfig - Entity configuration
@@ -20,341 +20,296 @@ class EnhancedGenericEntityService {
     this.tableName = entityConfig.tableName;
     this.idField = entityConfig.idField;
     this.apiEndpoint = entityConfig.apiEndpoint;
-    this.nameField = entityConfig.nameField || 'name';
+    this.nameField = entityConfig.nameField || "name";
     this.apiClient = apiClient;
     this.dbManager = dbManager;
     
-    // Get entity-specific attributes
     this.attributes = entityAttributes[this.entityType] || [];
     
-    // Validate attributes
     if (!this.attributes || this.attributes.length === 0) {
-      console.warn(`No specific attributes defined for entity type ${this.entityType}, using minimal schema`);
+      console.warn(`[${this.entityType}] No specific attributes defined, using minimal schema: id, name`);
       this.attributes = [
-        { apiField: this.idField, dbColumn: 'id', type: 'string', required: true },
-        { apiField: this.nameField, dbColumn: 'name', type: 'string', required: true }
+        { apiField: this.idField, dbColumn: "id", type: "string", required: true },
+        { apiField: this.nameField, dbColumn: "name", type: "string", required: true }
       ];
     }
+    console.log(`[${this.entityType}] Service initialized with attributes:`, JSON.stringify(this.attributes.map(a => a.apiField)));
   }
 
-  /**
-   * Initialize the entity service
-   * @returns {Promise<boolean>} - Success status
-   */
   async initialize() {
     try {
-      // Initialize entity schema
       await this.dbManager.initializeEntitySchema(this.entityConfig);
-      console.log(`${this.entityType} service initialized successfully`);
+      console.log(`[${this.entityType}] Service schema initialized successfully`);
       return true;
     } catch (error) {
-      console.error(`Error initializing ${this.entityType} service:`, error.message);
+      console.error(`[${this.entityType}] Error initializing service schema:`, error.message, error.stack);
       return false;
     }
   }
 
-  /**
-   * Fetch entities from Picqer API with pagination
-   * @param {Object} params - Query parameters
-   * @returns {Promise<Array>} - Array of entity objects
-   */
   async fetchEntities(params = {}) {
+    console.log(`[${this.entityType}] Starting fetchEntities with params:`, JSON.stringify(params));
     try {
-      console.log(`Fetching ${this.entityType} entities from Picqer API...`);
-      
-      // Get entities from Picqer with automatic pagination
-      const entities = await this.apiClient.get(this.apiEndpoint, params, true);
-      
-      // Handle different response formats
+      console.log(`[${this.entityType}] Calling API client get for endpoint: ${this.apiEndpoint}`);
+      const entities = await this.apiClient.get(this.apiEndpoint, params, true); // true for pagination
+      console.log(`[${this.entityType}] Raw API response received.`);
+      // console.log(`[${this.entityType}] Raw API response sample (first item if array):`, Array.isArray(entities) ? JSON.stringify(entities[0]) : JSON.stringify(entities));
+
       let processedEntities = [];
       if (Array.isArray(entities)) {
         processedEntities = entities;
+        console.log(`[${this.entityType}] API response is an array.`);
       } else if (entities && entities.data && Array.isArray(entities.data)) {
         processedEntities = entities.data;
-      } else if (entities && typeof entities === 'object') {
+        console.log(`[${this.entityType}] API response has a data property (array).`);
+      } else if (entities && typeof entities === "object" && entities !== null) {
         processedEntities = [entities];
+        console.log(`[${this.entityType}] API response is a single object, wrapped in an array.`);
+      } else {
+        console.warn(`[${this.entityType}] Unexpected API response format. Type: ${typeof entities}`);
       }
       
-      // Log the total number of entities fetched
-      console.log(`Fetched ${processedEntities.length} ${this.entityType} entities from Picqer API`);
-      
+      console.log(`[${this.entityType}] Fetched ${processedEntities.length} entities from Picqer API after processing format.`);
       return processedEntities;
     } catch (error) {
-      console.error(`Error fetching ${this.entityType} entities from Picqer:`, error.message);
+      console.error(`[${this.entityType}] Error in fetchEntities:`, error.message, error.stack);
       throw error;
     }
   }
 
-  /**
-   * Extract entity attributes from API response
-   * @param {Object} entity - Entity object from API
-   * @returns {Object} - Extracted attributes
-   */
   extractEntityAttributes(entity) {
+    // console.log(`[${this.entityType}] Starting extractEntityAttributes for entity:`, JSON.stringify(entity));
     const extractedAttributes = {};
-    
-    // Extract each defined attribute
     for (const attr of this.attributes) {
       const apiValue = this.getNestedValue(entity, attr.apiField);
-      
-      // Skip undefined required fields
+      // console.log(`[${this.entityType}] Extracting ${attr.apiField}: value = ${apiValue}`);
       if (attr.required && apiValue === undefined) {
-        console.warn(`Required field ${attr.apiField} missing in ${this.entityType} entity`);
+        console.warn(`[${this.entityType}] Required field ${attr.apiField} missing in entity:`, JSON.stringify(entity));
+        // For critical ID field, we might want to throw or handle differently
+        if (attr.dbColumn === "id") {
+            console.error(`[${this.entityType}] CRITICAL: ID field ${attr.apiField} is missing. Entity will likely fail to save.`);
+        }
         continue;
       }
       
-      // Convert value based on type
       let dbValue = apiValue;
       if (apiValue !== undefined && apiValue !== null) {
         switch (attr.type) {
-          case 'string':
-            dbValue = String(apiValue);
-            break;
-          case 'number':
-            dbValue = Number(apiValue);
-            break;
-          case 'boolean':
-            dbValue = Boolean(apiValue);
-            break;
-          case 'datetime':
-            dbValue = apiValue; // SQL Server can handle ISO date strings
-            break;
-          default:
-            dbValue = apiValue;
+          case "string": dbValue = String(apiValue); break;
+          case "number": dbValue = Number(apiValue); break;
+          case "boolean": dbValue = Boolean(apiValue); break;
+          case "datetime": dbValue = apiValue; break; // SQL Server handles ISO strings
+          default: dbValue = apiValue;
         }
       }
-      
       extractedAttributes[attr.dbColumn] = dbValue;
     }
-    
+    // console.log(`[${this.entityType}] Extracted attributes:`, JSON.stringify(extractedAttributes));
     return extractedAttributes;
   }
   
-  /**
-   * Get nested value from object using dot notation
-   * @param {Object} obj - Object to extract from
-   * @param {string} path - Path to value using dot notation
-   * @returns {*} - Extracted value
-   */
   getNestedValue(obj, path) {
     if (!obj || !path) return undefined;
-    
-    const keys = path.split('.');
+    const keys = path.split(".");
     let value = obj;
-    
     for (const key of keys) {
       if (value === null || value === undefined) return undefined;
       value = value[key];
     }
-    
     return value;
   }
 
-  /**
-   * Save an entity to the database
-   * @param {Object} entity - Entity object from Picqer
-   * @returns {Promise<boolean>} - Success status
-   */
   async saveEntity(entity) {
+    const picqerEntityId = entity[this.idField] || "UNKNOWN_ID";
+    console.log(`[${this.entityType}] Starting saveEntity for Picqer ID: ${picqerEntityId}`);
     try {
-      // Ensure pool is connected
       if (!this.dbManager.pool) {
+        console.log(`[${this.entityType}] DBManager pool not connected, attempting to connect.`);
         await this.dbManager.connect();
+        console.log(`[${this.entityType}] DBManager pool connected.`);
       }
-      
       const pool = this.dbManager.pool;
       
-      // Extract entity attributes
       const attributes = this.extractEntityAttributes(entity);
-      
-      // Ensure ID is present
-      if (!attributes.id) {
-        console.error(`Missing ID for ${this.entityType} entity`);
+      const entityIdForDb = attributes.id; // This is the ID mapped to dbColumn 'id'
+
+      if (!entityIdForDb) {
+        console.error(`[${this.entityType}] CRITICAL: Database ID field (mapped to 'id') is missing or undefined after extraction for Picqer entity:`, JSON.stringify(entity));
         return false;
       }
+      console.log(`[${this.entityType}] Extracted attributes for DB ID ${entityIdForDb}:`, JSON.stringify(attributes));
       
-      // Check if entity already exists
+      console.log(`[${this.entityType}] Checking if entity ID ${entityIdForDb} exists in table ${this.tableName}.`);
       const existingEntity = await pool.request()
-        .input('entityId', sql.VarChar, attributes.id)
-        .query(`
-          SELECT id
-          FROM ${this.tableName}
-          WHERE id = @entityId
-        `);
+        .input("entityId", sql.VarChar, String(entityIdForDb)) // Ensure ID is string for query
+        .query(`SELECT id FROM ${this.tableName} WHERE id = @entityId`);
+      console.log(`[${this.entityType}] Existing entity check result count: ${existingEntity.recordset.length}`);
       
       if (existingEntity.recordset.length > 0) {
-        // Update existing entity
+        console.log(`[${this.entityType}] Entity ID ${entityIdForDb} exists. Preparing to update.`);
         const updateColumns = Object.keys(attributes)
-          .filter(key => key !== 'id') // Exclude ID from update
+          .filter(key => key !== "id")
           .map(key => `${key} = @${key}`)
-          .join(', ');
+          .join(", ");
         
         if (!updateColumns) {
-          console.log(`No columns to update for ${this.entityType} ${attributes.id}`);
+          console.log(`[${this.entityType}] No columns to update for ID ${entityIdForDb}. Skipping update.`);
           return true;
         }
+        console.log(`[${this.entityType}] Update SET clause: ${updateColumns}`);
         
-        const updateRequest = pool.request()
-          .input('entityId', sql.VarChar, attributes.id);
-        
-        // Add parameters for each attribute
+        const updateRequest = pool.request().input("entityId", sql.VarChar, String(entityIdForDb));
         for (const [key, value] of Object.entries(attributes)) {
-          if (key !== 'id') { // Skip ID in SET clause
+          if (key !== "id") {
             updateRequest.input(key, this.getSqlType(value), value);
           }
         }
-        
-        await updateRequest.query(`
-          UPDATE ${this.tableName}
-          SET ${updateColumns}
-          WHERE id = @entityId
-        `);
-        
-        console.log(`Updated ${this.entityType} ${attributes.id} in database`);
+        console.log(`[${this.entityType}] Executing UPDATE for ID ${entityIdForDb}.`);
+        await updateRequest.query(`UPDATE ${this.tableName} SET ${updateColumns} WHERE id = @entityId`);
+        console.log(`[${this.entityType}] Successfully updated ID ${entityIdForDb} in database.`);
       } else {
-        // Insert new entity
-        const columns = Object.keys(attributes).join(', ');
-        const paramNames = Object.keys(attributes).map(key => `@${key}`).join(', ');
+        console.log(`[${this.entityType}] Entity ID ${entityIdForDb} does not exist. Preparing to insert.`);
+        const columns = Object.keys(attributes).join(", ");
+        const paramNames = Object.keys(attributes).map(key => `@${key}`).join(", ");
+        console.log(`[${this.entityType}] Insert columns: ${columns}`);
+        console.log(`[${this.entityType}] Insert param names: ${paramNames}`);
         
         const insertRequest = pool.request();
-        
-        // Add parameters for each attribute
         for (const [key, value] of Object.entries(attributes)) {
           insertRequest.input(key, this.getSqlType(value), value);
         }
-        
-        await insertRequest.query(`
-          INSERT INTO ${this.tableName} (${columns})
-          VALUES (${paramNames})
-        `);
-        
-        console.log(`Inserted new ${this.entityType} ${attributes.id} into database`);
+        console.log(`[${this.entityType}] Executing INSERT for ID ${entityIdForDb}.`);
+        await insertRequest.query(`INSERT INTO ${this.tableName} (${columns}) VALUES (${paramNames})`);
+        console.log(`[${this.entityType}] Successfully inserted new ID ${entityIdForDb} into database.`);
       }
-      
       return true;
     } catch (error) {
-      console.error(`Error saving ${this.entityType} entity:`, error.message);
-      throw error;
+      console.error(`[${this.entityType}] Error in saveEntity for Picqer ID ${picqerEntityId} (DB ID ${this.extractEntityAttributes(entity).id}):`, error.message, error.stack);
+      // Do not re-throw here if we want the sync to continue with other entities
+      return false; // Indicate failure for this specific entity
     }
   }
   
-  /**
-   * Get SQL type for a value
-   * @param {*} value - Value to get type for
-   * @returns {*} - SQL type
-   */
   getSqlType(value) {
-    if (value === null || value === undefined) return sql.VarChar;
-    
+    if (value === null || value === undefined) return sql.NVarChar; // Default to NVarChar for NULLs to avoid type issues
     switch (typeof value) {
-      case 'string':
-        return sql.NVarChar;
-      case 'number':
-        return Number.isInteger(value) ? sql.Int : sql.Float;
-      case 'boolean':
-        return sql.Bit;
-      case 'object':
+      case "string": return sql.NVarChar;
+      case "number": return Number.isInteger(value) ? sql.Int : sql.Float;
+      case "boolean": return sql.Bit;
+      case "object":
         if (value instanceof Date) return sql.DateTimeOffset;
-        return sql.NVarChar;
-      default:
-        return sql.VarChar;
+        return sql.NVarChar; // For other objects, assume string representation or handle as JSON string if needed
+      default: return sql.NVarChar;
     }
   }
 
-  /**
-   * Sync entities from Picqer to database with pagination and rate limiting
-   * @returns {Promise<Object>} - Sync result
-   */
   async syncEntities() {
-    console.log(`Starting ${this.entityType} sync...`);
-    
+    console.log(`[${this.entityType}] Starting full syncEntities process...`);
+    const overallSyncId = `${this.entityType}_${Date.now()}`;
+    let savedCount = 0;
+    let failedCount = 0;
+    let totalFetched = 0;
+
     try {
-      // Get last sync date
+      console.log(`[${this.entityType}] Attempting to get last sync date.`);
       const lastSyncDate = await this.dbManager.getLastSyncDate(this.entityType);
-      console.log(`Last ${this.entityType} sync date: ${lastSyncDate.toISOString()}`);
+      console.log(`[${this.entityType}] Last sync date: ${lastSyncDate ? lastSyncDate.toISOString() : "N/A"}`);
       
-      // Create sync progress record
-      const syncId = `${this.entityType}_${Date.now()}`;
-      await this.dbManager.createSyncProgressRecord(syncId, this.entityType);
+      console.log(`[${this.entityType}] Creating sync progress record with ID: ${overallSyncId}`);
+      await this.dbManager.createSyncProgressRecord(overallSyncId, this.entityType);
+      console.log(`[${this.entityType}] Sync progress record created.`);
       
-      // Fetch entities from Picqer with pagination
-      const entities = await this.fetchEntities();
+      // Add params for incremental sync if lastSyncDate is available
+      const fetchParams = {};
+      // Picqer API uses 'updated_since' for some endpoints, 'added_since' for others, or specific date fields.
+      // This needs to be configured per entity if incremental sync is desired.
+      // For now, we are doing a full sync as per previous logic.
+      // if (lastSyncDate) {
+      //   fetchParams.updated_since = lastSyncDate.toISOString(); 
+      // }
+
+      console.log(`[${this.entityType}] Fetching all entities from Picqer...`);
+      const entities = await this.fetchEntities(fetchParams);
+      totalFetched = entities.length;
+      console.log(`[${this.entityType}] Total ${totalFetched} entities fetched from Picqer.`);
       
-      // Save entities to database
-      let count = 0;
-      for (const entity of entities) {
-        try {
-          await this.saveEntity(entity);
-          count++;
-          
-          // Update progress periodically (every 50 entities)
-          if (count % 50 === 0) {
-            console.log(`Progress: Synced ${count}/${entities.length} ${this.entityType} entities...`);
-          }
-        } catch (error) {
-          console.error(`Error saving ${this.entityType} entity:`, error.message);
+      if (totalFetched === 0) {
+        console.log(`[${this.entityType}] No entities to sync.`);
+      } else {
+        console.log(`[${this.entityType}] Starting to save ${totalFetched} entities to database...`);
+      }
+
+      for (let i = 0; i < totalFetched; i++) {
+        const entity = entities[i];
+        console.log(`[${this.entityType}] Processing entity ${i + 1}/${totalFetched} (Picqer ID: ${entity[this.idField] || "N/A"})`);
+        const success = await this.saveEntity(entity);
+        if (success) {
+          savedCount++;
+        } else {
+          failedCount++;
+        }
+        if ((i + 1) % 10 === 0 || (i + 1) === totalFetched) {
+          console.log(`[${this.entityType}] Progress: Processed ${i + 1}/${totalFetched} entities. Saved: ${savedCount}, Failed: ${failedCount}`);
         }
       }
       
-      // Update sync status
+      console.log(`[${this.entityType}] Updating final sync status in DB.`);
       await this.dbManager.updateSyncStatus(this.entityType);
+      console.log(`[${this.entityType}] Updating sync progress record ${overallSyncId} to 'completed'.`);
+      await this.dbManager.updateSyncProgressRecord(overallSyncId, "completed", savedCount);
       
-      // Update sync progress
-      await this.dbManager.updateSyncProgressRecord(syncId, 'completed', count);
-      
-      // Get API client statistics
       const stats = this.apiClient.getStats ? this.apiClient.getStats() : {};
-      
-      console.log(`${this.entityType} sync completed. Synced ${count} entities.`);
+      console.log(`[${this.entityType}] Sync completed. Fetched: ${totalFetched}, Saved: ${savedCount}, Failed: ${failedCount}.`);
       if (stats.rateLimitHits) {
-        console.log(`Rate limit statistics: ${stats.rateLimitHits} hits, ${stats.retries} retries`);
+        console.log(`[${this.entityType}] Rate limit stats: ${stats.rateLimitHits} hits, ${stats.retries} retries.`);
       }
       
       return {
         success: true,
-        message: `Synced ${count} ${this.entityType} entities successfully`,
-        count,
+        message: `Synced ${savedCount} of ${totalFetched} ${this.entityType} entities. Failed: ${failedCount}`,
+        fetched: totalFetched,
+        saved: savedCount,
+        failed: failedCount,
         stats
       };
     } catch (error) {
-      console.error(`Error syncing ${this.entityType}:`, error.message);
-      
-      // Update sync progress with error
+      console.error(`[${this.entityType}] CRITICAL ERROR in syncEntities process:`, error.message, error.stack);
       try {
-        const syncId = `${this.entityType}_${Date.now()}`;
-        await this.dbManager.updateSyncProgressRecord(syncId, 'failed', 0, error.message);
+        console.log(`[${this.entityType}] Attempting to update sync progress record ${overallSyncId} to 'failed'.`);
+        await this.dbManager.updateSyncProgressRecord(overallSyncId, "failed", savedCount, error.message);
       } catch (progressError) {
-        console.error('Error updating sync progress:', progressError.message);
+        console.error(`[${this.entityType}] Error updating sync progress for failed sync:`, progressError.message, progressError.stack);
       }
-      
       return {
         success: false,
         message: `Error syncing ${this.entityType}: ${error.message}`,
-        error: error.message
+        error: error.message,
+        fetched: totalFetched,
+        saved: savedCount,
+        failed: failedCount + (totalFetched - savedCount - failedCount) // Assume remaining are failed
       };
     }
   }
 
-  /**
-   * Get the count of entities in the database
-   * @returns {Promise<number>} - Entity count
-   */
   async getCount() {
+    console.log(`[${this.entityType}] Getting count from table ${this.tableName}`);
     try {
-      // Ensure pool is connected
       if (!this.dbManager.pool) {
+        console.log(`[${this.entityType}] DBManager pool not connected for getCount, attempting to connect.`);
         await this.dbManager.connect();
+         console.log(`[${this.entityType}] DBManager pool connected for getCount.`);
       }
-      
       const result = await this.dbManager.pool.request()
         .query(`SELECT COUNT(*) AS count FROM ${this.tableName}`);
-      
-      return result.recordset[0].count;
+      const count = result.recordset[0].count;
+      console.log(`[${this.entityType}] Count is ${count}.`);
+      return count;
     } catch (error) {
-      console.error(`Error getting ${this.entityType} count:`, error.message);
+      console.error(`[${this.entityType}] Error getting count:`, error.message, error.stack);
       return 0;
     }
   }
 }
 
-module.exports = EnhancedGenericEntityService;
+module.exports = GenericEntityService;
+
