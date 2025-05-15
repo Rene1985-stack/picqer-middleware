@@ -100,19 +100,28 @@ class DatabaseManager {
 
   getSqlTypeFromJs(value, columnName) {
     if (columnName && (columnName.toLowerCase() === "id" || columnName.toLowerCase().endsWith("id"))) {
-        return "NVARCHAR(255)"; 
+        return sql.NVarChar(255);
     }
-    if (value === null || value === undefined) return "NVARCHAR(MAX)";
+    if (value === null || value === undefined) return sql.NVarChar(sql.MAX);
+
     const jsType = typeof value;
     if (jsType === "string") {
-      if (value.length > 4000) return "NVARCHAR(MAX)";
-      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return "DATETIMEOFFSET";
-      return `NVARCHAR(${Math.max(255, value.length * 2)})`;
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return sql.DateTimeOffset;
+      const len = value.length;
+      if (len > 4000) return sql.NVarChar(sql.MAX);
+      return sql.NVarChar(Math.max(255, len)); // Ensure at least 255, or actual length
     }
-    if (jsType === "number") return Number.isInteger(value) ? "BIGINT" : "FLOAT";
-    if (jsType === "boolean") return "BIT";
-    if (value instanceof Date) return "DATETIMEOFFSET";
-    return "NVARCHAR(MAX)";
+    if (jsType === "number") {
+        if (Number.isInteger(value)) {
+            if (value >= -2147483648 && value <= 2147483647) return sql.Int;
+            return sql.BigInt;
+        }
+        return sql.Float;
+    }
+    if (jsType === "boolean") return sql.Bit;
+    if (value instanceof Date) return sql.DateTimeOffset;
+
+    return sql.NVarChar(sql.MAX);
   }
 
   async addColumn(tableName, columnName, jsValueForTypeInference, isNullable = true) {
