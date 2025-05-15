@@ -1,13 +1,13 @@
 /**
- * Enhanced Sync Manager with Entity-Specific Attributes
+ * Enhanced Sync Manager with Entity-Specific Attributes (using original filenames)
  * 
  * This manager orchestrates the synchronization of all entity types between Picqer and SQL database
  * with support for entity-specific attributes, pagination, and rate limiting.
  */
-const EnhancedGenericEntityService = require('./enhanced-generic-entity-service');
-const entityConfigs = require('./entity-configs-enhanced');
+const GenericEntityService = require("./generic-entity-service"); // Corrected import
+const entityConfigs = require("./entity-configs"); // Assuming user renamed entity-configs-enhanced.js to entity-configs.js
 
-class EnhancedSyncManager {
+class SyncManager {
   /**
    * Create a new enhanced sync manager
    * @param {Object} apiClient - Picqer API client
@@ -27,7 +27,7 @@ class EnhancedSyncManager {
    */
   initializeEntityServices() {
     for (const [entityType, config] of Object.entries(entityConfigs)) {
-      this.entityServices[entityType] = new EnhancedGenericEntityService(
+      this.entityServices[entityType] = new GenericEntityService( // Corrected class name
         config,
         this.apiClient,
         this.dbManager
@@ -66,7 +66,7 @@ class EnhancedSyncManager {
     
     return {
       success: true,
-      message: 'All entity types synced',
+      message: "All entity types synced",
       results
     };
   }
@@ -99,4 +99,4 @@ class EnhancedSyncManager {
   }
 }
 
-module.exports = EnhancedSyncManager;
+module.exports = SyncManager;
