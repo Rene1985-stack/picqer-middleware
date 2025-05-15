@@ -68,9 +68,16 @@ class DatabaseManager {
     await this.connect();
     const request = this.pool.request();
     const query = `
-      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + "." + TABLE_NAME), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_NAME = @tableName;
+      SELECT
+        c.COLUMN_NAME,
+        c.DATA_TYPE,
+        c.IS_NULLABLE,
+        CASE WHEN ic.object_id IS NOT NULL THEN 1 ELSE 0 END AS IS_IDENTITY
+      FROM INFORMATION_SCHEMA.COLUMNS c
+      LEFT JOIN sys.identity_columns ic
+        ON ic.object_id = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+        AND ic.name = c.COLUMN_NAME
+      WHERE c.TABLE_NAME = @tableName;
     `;
     request.input("tableName", sql.NVarChar, tableName);
     const result = await request.query(query);
