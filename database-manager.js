@@ -1,428 +1,320 @@
 /**
- * Database Manager
+ * Database Manager with Dynamic Schema Handling
  * 
- * Handles database connection and schema management for all entities.
+ * This manager handles database connections, schema initialization,
+ * dynamic column creation, and IDENTITY_INSERT for SQL Server.
  */
-const sql = require('mssql');
+const sql = require("mssql");
 
 class DatabaseManager {
-  /**
-   * Create a new database manager
-   * @param {Object} config - Database configuration
-   */
-  constructor(config) {
-    this.config = config;
+  constructor(dbConfig) {
+    this.dbConfig = dbConfig;
     this.pool = null;
+    this.connecting = false;
+    this.entitySchemasChecked = {}; // To track if schema (columns) for an entity table has been checked/created in this session
+    console.log("[DBManager] Initialized with config.");
   }
 
-  /**
-   * Connect to the database with retry logic
-   * @returns {Promise<sql.ConnectionPool>} - SQL connection pool
-   */
   async connect() {
-    if (!this.pool) {
-      let retries = 3;
-      let lastError = null;
-      
-      while (retries > 0) {
-        try {
-          console.log(`Attempting to connect to database (${retries} retries left)...`);
-          this.pool = await new sql.ConnectionPool(this.config).connect();
-          console.log('Database connection established successfully');
-          return this.pool;
-        } catch (error) {
-          lastError = error;
-          console.error(`Error connecting to database (retrying): ${error.message}`);
-          retries--;
-          
-          if (retries > 0) {
-            // Wait before retrying (exponential backoff)
-            const waitTime = (4 - retries) * 1000; // 1s, 2s, 3s
-            console.log(`Waiting ${waitTime}ms before retrying...`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
+    if (this.pool && this.pool.connected) {
+      // console.log("[DBManager] Already connected.");
+      return this.pool;
+    }
+    if (this.connecting) {
+      console.log("[DBManager] Connection attempt in progress, waiting...");
+      return new Promise((resolve, reject) => {
+        const interval = setInterval(() => {
+          if (!this.connecting) {
+            clearInterval(interval);
+            if (this.pool && this.pool.connected) {
+              resolve(this.pool);
+            } else {
+              reject(new Error("[DBManager] Failed to connect after waiting."));
+            }
           }
-        }
-      }
-      
-      console.error('Failed to connect to database after multiple attempts');
-      throw lastError;
+        }, 100);
+      });
     }
-    
-    return this.pool;
-  }
-
-  /**
-   * Initialize database schema for all entities
-   * @returns {Promise<boolean>} - Success status
-   */
-  async initializeSchema() {
+    this.connecting = true;
     try {
-      console.log('Initializing database schema...');
-      
-      // Ensure pool is connected
-      if (!this.pool) {
-        await this.connect();
-      }
-      
-      // Check if SyncProgress table exists and get its columns
-      const tableResult = await this.pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncProgress'
-      `);
-      
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
-      
-      if (syncTableExists) {
-        // Get column information
-        const columnResult = await this.pool.request().query(`
-          SELECT COLUMN_NAME 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncProgress'
-        `);
-        
-        const columns = columnResult.recordset.map(record => record.COLUMN_NAME);
-        console.log('Existing SyncProgress columns:', columns);
-        
-        // Check if we need to add the count column
-        if (!columns.includes('count')) {
-          try {
-            await this.pool.request().query(`
-              ALTER TABLE SyncProgress ADD count INT DEFAULT 0
-            `);
-            console.log('Added count column to SyncProgress table');
-          } catch (error) {
-            console.error('Error adding count column:', error.message);
-          }
-        }
-      } else {
-        // Create SyncProgress table
-        await this.pool.request().query(`
-          CREATE TABLE SyncProgress (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            sync_id VARCHAR(100) NOT NULL,
-            entity_type VARCHAR(50) NOT NULL,
-            status VARCHAR(20) NOT NULL,
-            started_at DATETIMEOFFSET NOT NULL DEFAULT GETDATE(),
-            ended_at DATETIMEOFFSET NULL,
-            last_updated DATETIMEOFFSET NOT NULL DEFAULT GETDATE(),
-            count INT DEFAULT 0,
-            error NVARCHAR(MAX) NULL
-          );
-          PRINT 'Created SyncProgress table';
-        `);
-      }
-      
-      // Create SyncStatus table if it doesn't exist
-      await this.pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncStatus')
-        BEGIN
-          CREATE TABLE SyncStatus (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            entity_type VARCHAR(50) NOT NULL,
-            entity_name VARCHAR(50) NOT NULL,
-            last_sync_date DATETIMEOFFSET NOT NULL DEFAULT GETDATE()
-          );
-          PRINT 'Created SyncStatus table';
-        END
-        ELSE
-        BEGIN
-          PRINT 'SyncStatus table already exists';
-        END
-      `);
-      
-      console.log('✅ Core tables initialized successfully');
-      return true;
+      console.log("[DBManager] Attempting to connect to SQL Server...");
+      this.pool = await new sql.ConnectionPool(this.dbConfig).connect();
+      console.log("[DBManager] Successfully connected to SQL Server.");
+      this.pool.on("error", err => {
+        console.error("[DBManager] SQL Pool Error:", err.message, err.stack);
+        this.pool = null; // Reset pool on error
+      });
+      this.connecting = false;
+      return this.pool;
     } catch (error) {
-      console.error('❌ Error initializing database schema:', error.message);
+      this.connecting = false;
+      console.error("[DBManager] Error connecting to SQL Server:", error.message, error.stack);
+      this.pool = null;
       throw error;
     }
   }
 
-  /**
-   * Initialize entity table schema
-   * @param {Object} entityConfig - Entity configuration
-   * @returns {Promise<boolean>} - Success status
-   */
-  async initializeEntitySchema(entityConfig) {
-    try {
-      console.log(`Initializing schema for ${entityConfig.tableName}...`);
-      
-      // Ensure pool is connected
-      if (!this.pool) {
-        await this.connect();
-      }
-      
-      // Create entity table if it doesn't exist
-      await this.pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${entityConfig.tableName}')
-        BEGIN
-          CREATE TABLE ${entityConfig.tableName} (
-            ${entityConfig.idField} VARCHAR(50) PRIMARY KEY,
-            name NVARCHAR(255) NULL,
-            created DATETIMEOFFSET NULL DEFAULT GETDATE(),
-            updated DATETIMEOFFSET NULL DEFAULT GETDATE(),
-            data NVARCHAR(MAX) NULL,
-            last_sync_date DATETIMEOFFSET NULL DEFAULT GETDATE()
-          );
-          PRINT 'Created ${entityConfig.tableName} table';
-        END
-        ELSE
-        BEGIN
-          -- Check if last_sync_date column exists and add it if it doesn't
-          IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${entityConfig.tableName}' AND COLUMN_NAME = 'last_sync_date')
-          BEGIN
-            ALTER TABLE ${entityConfig.tableName} ADD last_sync_date DATETIMEOFFSET NULL DEFAULT GETDATE();
-            PRINT 'Added last_sync_date column to ${entityConfig.tableName} table';
-          END
-          
-          PRINT '${entityConfig.tableName} table already exists';
-        END
-      `);
-      
-      // Ensure entity has a record in SyncStatus
-      await this.pool.request()
-        .input('entityType', sql.VarChar, entityConfig.entityType)
-        .input('entityName', sql.VarChar, entityConfig.entityType)
-        .input('lastSyncDate', sql.DateTimeOffset, new Date(0)) // Start with epoch time
-        .query(`
-          IF NOT EXISTS (SELECT * FROM SyncStatus WHERE entity_type = @entityType)
-          BEGIN
-            INSERT INTO SyncStatus (entity_type, entity_name, last_sync_date)
-            VALUES (@entityType, @entityName, @lastSyncDate);
-            PRINT 'Added initial record for ${entityConfig.entityType} in SyncStatus';
-          END
-          ELSE
-          BEGIN
-            PRINT '${entityConfig.entityType} record already exists in SyncStatus';
-          END
-        `);
-      
-      console.log(`✅ Schema for ${entityConfig.tableName} initialized successfully`);
-      return true;
-    } catch (error) {
-      console.error(`❌ Error initializing schema for ${entityConfig.tableName}:`, error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Get the last sync date for an entity type
-   * @param {string} entityType - Entity type
-   * @returns {Promise<Date>} - Last sync date
-   */
-  async getLastSyncDate(entityType) {
-    try {
-      // Ensure pool is connected
-      if (!this.pool) {
-        await this.connect();
-      }
-      
-      const result = await this.pool.request()
-        .input('entityType', sql.VarChar, entityType)
-        .query(`
-          SELECT last_sync_date 
-          FROM SyncStatus 
-          WHERE entity_type = @entityType
-        `);
-      
-      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
-        return new Date(result.recordset[0].last_sync_date);
-      }
-      
-      // Return a date 30 days ago as a fallback
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return thirtyDaysAgo;
-    } catch (error) {
-      console.error(`Error getting last sync date for ${entityType}:`, error.message);
-      
-      // Return a date 30 days ago as a fallback
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return thirtyDaysAgo;
-    }
-  }
-
-  /**
-   * Update sync status for an entity type
-   * @param {string} entityType - Entity type
-   * @returns {Promise<boolean>} - Success status
-   */
-  async updateSyncStatus(entityType) {
-    try {
-      // Ensure pool is connected
-      if (!this.pool) {
-        await this.connect();
-      }
-      
-      await this.pool.request()
-        .input('entityType', sql.VarChar, entityType)
-        .input('lastSyncDate', sql.DateTimeOffset, new Date())
-        .query(`
-          UPDATE SyncStatus 
-          SET last_sync_date = @lastSyncDate 
-          WHERE entity_type = @entityType
-        `);
-      
-      console.log(`Updated sync status for ${entityType}`);
-      return true;
-    } catch (error) {
-      console.error(`Error updating sync status for ${entityType}:`, error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Create a sync progress record
-   * @param {string} syncId - Unique sync ID
-   * @param {string} entityType - Entity type
-   * @returns {Promise<boolean>} - Success status
-   */
-  async createSyncProgressRecord(syncId, entityType) {
-    try {
-      // Ensure pool is connected
-      if (!this.pool) {
-        await this.connect();
-      }
-      
-      // Get column information to determine correct column names
-      const columnResult = await this.pool.request().query(`
-        SELECT COLUMN_NAME 
-        FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_NAME = 'SyncProgress'
-      `);
-      
-      const columns = columnResult.recordset.map(record => record.COLUMN_NAME);
-      
-      // Determine the correct column names
-      const startTimeColumn = columns.includes('started_at') ? 'started_at' : 'start_time';
-      
-      // Build the query dynamically based on available columns
-      let query = `
-        INSERT INTO SyncProgress (sync_id, entity_type, status, ${startTimeColumn}
-      `;
-      
-      // Add last_updated if it exists
-      if (columns.includes('last_updated')) {
-        query += `, last_updated`;
-      }
-      
-      query += `) VALUES (@syncId, @entityType, @status, @startTime`;
-      
-      // Add last_updated value if it exists
-      if (columns.includes('last_updated')) {
-        query += `, @lastUpdated`;
-      }
-      
-      query += `)`;
-      
-      const request = this.pool.request()
-        .input('syncId', sql.VarChar, syncId)
-        .input('entityType', sql.VarChar, entityType)
-        .input('status', sql.VarChar, 'in_progress')
-        .input('startTime', sql.DateTimeOffset, new Date());
-      
-      // Add last_updated parameter if needed
-      if (columns.includes('last_updated')) {
-        request.input('lastUpdated', sql.DateTimeOffset, new Date());
-      }
-      
-      await request.query(query);
-      
-      console.log(`Created sync progress record for ${entityType} with ID ${syncId}`);
-      return true;
-    } catch (error) {
-      console.error(`Error creating sync progress record for ${entityType}:`, error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Update a sync progress record
-   * @param {string} syncId - Unique sync ID
-   * @param {string} status - Sync status
-   * @param {number} count - Number of entities synced
-   * @param {string} error - Error message (if any)
-   * @returns {Promise<boolean>} - Success status
-   */
-  async updateSyncProgressRecord(syncId, status, count, error = null) {
-    try {
-      // Ensure pool is connected
-      if (!this.pool) {
-        await this.connect();
-      }
-      
-      // Get column information to determine correct column names
-      const columnResult = await this.pool.request().query(`
-        SELECT COLUMN_NAME 
-        FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_NAME = 'SyncProgress'
-      `);
-      
-      const columns = columnResult.recordset.map(record => record.COLUMN_NAME);
-      
-      // Determine the correct column names
-      const endTimeColumn = columns.includes('ended_at') ? 'ended_at' : 'end_time';
-      const countColumn = columns.includes('count') ? 'count' : null;
-      
-      // Build the query dynamically based on available columns
-      let query = `
-        UPDATE SyncProgress
-        SET status = @status,
-            ${endTimeColumn} = @endTime
-      `;
-      
-      // Add last_updated if it exists
-      if (columns.includes('last_updated')) {
-        query += `, last_updated = @lastUpdated`;
-      }
-      
-      // Add count column if it exists
-      if (countColumn) {
-        query += `, ${countColumn} = @count`;
-      }
-      
-      // Add error column if it exists
-      if (columns.includes('error')) {
-        query += `, error = @error`;
-      }
-      
-      query += ` WHERE sync_id = @syncId`;
-      
-      const request = this.pool.request()
-        .input('syncId', sql.VarChar, syncId)
-        .input('status', sql.VarChar, status)
-        .input('endTime', sql.DateTimeOffset, new Date())
-        .input('count', sql.Int, count)
-        .input('error', sql.NVarChar, error);
-      
-      // Add last_updated parameter if needed
-      if (columns.includes('last_updated')) {
-        request.input('lastUpdated', sql.DateTimeOffset, new Date());
-      }
-      
-      await request.query(query);
-      
-      console.log(`Updated sync progress record ${syncId} with status ${status}`);
-      return true;
-    } catch (error) {
-      console.error(`Error updating sync progress record ${syncId}:`, error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Close the database connection
-   * @returns {Promise<void>}
-   */
-  async close() {
-    if (this.pool) {
+  async disconnect() {
+    if (this.pool && this.pool.connected) {
+      console.log("[DBManager] Disconnecting from SQL Server...");
       await this.pool.close();
       this.pool = null;
-      console.log('Database connection closed');
+      console.log("[DBManager] Successfully disconnected.");
+    }
+  }
+
+  async getTableSchema(tableName) {
+    await this.connect();
+    const request = this.pool.request();
+    const query = `
+      SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_NAME = @tableName;
+    `;
+    request.input("tableName", sql.NVarChar, tableName);
+    const result = await request.query(query);
+    return result.recordset.map(col => ({
+      name: col.COLUMN_NAME,
+      type: col.DATA_TYPE,
+      isNullable: col.IS_NULLABLE === "YES",
+      isIdentity: col.IS_IDENTITY === 1
+    }));
+  }
+
+  async columnExists(tableName, columnName) {
+    const schema = await this.getTableSchema(tableName);
+    return schema.some(col => col.name.toLowerCase() === columnName.toLowerCase());
+  }
+
+  getSqlTypeFromJs(value, columnName) {
+    if (columnName && (columnName.toLowerCase() === "id" || columnName.toLowerCase().endsWith("id"))) {
+        // Picqer IDs can be long, ensure NVarChar for IDs
+        return "NVARCHAR(255)"; 
+    }
+    if (value === null || value === undefined) return "NVARCHAR(MAX)"; // Default for nulls
+    const jsType = typeof value;
+    if (jsType === "string") {
+      if (value.length > 4000) return "NVARCHAR(MAX)";
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return "DATETIMEOFFSET";
+      return `NVARCHAR(${Math.max(255, value.length * 2)})`; // Dynamic length for strings
+    }
+    if (jsType === "number") return Number.isInteger(value) ? "BIGINT" : "FLOAT"; // Use BIGINT for integers
+    if (jsType === "boolean") return "BIT";
+    if (value instanceof Date) return "DATETIMEOFFSET";
+    return "NVARCHAR(MAX)"; // Default for complex types or unknown
+  }
+
+  async addColumn(tableName, columnName, jsValueForTypeInference) {
+    await this.connect();
+    if (await this.columnExists(tableName, columnName)) {
+      // console.log(`[DBManager] Column ${columnName} already exists in ${tableName}.`);
+      return;
+    }
+    const sqlDataType = this.getSqlTypeFromJs(jsValueForTypeInference, columnName);
+    const request = this.pool.request();
+    const query = `ALTER TABLE ${tableName} ADD ${columnName} ${sqlDataType} NULL;`; // Add new columns as NULLable
+    console.log(`[DBManager] Adding column ${columnName} (${sqlDataType}) to table ${tableName}... Query: ${query}`);
+    try {
+        await request.query(query);
+        console.log(`[DBManager] Successfully added column ${columnName} to ${tableName}.`);
+    } catch (error) {
+        console.error(`[DBManager] Error adding column ${columnName} to ${tableName}:`, error.message, error.stack);
+        throw error;
+    }
+  }
+  
+  async ensureColumnsExist(tableName, dataObject) {
+    // console.log(`[DBManager] Ensuring columns for ${tableName} based on data:`, dataObject);
+    if (!dataObject || typeof dataObject !== "object") return;
+    for (const key in dataObject) {
+        if (Object.prototype.hasOwnProperty.call(dataObject, key)) {
+            // Sanitize column name (basic example, might need more robust sanitization)
+            const columnName = key.replace(/[^a-zA-Z0-9_]/g, "_"); 
+            if (columnName.length === 0) continue;
+
+            // Check if column exists, if not, add it
+            if (!await this.columnExists(tableName, columnName)) {
+                await this.addColumn(tableName, columnName, dataObject[key]);
+            }
+        }
+    }
+    this.entitySchemasChecked[tableName] = true; // Mark as checked for this session
+  }
+
+  async executeWithIdentityInsert(tableName, operation) {
+    await this.connect();
+    const request = this.pool.request();
+    let identityInsertRequired = false;
+    try {
+        const schema = await this.getTableSchema(tableName);
+        const idColumn = schema.find(col => col.name.toLowerCase() === "id" && col.isIdentity);
+        if (idColumn) {
+            identityInsertRequired = true;
+            console.log(`[DBManager] Identity column detected on ${tableName}. Enabling IDENTITY_INSERT.`);
+            await request.query(`SET IDENTITY_INSERT ${tableName} ON;`);
+        }
+        const result = await operation(request); // Pass request to the operation
+        return result;
+    } catch (error) {
+        console.error(`[DBManager] Error during executeWithIdentityInsert for ${tableName}:`, error.message, error.stack);
+        throw error; // Re-throw to be caught by calling function
+    } finally {
+        if (identityInsertRequired) {
+            try {
+                console.log(`[DBManager] Disabling IDENTITY_INSERT for ${tableName}.`);
+                // Use a new request for the final SET OFF, in case the original request in operation failed
+                await this.pool.request().query(`SET IDENTITY_INSERT ${tableName} OFF;`);
+            } catch (setOffError) {
+                console.error(`[DBManager] CRITICAL: Failed to disable IDENTITY_INSERT for ${tableName}:`, setOffError.message, setOffError.stack);
+                // This is a critical error, as it leaves IDENTITY_INSERT ON for the connection.
+            }
+        }
+    }
+  }
+
+  // --- SyncProgress Table Methods (kept from previous versions for consistency) ---
+  async initializeSyncProgressTable() {
+    await this.connect();
+    const query = `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SyncProgress]') AND type in (N'U'))
+      BEGIN
+        CREATE TABLE [dbo].[SyncProgress](
+          [id] [int] IDENTITY(1,1) NOT NULL,
+          [sync_id] [varchar](255) NOT NULL UNIQUE,
+          [entity_type] [varchar](100) NOT NULL,
+          [status] [varchar](50) NOT NULL,
+          [start_time] [datetimeoffset](7) NULL,
+          [end_time] [datetimeoffset](7) NULL,
+          [records_synced] [int] NULL,
+          [error_message] [nvarchar](max) NULL,
+          [last_updated] [datetimeoffset](7) DEFAULT SYSDATETIMEOFFSET(),
+          CONSTRAINT [PK_SyncProgress] PRIMARY KEY CLUSTERED ([id] ASC)
+        );
+        PRINT 'SyncProgress table created.';
+      END
+      ELSE
+      BEGIN
+        -- Ensure all columns exist, add if not (example for last_updated)
+        IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'last_updated' AND Object_ID = Object_ID(N'SyncProgress'))
+        BEGIN
+            ALTER TABLE SyncProgress ADD last_updated DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET();
+            PRINT 'Added last_updated to SyncProgress table.';
+        END
+        IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'start_time' AND Object_ID = Object_ID(N'SyncProgress'))
+        BEGIN
+            ALTER TABLE SyncProgress ADD start_time DATETIMEOFFSET NULL;
+            PRINT 'Added start_time to SyncProgress table.';
+        END
+         IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'end_time' AND Object_ID = Object_ID(N'SyncProgress'))
+        BEGIN
+            ALTER TABLE SyncProgress ADD end_time DATETIMEOFFSET NULL;
+            PRINT 'Added end_time to SyncProgress table.';
+        END
+        IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'records_synced' AND Object_ID = Object_ID(N'SyncProgress'))
+        BEGIN
+            ALTER TABLE SyncProgress ADD records_synced INT NULL;
+            PRINT 'Added records_synced to SyncProgress table.';
+        END
+         IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'error_message' AND Object_ID = Object_ID(N'SyncProgress'))
+        BEGIN
+            ALTER TABLE SyncProgress ADD error_message NVARCHAR(MAX) NULL;
+            PRINT 'Added error_message to SyncProgress table.';
+        END
+      END
+    `;
+    try {
+      await this.pool.request().query(query);
+      console.log("[DBManager] SyncProgress table initialized/verified.");
+    } catch (error) {
+      console.error("[DBManager] Error initializing SyncProgress table:", error.message, error.stack);
+      throw error;
+    }
+  }
+
+  async createSyncProgressRecord(syncId, entityType) {
+    await this.connect();
+    const query = `
+      INSERT INTO SyncProgress (sync_id, entity_type, status, start_time, last_updated)
+      VALUES (@syncId, @entityType, 'in_progress', SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+    `;
+    const request = this.pool.request();
+    request.input("syncId", sql.VarChar, syncId);
+    request.input("entityType", sql.VarChar, entityType);
+    await request.query(query);
+  }
+
+  async updateSyncProgressRecord(syncId, status, recordsSynced, errorMessage = null) {
+    await this.connect();
+    const query = `
+      UPDATE SyncProgress 
+      SET status = @status, end_time = SYSDATETIMEOFFSET(), records_synced = @recordsSynced, error_message = @errorMessage, last_updated = SYSDATETIMEOFFSET()
+      WHERE sync_id = @syncId;
+    `;
+    const request = this.pool.request();
+    request.input("syncId", sql.VarChar, syncId);
+    request.input("status", sql.VarChar, status);
+    request.input("recordsSynced", sql.Int, recordsSynced);
+    request.input("errorMessage", sql.NVarChar, errorMessage);
+    await request.query(query);
+  }
+  
+  async getLastSyncDate(entityType) {
+    // This method might need adjustment if we are always doing full syncs
+    // or if the definition of "last sync" changes with dynamic schema.
+    // For now, it reflects the last successful completion.
+    await this.connect();
+    const query = `
+        SELECT MAX(end_time) as lastSyncTime 
+        FROM SyncProgress 
+        WHERE entity_type = @entityType AND status = 'completed';
+    `;
+    const request = this.pool.request();
+    request.input("entityType", sql.VarChar, entityType);
+    const result = await request.query(query);
+    return result.recordset[0] ? result.recordset[0].lastSyncTime : null;
+  }
+
+  async updateSyncStatus(entityType) { // This seems redundant if SyncProgress is the main tracker
+    // console.log(`[DBManager] updateSyncStatus called for ${entityType}, but SyncProgress is primary.`);
+    return Promise.resolve();
+  }
+
+  // Method to initialize entity table (basic structure, dynamic columns added later)
+  async initializeEntitySchema(entityConfig) {
+    await this.connect();
+    const { tableName, idField, nameField } = entityConfig;
+    // Ensure primary ID and a name column exist, other columns will be added dynamically
+    const idColName = idField.split(".").pop().replace(/[^a-zA-Z0-9_]/g, "_") || "id";
+    const nameColName = nameField.split(".").pop().replace(/[^a-zA-Z0-9_]/g, "_") || "name";
+
+    const createTableQuery = `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tableName}]') AND type in (N'U'))
+      BEGIN
+        CREATE TABLE [dbo].[${tableName}](
+          [${idColName}] NVARCHAR(255) NOT NULL PRIMARY KEY, 
+          [${nameColName}] NVARCHAR(MAX) NULL
+          -- Other columns will be added dynamically by ensureColumnsExist
+        );
+        PRINT '${tableName} table created with basic schema (id, name).';
+      END
+    `;
+    try {
+      await this.pool.request().query(createTableQuery);
+      console.log(`[DBManager] Basic schema for ${tableName} initialized/verified.`);
+      // Now ensure these base columns actually exist if table was already there
+      if (!await this.columnExists(tableName, idColName)) {
+          await this.addColumn(tableName, idColName, "string_id_example");
+      }
+      if (!await this.columnExists(tableName, nameColName)) {
+          await this.addColumn(tableName, nameColName, "example_name");
+      }
+
+    } catch (error) {
+      console.error(`[DBManager] Error initializing basic schema for ${tableName}:`, error.message, error.stack);
+      throw error;
     }
   }
 }
 
 module.exports = DatabaseManager;
+
