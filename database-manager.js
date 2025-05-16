@@ -1,9 +1,8 @@
 /**
- * Enhanced Database Manager with Transaction-Based Schema Handling
+ * Enhanced Database Manager with Support for Identity Column Handling
  * 
  * This manager handles database connections, schema initialization,
- * dynamic column creation, IDENTITY_INSERT for SQL Server, and robustly manages
- * the SyncProgress table schema.
+ * dynamic column creation, and supports the two-step process for identity columns.
  */
 const sql = require("mssql");
 
@@ -182,58 +181,6 @@ class DatabaseManager {
         }
     }
     this.entitySchemasChecked[tableName] = true;
-  }
-
-  async executeWithIdentityInsert(tableName, operation) {
-    await this.connect();
-    let identityInsertRequired = false;
-    
-    // Create a transaction to ensure all commands run in the same session
-    const transaction = new sql.Transaction(this.pool);
-    
-    try {
-        // Start the transaction
-        await transaction.begin();
-        
-        // Create a request bound to the transaction
-        const request = new sql.Request(transaction);
-        
-        // Check if the table has an identity column
-        const schema = await this.getTableSchema(tableName);
-        const idColumn = schema.find(col => col.name.toLowerCase() === "id" && col.isIdentity);
-        
-        if (idColumn) {
-            identityInsertRequired = true;
-            console.log(`[DBManager] Identity column detected on ${tableName}. Enabling IDENTITY_INSERT within transaction.`);
-            await request.query(`SET IDENTITY_INSERT ${tableName} ON;`);
-        }
-        
-        // Execute the operation with the transaction-bound request
-        const result = await operation(request);
-        
-        // If we get here without errors, commit the transaction
-        await transaction.commit();
-        console.log(`[DBManager] Transaction committed successfully for ${tableName}.`);
-        
-        return result;
-    } catch (error) {
-        // If there's an error, roll back the transaction
-        try {
-            await transaction.rollback();
-            console.log(`[DBManager] Transaction rolled back due to error for ${tableName}.`);
-        } catch (rollbackError) {
-            console.error(`[DBManager] Error rolling back transaction for ${tableName}:`, rollbackError.message);
-        }
-        
-        console.error(`[DBManager] Error during executeWithIdentityInsert for ${tableName}:`, error.message, error.stack);
-        throw error;
-    } finally {
-        // No need to explicitly disable IDENTITY_INSERT as it's scoped to the transaction
-        // and will be automatically disabled when the transaction ends
-        if (identityInsertRequired) {
-            console.log(`[DBManager] IDENTITY_INSERT automatically disabled when transaction ended for ${tableName}.`);
-        }
-    }
   }
 
   async initializeSyncProgressTable() {
@@ -421,23 +368,58 @@ class DatabaseManager {
         await transaction.begin();
         const request = new sql.Request(transaction);
         
-        const createTableQuery = `
-          IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tableName}]') AND type in (N'U'))
-          BEGIN
-            CREATE TABLE [dbo].[${tableName}](
-              [${idColName}] NVARCHAR(255) NOT NULL PRIMARY KEY, 
-              [${nameColName}] NVARCHAR(MAX) NULL,
-              [last_sync_date] DATETIMEOFFSET NULL,
-              [data] NVARCHAR(MAX) NULL
-            );
-            PRINT '${tableName} table created with schema (id, ${nameColName}, last_sync_date, data).';
-          END
-        `;
+        // Check if table exists
+        const tableExistsResult = await request.query(`
+            SELECT OBJECT_ID(N'[dbo].[${tableName}]') AS TableObjectId;
+        `);
         
-        await request.query(createTableQuery);
+        const tableExists = tableExistsResult.recordset[0].TableObjectId !== null;
+        
+        if (!tableExists) {
+            // Create table with schema that supports both identity and non-identity approaches
+            const createTableQuery = `
+                CREATE TABLE [dbo].[${tableName}](
+                    [${idColName}] INT IDENTITY(1,1) PRIMARY KEY,
+                    [picqer_id] NVARCHAR(255) NOT NULL UNIQUE,
+                    [${nameColName}] NVARCHAR(MAX) NULL,
+                    [last_sync_date] DATETIMEOFFSET NULL,
+                    [data] NVARCHAR(MAX) NULL
+                );
+            `;
+            
+            await request.query(createTableQuery);
+            console.log(`[DBManager] Created table ${tableName} with identity column 'id' and 'picqer_id' for Picqer IDs.`);
+        } else {
+            // Table exists, check if it has the necessary columns
+            const schema = await this.getTableSchema(tableName);
+            
+            // Check if id column exists and is an identity column
+            const idColumn = schema.find(col => col.name.toLowerCase() === "id");
+            const hasIdentityColumn = idColumn && idColumn.isIdentity;
+            
+            if (hasIdentityColumn) {
+                console.log(`[DBManager] Table ${tableName} has identity column 'id'.`);
+                
+                // Check if picqer_id column exists
+                const picqerIdExists = schema.some(col => col.name.toLowerCase() === "picqer_id");
+                
+                if (!picqerIdExists) {
+                    console.log(`[DBManager] Adding 'picqer_id' column to ${tableName} for identity column handling.`);
+                    await request.query(`
+                        ALTER TABLE ${tableName} ADD picqer_id NVARCHAR(255) NULL;
+                        CREATE UNIQUE INDEX IX_${tableName}_picqer_id ON ${tableName}(picqer_id) WHERE picqer_id IS NOT NULL;
+                    `);
+                    console.log(`[DBManager] Added 'picqer_id' column and unique index to ${tableName}.`);
+                }
+            } else if (idColumn) {
+                console.log(`[DBManager] Table ${tableName} has non-identity 'id' column.`);
+            } else {
+                console.log(`[DBManager] Table ${tableName} exists but doesn't have an 'id' column. This is unusual.`);
+            }
+        }
+        
         await transaction.commit();
-        
-        console.log(`[DBManager] Initialized entity schema for ${tableName} with ID field '${idColName}' and name field '${nameColName}'`);
+        console.log(`[DBManager] Initialized entity schema for ${tableName}.`);
         return true;
     } catch (error) {
         try {
