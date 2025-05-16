@@ -1,26 +1,22 @@
-// metrics-display.js - Updated to remove problematic batch-specific endpoints
-// UPDATED: Replaced direct API calls with a more compatible approach
+/**
+ * Metrics Display for Picqer Middleware Dashboard
+ * Enhanced to support identity column handling and improved metrics display
+ */
 
 document.addEventListener('DOMContentLoaded', function() {
-    // API endpoints - UPDATED to use entity-specific sync endpoints instead of batch metrics endpoints
-    const API_BASE = window.location.origin;
-    const ENDPOINTS = {
-        // Removed problematic direct batch metrics endpoints
-        // batchMetrics: `${API_BASE}/api/batches/metrics`,
-        // batchProductivity: `${API_BASE}/api/batches/productivity`,
-        // batchStats: `${API_BASE}/api/batches/stats`,
-        
-        // Use standard sync endpoints instead
-        syncStatus: `${API_BASE}/api/status`,
-        syncStats: `${API_BASE}/api/stats`,
-        syncBatches: `${API_BASE}/api/sync/batches`
+    // Use the API URL Helper for consistent endpoint access
+    const API_URLS = window.API_URLS || {
+        // Fallback if API_URLS is not defined
+        STATUS: '/api/status',
+        STATS: '/api/stats',
+        SYNC_BATCHES: '/api/sync/batches'
     };
     
     // Initialize batch metrics display
     initializeBatchMetricsDisplay();
     
     // Set up polling for metrics updates - reduced frequency to avoid overloading
-    setInterval(updateBatchMetrics, 60000); // Changed from 30s to 60s
+    setInterval(updateBatchMetrics, 60000); // 60s interval
     
     // Initialize batch metrics display
     function initializeBatchMetricsDisplay() {
@@ -65,10 +61,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Update batch metrics - UPDATED to use standard sync endpoints
+    // Update batch metrics - Enhanced to handle identity column data
     function updateBatchMetrics() {
         // Get batch data from standard sync stats endpoint
-        fetch(ENDPOINTS.syncStats)
+        fetch(API_URLS.STATS)
             .then(response => response.json())
             .then(data => {
                 if (data.success && data.stats && data.stats.batches) {
@@ -82,6 +78,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Create simulated productivity data
                     const simulatedProductivity = createSimulatedProductivityData();
                     displayBatchProductivity(simulatedProductivity);
+                    
+                    // Add note about identity column handling if applicable
+                    if (data.stats.batches.identityColumnHandling) {
+                        displayIdentityColumnNote();
+                    }
                 } else {
                     console.error('Error: Invalid stats data format');
                     displayBatchStatsError();
@@ -124,7 +125,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
     
-    // Display batch metrics - UPDATED to handle simulated data
+    // Display batch metrics - Enhanced for identity column handling
     function displayBatchMetrics(data) {
         const metricsGrid = document.getElementById('batches-metrics-grid');
         if (!metricsGrid) return;
@@ -155,7 +156,28 @@ document.addEventListener('DOMContentLoaded', function() {
         createMetricCard(metricsGrid, 'Completed Batches', data.completedBatches || 0);
     }
     
-    // Display batch productivity - UPDATED to handle simulated data
+    // Display identity column handling note
+    function displayIdentityColumnNote() {
+        const metricsGrid = document.getElementById('batches-metrics-grid');
+        if (!metricsGrid) return;
+        
+        // Check if note already exists
+        if (document.querySelector('.identity-column-notice')) return;
+        
+        // Add note about identity column handling
+        const identityNote = document.createElement('div');
+        identityNote.className = 'identity-column-notice';
+        identityNote.innerHTML = 'Note: Using enhanced identity column handling for database compatibility.';
+        identityNote.style.gridColumn = '1 / -1';
+        identityNote.style.padding = '10px';
+        identityNote.style.backgroundColor = '#d4edda';
+        identityNote.style.color = '#155724';
+        identityNote.style.borderRadius = '4px';
+        identityNote.style.marginTop = '15px';
+        metricsGrid.appendChild(identityNote);
+    }
+    
+    // Display batch productivity
     function displayBatchProductivity(data) {
         if (!data || !data.productivity) return;
         
@@ -186,7 +208,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Display batch statistics - UPDATED to use standard stats data
+    // Display batch statistics - Enhanced for identity column handling
     function displayBatchStats(stats) {
         if (!stats) return;
         
