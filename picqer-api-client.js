@@ -2,6 +2,7 @@
  * Enhanced Picqer API Client with Pagination and Rate Limiting
  * 
  * This client handles API requests to Picqer with built-in pagination and rate limiting support.
+ * Updated with best practices from various implementations for improved reliability.
  */
 const axios = require('axios');
 
@@ -26,6 +27,12 @@ class PicqerApiClient {
       rateLimitHits: 0,
       retries: 0
     };
+    
+    console.log('[PicqerApiClient] Initialized with:');
+    console.log('[PicqerApiClient] Base URL:', this.baseUrl);
+    console.log('[PicqerApiClient] API Key (first 5 chars):', this.apiKey ? (this.apiKey.substring(0, 5) + '...') : 'Not provided');
+    console.log('[PicqerApiClient] Wait on rate limit:', this.waitOnRateLimit);
+    console.log('[PicqerApiClient] Sleep time on rate limit hit:', this.sleepTimeOnRateLimitHit, 'ms');
   }
 
   /**
@@ -67,14 +74,14 @@ class PicqerApiClient {
         // Increment offset for next page
         if (hasMoreResults) {
           offset += 100;
-          console.log(`Fetched 100 results, continuing with offset ${offset}...`);
+          console.log(`[PicqerApiClient] Fetched 100 results, continuing with offset ${offset}...`);
         }
       }
       
-      // Return all results
+      console.log(`[PicqerApiClient] Completed paginated request to ${endpoint}, fetched ${allResults.length} total items`);
       return allResults;
     } catch (error) {
-      console.error(`Error in GET request to ${endpoint}:`, error.message);
+      console.error(`[PicqerApiClient] Error in GET request to ${endpoint}:`, error.message);
       throw error;
     }
   }
@@ -167,7 +174,7 @@ class PicqerApiClient {
       // Handle rate limiting
       if (error.response && error.response.status === 429) {
         this.stats.rateLimitHits++;
-        console.warn('Rate limit hit, backing off...');
+        console.warn('[PicqerApiClient] Rate limit hit, backing off...');
         
         if (this.waitOnRateLimit) {
           // Put the request back in the queue with increased retry count
@@ -210,7 +217,12 @@ class PicqerApiClient {
       
       // Log request (with retry information if applicable)
       const retryInfo = retryCount > 0 ? ` (retry ${retryCount})` : '';
-      console.log(`Making request to: ${url}${retryInfo}`);
+      console.log(`[PicqerApiClient] Making request to: ${url}${retryInfo}`);
+      
+      // Create Basic Auth credentials (same as Power BI uses)
+      // This is more reliable than Bearer token for Picqer API
+      const credentials = `${this.apiKey}:`;
+      const encodedCredentials = Buffer.from(credentials).toString('base64');
       
       // Make the request
       const response = await axios({
@@ -219,27 +231,27 @@ class PicqerApiClient {
         params,
         data,
         headers: {
-          'Authorization': `Basic ${Buffer.from(this.apiKey + ':').toString('base64')}`,
+          'Authorization': `Basic ${encodedCredentials}`,
           'Content-Type': 'application/json',
-          'User-Agent': 'PicqerMiddleware (https://github.com/yourusername/picqer-middleware - your@email.com)'
+          'User-Agent': 'PicqerMiddleware (middleware@skapa-global.com)'
         }
       });
       
       // Log response status
-      console.log(`Response status: ${response.status}`);
+      console.log(`[PicqerApiClient] Response status: ${response.status}`);
       
       // Log rate limit information if available
       if (response.headers['x-ratelimit-limit'] && response.headers['x-ratelimit-remaining']) {
-        console.log(`Rate limit: ${response.headers['x-ratelimit-remaining']}/${response.headers['x-ratelimit-limit']}`);
+        console.log(`[PicqerApiClient] Rate limit: ${response.headers['x-ratelimit-remaining']}/${response.headers['x-ratelimit-limit']}`);
       }
       
       return response.data;
     } catch (error) {
       // Log error details
       if (error.response) {
-        console.error(`API error (${error.response.status}): ${error.response.data.error || JSON.stringify(error.response.data)}`);
+        console.error(`[PicqerApiClient] API error (${error.response.status}): ${error.response.data.error || JSON.stringify(error.response.data)}`);
       } else {
-        console.error(`Request error: ${error.message}`);
+        console.error(`[PicqerApiClient] Request error: ${error.message}`);
       }
       
       throw error;
@@ -252,6 +264,23 @@ class PicqerApiClient {
    */
   getStats() {
     return this.stats;
+  }
+  
+  /**
+   * Test the API connection
+   * @returns {Promise<boolean>} - Whether the connection is successful
+   */
+  async testConnection() {
+    try {
+      console.log('[PicqerApiClient] Testing connection to Picqer API...');
+      // Try to get a single product to test the connection
+      await this.get('products', { limit: 1 });
+      console.log('[PicqerApiClient] Connection test successful!');
+      return true;
+    } catch (error) {
+      console.error('[PicqerApiClient] Connection test failed:', error.message);
+      return false;
+    }
   }
 }
 
