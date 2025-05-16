@@ -1,101 +1,126 @@
 /**
- * Enhanced Sync Manager with Entity-Specific Attributes (using original filenames)
+ * Sync Manager for Picqer to SQL Synchronization
  * 
- * This manager orchestrates the synchronization of all entity types between Picqer and SQL database
- * with support for entity-specific attributes, pagination, and rate limiting.
+ * This manager orchestrates the synchronization of entities between Picqer and SQL.
+ * It provides a clean API for triggering syncs and checking sync status.
  */
-const GenericEntityService = require("./generic-entity-service"); // Corrected import
-const entityConfigs = require("./entity-configs"); // Assuming user renamed entity-configs-enhanced.js to entity-configs.js
+const GenericEntityService = require('./generic-entity-service');
+const entityConfigs = require('./entity-configs');
 
 class SyncManager {
-  /**
-   * Create a new enhanced sync manager
-   * @param {Object} apiClient - Picqer API client
-   * @param {Object} dbManager - Database manager
-   */
   constructor(apiClient, dbManager) {
     this.apiClient = apiClient;
     this.dbManager = dbManager;
     this.entityServices = {};
     
     // Initialize entity services
-    this.initializeEntityServices();
-  }
-
-  /**
-   * Initialize all entity services
-   */
-  initializeEntityServices() {
     for (const [entityType, config] of Object.entries(entityConfigs)) {
-      this.entityServices[entityType] = new GenericEntityService( // Corrected class name
-        config,
-        this.apiClient,
+      this.entityServices[entityType] = new GenericEntityService(
+        config, 
+        this.apiClient, 
         this.dbManager
       );
     }
+    
+    console.log('[SyncManager] Initialized with entity types:', Object.keys(this.entityServices).join(', '));
   }
 
   /**
    * Sync a specific entity type
-   * @param {string} entityType - Entity type to sync
+   * @param {string} entityType - Type of entity to sync
    * @returns {Promise<Object>} - Sync result
    */
   async syncEntity(entityType) {
+    console.log(`[SyncManager] Starting sync for entity type: ${entityType}`);
+    
     if (!this.entityServices[entityType]) {
-      return {
-        success: false,
-        message: `Unknown entity type: ${entityType}`
+      const errorMsg = `Entity type '${entityType}' not configured`;
+      console.error(`[SyncManager] ${errorMsg}`);
+      return { 
+        success: false, 
+        message: errorMsg,
+        entityType
       };
     }
     
-    return this.entityServices[entityType].syncEntities();
+    try {
+      const result = await this.entityServices[entityType].syncEntities();
+      console.log(`[SyncManager] Completed sync for ${entityType}:`, result);
+      return {
+        ...result,
+        entityType
+      };
+    } catch (error) {
+      console.error(`[SyncManager] Error syncing ${entityType}:`, error.message, error.stack);
+      return {
+        success: false,
+        message: `Error syncing ${entityType}: ${error.message}`,
+        error: error.message,
+        entityType
+      };
+    }
   }
 
   /**
-   * Sync all entity types
-   * @returns {Promise<Object>} - Sync results
+   * Sync all configured entity types
+   * @returns {Promise<Object>} - Sync results for all entities
    */
   async syncAll() {
-    const results = {};
+    console.log('[SyncManager] Starting sync for all entity types');
     
-    // Sync each entity type in sequence
-    for (const entityType of Object.keys(this.entityServices)) {
-      console.log(`Starting sync for ${entityType}...`);
+    const results = {};
+    const entityTypes = Object.keys(this.entityServices);
+    
+    for (const entityType of entityTypes) {
+      console.log(`[SyncManager] Syncing ${entityType} (${entityTypes.indexOf(entityType) + 1}/${entityTypes.length})`);
       results[entityType] = await this.syncEntity(entityType);
     }
     
+    console.log('[SyncManager] Completed sync for all entity types');
     return {
-      success: true,
-      message: "All entity types synced",
+      success: Object.values(results).every(r => r.success),
       results
     };
   }
 
   /**
    * Get sync status for all entity types
-   * @returns {Promise<Object>} - Sync status
+   * @returns {Promise<Object>} - Status for all entities
    */
   async getSyncStatus() {
-    const status = {};
+    console.log('[SyncManager] Getting sync status for all entity types');
     
-    // Get status for each entity type
-    for (const [entityType, service] of Object.entries(this.entityServices)) {
+    const status = {};
+    const entityTypes = Object.keys(this.entityServices);
+    
+    for (const entityType of entityTypes) {
       try {
-        const lastSyncDate = await this.dbManager.getLastSyncDate(entityType);
-        const count = await service.getCount();
+        // Get last sync date from SyncProgress table
+        const lastSync = await this.dbManager.getLastSyncDate(entityType);
+        
+        // Get count of records in entity table
+        const count = await this.entityServices[entityType].getCount();
         
         status[entityType] = {
-          lastSync: lastSyncDate,
+          lastSync: lastSync ? lastSync.toISOString() : null,
           count
         };
       } catch (error) {
-        status[entityType] = {
-          error: error.message
-        };
+        console.error(`[SyncManager] Error getting status for ${entityType}:`, error.message);
+        status[entityType] = { error: error.message };
       }
     }
     
+    console.log('[SyncManager] Completed getting sync status');
     return status;
+  }
+
+  /**
+   * Get available entity types
+   * @returns {Array<string>} - List of entity types
+   */
+  getEntityTypes() {
+    return Object.keys(this.entityServices);
   }
 }
 
