@@ -2,23 +2,30 @@
  * Dashboard API JavaScript for Picqer Middleware
  * This file provides the API interaction functionality for the dashboard
  * 
- * UPDATED: Standardized button IDs to match sync-button-verifier.js expectations
+ * UPDATED: Enhanced to support identity column handling and improved metrics display
  */
 
-// API endpoints
-const API_ENDPOINTS = {
-  STATUS: '/api/status',
-  STATS: '/api/stats',
-  LOGS: '/api/logs',
-  HISTORY: '/api/history',
-  SYNC: '/api/sync',
-  SYNC_PRODUCTS: '/api/sync/products',
-  SYNC_PICKLISTS: '/api/sync/picklists',
-  SYNC_WAREHOUSES: '/api/sync/warehouses',
-  SYNC_USERS: '/api/sync/users',
-  SYNC_SUPPLIERS: '/api/sync/suppliers',
-  SYNC_BATCHES: '/api/sync/batches'
-};
+// Use the API URL Helper for consistent endpoint access
+document.addEventListener('DOMContentLoaded', function() {
+  if (!window.API_URLS) {
+    console.warn('API_URLS not found. Loading fallback endpoints.');
+    // Fallback API endpoints if api-url-helper.js is not included
+    window.API_URLS = {
+      STATUS: '/api/status',
+      STATS: '/api/stats',
+      LOGS: '/api/logs',
+      HISTORY: '/api/history',
+      SYNC: '/api/sync',
+      SYNC_PRODUCTS: '/api/sync/products',
+      SYNC_PICKLISTS: '/api/sync/picklists',
+      SYNC_WAREHOUSES: '/api/sync/warehouses',
+      SYNC_USERS: '/api/sync/users',
+      SYNC_SUPPLIERS: '/api/sync/suppliers',
+      SYNC_BATCHES: '/api/sync/batches',
+      getFullSyncUrl: (endpoint) => `${endpoint}?full=true`
+    };
+  }
+});
 
 // Dashboard API class
 class DashboardAPI {
@@ -38,8 +45,6 @@ class DashboardAPI {
   
   // Initialize event listeners for sync buttons
   initEventListeners() {
-    // UPDATED: Changed button IDs to match sync-button-verifier.js expectations
-    
     // Main sync buttons
     const syncBtn = document.getElementById('sync-btn');
     if (syncBtn) {
@@ -135,7 +140,7 @@ class DashboardAPI {
     
     this.statusElement.innerHTML = 'Checking status...';
     
-    fetch(API_ENDPOINTS.STATUS)
+    fetch(window.API_URLS.STATUS)
       .then(response => response.json())
       .then(data => {
         if (data.online) {
@@ -155,7 +160,7 @@ class DashboardAPI {
     
     this.statsElement.innerHTML = 'Loading statistics...';
     
-    fetch(API_ENDPOINTS.STATS)
+    fetch(window.API_URLS.STATS)
       .then(response => response.json())
       .then(data => {
         if (data.success) {
@@ -166,7 +171,7 @@ class DashboardAPI {
             statsHtml += '<tr>';
             statsHtml += '<td>' + entity.charAt(0).toUpperCase() + entity.slice(1) + '</td>';
             statsHtml += '<td>' + stats.totalCount + '</td>';
-            statsHtml += '<td>' + new Date(stats.lastSyncDate).toLocaleString() + '</td>';
+            statsHtml += '<td>' + (stats.lastSyncDate ? new Date(stats.lastSyncDate).toLocaleString() : 'Never') + '</td>';
             statsHtml += '<td>' + stats.status + '</td>';
             statsHtml += '</tr>';
           }
@@ -188,7 +193,7 @@ class DashboardAPI {
     
     this.historyElement.innerHTML = 'Loading history...';
     
-    fetch(API_ENDPOINTS.HISTORY)
+    fetch(window.API_URLS.HISTORY)
       .then(response => response.json())
       .then(data => {
         if (data.success) {
@@ -221,7 +226,7 @@ class DashboardAPI {
     
     this.logsElement.innerHTML = 'Loading logs...';
     
-    fetch(API_ENDPOINTS.LOGS)
+    fetch(window.API_URLS.LOGS)
       .then(response => response.json())
       .then(data => {
         if (data.success) {
@@ -249,12 +254,16 @@ class DashboardAPI {
   
   // Sync all entities
   syncAll(fullSync = false) {
-    const url = API_ENDPOINTS.SYNC + (fullSync ? '?full=true' : '');
+    const url = fullSync ? window.API_URLS.getFullSyncUrl(window.API_URLS.SYNC) : window.API_URLS.SYNC;
     
     fetch(url, { method: 'POST' })
       .then(response => response.json())
       .then(data => {
-        alert(data.message || 'Sync started');
+        // Show more detailed message if available
+        const message = data.message || 'Sync started';
+        const details = data.details ? `\n\nDetails: ${data.details}` : '';
+        alert(message + details);
+        
         // Reload data after sync
         setTimeout(() => this.loadAllData(), 2000);
       })
@@ -265,12 +274,19 @@ class DashboardAPI {
   
   // Sync specific entity
   syncEntity(entity, fullSync = false) {
-    const url = `${API_ENDPOINTS.SYNC}/${entity}` + (fullSync ? '?full=true' : '');
+    const endpoint = `SYNC_${entity.toUpperCase()}`;
+    const url = fullSync 
+      ? window.API_URLS.getFullSyncUrl(window.API_URLS[endpoint]) 
+      : window.API_URLS[endpoint];
     
     fetch(url, { method: 'POST' })
       .then(response => response.json())
       .then(data => {
-        alert(data.message || `${entity} sync started`);
+        // Show more detailed message if available
+        const message = data.message || `${entity} sync started`;
+        const details = data.details ? `\n\nDetails: ${data.details}` : '';
+        alert(message + details);
+        
         // Reload data after sync
         setTimeout(() => this.loadAllData(), 2000);
       })
