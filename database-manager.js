@@ -1,5 +1,5 @@
 /**
- * Database Manager with Dynamic Schema Handling and Robust SyncProgress Management
+ * Enhanced Database Manager with Transaction-Based Schema Handling
  * 
  * This manager handles database connections, schema initialization,
  * dynamic column creation, IDENTITY_INSERT for SQL Server, and robustly manages
@@ -130,14 +130,37 @@ class DatabaseManager {
     if (await this.columnExists(tableName, columnName, currentSchema)) {
       return;
     }
-    const sqlDataType = this.getSqlTypeFromJs(jsValueForTypeInference, columnName);
-    const request = this.pool.request();
+    
+    // Get SQL type object from JS value
+    const sqlType = this.getSqlTypeFromJs(jsValueForTypeInference, columnName);
+    
+    // Convert SQL type object to string representation for ALTER TABLE
+    let sqlTypeStr;
+    if (sqlType === sql.NVarChar(sql.MAX)) {
+      sqlTypeStr = "NVARCHAR(MAX)";
+    } else if (sqlType === sql.Int) {
+      sqlTypeStr = "INT";
+    } else if (sqlType === sql.BigInt) {
+      sqlTypeStr = "BIGINT";
+    } else if (sqlType === sql.Float) {
+      sqlTypeStr = "FLOAT";
+    } else if (sqlType === sql.Bit) {
+      sqlTypeStr = "BIT";
+    } else if (sqlType === sql.DateTimeOffset) {
+      sqlTypeStr = "DATETIMEOFFSET";
+    } else if (sqlType.type && sqlType.type.name === 'NVarChar') {
+      sqlTypeStr = `NVARCHAR(${sqlType.length || 255})`;
+    } else {
+      sqlTypeStr = "NVARCHAR(255)"; // Default fallback
+    }
+    
     const nullability = isNullable ? "NULL" : "NOT NULL";
     // For NOT NULL columns, we might need a default if adding to existing table with rows, but for sync progress, it's usually new rows or specific updates.
-    const query = `ALTER TABLE ${tableName} ADD ${columnName} ${sqlDataType} ${nullability};`;
-    console.log(`[DBManager] Adding column ${columnName} (${sqlDataType} ${nullability}) to table ${tableName}... Query: ${query}`);
+    const query = `ALTER TABLE ${tableName} ADD ${columnName} ${sqlTypeStr} ${nullability};`;
+    console.log(`[DBManager] Adding column ${columnName} (${sqlTypeStr} ${nullability}) to table ${tableName}... Query: ${query}`);
+    
     try {
-        await request.query(query);
+        await this.pool.request().query(query);
         console.log(`[DBManager] Successfully added column ${columnName} to ${tableName}.`);
         if (tableName.toLowerCase() === "syncprogress") await this.getTableSchema(tableName, true); // Refresh cached schema
     } catch (error) {
@@ -284,23 +307,39 @@ class DatabaseManager {
 
   async createSyncProgressRecord(syncId, entityType) {
     await this.connect();
-    // const schema = this.syncProgressSchema || await this.getTableSchema("SyncProgress"); // Not strictly needed for the hardcoded column name
-    // const startTimeCol = schema.some(c => c.name.toLowerCase() === "start_time") ? "start_time" : "started_at"; // Hardcoding to 'started_at'
-    const lastUpdatedCol = "last_updated"; // Standardized in initializeSyncProgressTable
-
-    const now = new Date(); // Generate timestamp in JS
-
-    const query = `
-      INSERT INTO SyncProgress (sync_id, entity_type, status, [started_at], [${lastUpdatedCol}])
-      VALUES (@syncId, @entityType, 'in_progress', @startTimeValue, @lastUpdatedValue);
-    `;
-    const request = this.pool.request();
-    request.input("syncId", sql.VarChar, syncId);
-    request.input("entityType", sql.VarChar, entityType);
-    request.input("startTimeValue", sql.DateTimeOffset, now); // This value is for 'started_at'
-    request.input("lastUpdatedValue", sql.DateTimeOffset, now);
-    await request.query(query);
-    console.log(`[DBManager] Created SyncProgress record for ${syncId} (${entityType}) using 'started_at' (hardcoded) with explicit timestamp: ${now.toISOString()}`);
+    // Use explicit column name and current timestamp
+    const now = new Date();
+    
+    // Create a transaction for this operation
+    const transaction = new sql.Transaction(this.pool);
+    
+    try {
+        await transaction.begin();
+        const request = new sql.Request(transaction);
+        
+        const query = `
+          INSERT INTO SyncProgress (sync_id, entity_type, status, [started_at], [last_updated])
+          VALUES (@syncId, @entityType, 'in_progress', @startTimeValue, @lastUpdatedValue);
+        `;
+        
+        request.input("syncId", sql.VarChar, syncId);
+        request.input("entityType", sql.VarChar, entityType);
+        request.input("startTimeValue", sql.DateTimeOffset, now);
+        request.input("lastUpdatedValue", sql.DateTimeOffset, now);
+        
+        await request.query(query);
+        await transaction.commit();
+        
+        console.log(`[DBManager] Created SyncProgress record for ${syncId} (${entityType}) with explicit timestamp: ${now.toISOString()}`);
+    } catch (error) {
+        try {
+            await transaction.rollback();
+        } catch (rollbackError) {
+            console.error(`[DBManager] Error rolling back transaction:`, rollbackError.message);
+        }
+        console.error(`[DBManager] Error creating SyncProgress record:`, error.message, error.stack);
+        throw error;
+    }
   }
 
   async updateSyncProgressRecord(syncId, status, recordsSynced, errorMessage = null) {
@@ -309,24 +348,48 @@ class DatabaseManager {
     const endTimeCol = schema.some(c => c.name.toLowerCase() === "end_time") ? "end_time" : "ended_at"; // Assuming ended_at as alternative
     const errorCol = schema.some(c => c.name.toLowerCase() === "error_message") ? "error_message" : null;
 
-    let query = `
-      UPDATE SyncProgress 
-      SET status = @status, ${endTimeCol} = SYSDATETIMEOFFSET(), records_synced = @recordsSynced, last_updated = SYSDATETIMEOFFSET()
-    `;
-    if (errorCol && errorMessage !== null) {
-      query += `, ${errorCol} = @errorMessage`;
-    }
-    query += ` WHERE sync_id = @syncId;`;
+    // Create a transaction for this operation
+    const transaction = new sql.Transaction(this.pool);
     
-    const request = this.pool.request();
-    request.input("syncId", sql.VarChar, syncId);
-    request.input("status", sql.VarChar, status);
-    request.input("recordsSynced", sql.Int, recordsSynced);
-    if (errorCol && errorMessage !== null) {
-      request.input("errorMessage", sql.NVarChar, String(errorMessage).substring(0,4000)); // Cap error message length
+    try {
+        await transaction.begin();
+        const request = new sql.Request(transaction);
+        
+        let query = `
+          UPDATE SyncProgress 
+          SET status = @status, ${endTimeCol} = @endTime, records_synced = @recordsSynced, last_updated = @lastUpdated
+        `;
+        
+        if (errorCol && errorMessage !== null) {
+          query += `, ${errorCol} = @errorMessage`;
+        }
+        query += ` WHERE sync_id = @syncId;`;
+        
+        const now = new Date();
+        
+        request.input("syncId", sql.VarChar, syncId);
+        request.input("status", sql.VarChar, status);
+        request.input("endTime", sql.DateTimeOffset, now);
+        request.input("recordsSynced", sql.Int, recordsSynced);
+        request.input("lastUpdated", sql.DateTimeOffset, now);
+        
+        if (errorCol && errorMessage !== null) {
+          request.input("errorMessage", sql.NVarChar, String(errorMessage).substring(0,4000)); // Cap error message length
+        }
+        
+        await request.query(query);
+        await transaction.commit();
+        
+        console.log(`[DBManager] Updated SyncProgress record for ${syncId} to status ${status}. Error column used: ${errorCol || 'N/A'}`);
+    } catch (error) {
+        try {
+            await transaction.rollback();
+        } catch (rollbackError) {
+            console.error(`[DBManager] Error rolling back transaction:`, rollbackError.message);
+        }
+        console.error(`[DBManager] Error updating SyncProgress record:`, error.message, error.stack);
+        throw error;
     }
-    await request.query(query);
-    console.log(`[DBManager] Updated SyncProgress record for ${syncId} to status ${status}. Error column used: ${errorCol || 'N/A'}`);
   }
   
   async getLastSyncDate(entityType) {
@@ -351,37 +414,51 @@ class DatabaseManager {
     const idColName = "id"; // Standardized DB ID column name
     const nameColName = this.sanitizeKeyForSql(picqerNameField || "name");
 
-    const createTableQuery = `
-      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tableName}]') AND type in (N'U'))
-      BEGIN
-        CREATE TABLE [dbo].[${tableName}](
-          [${idColName}] NVARCHAR(255) NOT NULL PRIMARY KEY, 
-          [${nameColName}] NVARCHAR(MAX) NULL
-        );
-        PRINT '${tableName} table created with basic schema (id, ${nameColName}).';
-      END
-    `;
+    // Create a transaction for this operation
+    const transaction = new sql.Transaction(this.pool);
+    
     try {
-      await this.pool.request().query(createTableQuery);
-      console.log(`[DBManager] Basic schema for ${tableName} initialized/verified.`);
-      // Ensure these base columns actually exist if table was already there
-      if (!await this.columnExists(tableName, idColName)) {
-          await this.addColumn(tableName, idColName, "string_id_example", false); // ID is NOT NULL
-      }
-      if (!await this.columnExists(tableName, nameColName)) {
-          await this.addColumn(tableName, nameColName, "example_name");
-      }
+        await transaction.begin();
+        const request = new sql.Request(transaction);
+        
+        const createTableQuery = `
+          IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tableName}]') AND type in (N'U'))
+          BEGIN
+            CREATE TABLE [dbo].[${tableName}](
+              [${idColName}] NVARCHAR(255) NOT NULL PRIMARY KEY, 
+              [${nameColName}] NVARCHAR(MAX) NULL,
+              [last_sync_date] DATETIMEOFFSET NULL,
+              [data] NVARCHAR(MAX) NULL
+            );
+            PRINT '${tableName} table created with schema (id, ${nameColName}, last_sync_date, data).';
+          END
+        `;
+        
+        await request.query(createTableQuery);
+        await transaction.commit();
+        
+        console.log(`[DBManager] Initialized entity schema for ${tableName} with ID field '${idColName}' and name field '${nameColName}'`);
+        return true;
     } catch (error) {
-      console.error(`[DBManager] Error initializing basic schema for ${tableName}:`, error.message, error.stack);
-      throw error;
+        try {
+            await transaction.rollback();
+        } catch (rollbackError) {
+            console.error(`[DBManager] Error rolling back transaction:`, rollbackError.message);
+        }
+        console.error(`[DBManager] Error initializing entity schema for ${tableName}:`, error.message, error.stack);
+        throw error;
     }
   }
-  sanitizeKeyForSql(key) { // Duplicated from generic-entity-service for standalone use if needed
+
+  sanitizeKeyForSql(key) {
+    if (!key) return "unknown";
     let sanitized = key.replace(/[^a-zA-Z0-9_]/g, "_");
-    if (sanitized.match(/^\d/)) sanitized = "_" + sanitized;
-    return sanitized.slice(0, 128);
+    // SQL Server column names cannot start with a number, so prefix if necessary
+    if (sanitized.match(/^\d/)) {
+      sanitized = "_" + sanitized;
+    }
+    return sanitized.slice(0, 128); // Max column name length for SQL Server is 128
   }
 }
 
 module.exports = DatabaseManager;
-
