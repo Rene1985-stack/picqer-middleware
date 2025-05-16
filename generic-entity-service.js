@@ -1,5 +1,5 @@
 /**
- * Generic Entity Service with Dynamic Schema and Field Mapping
+ * Enhanced Generic Entity Service with Dynamic Schema and Field Mapping
  * 
  * This service handles synchronization between Picqer and SQL database.
  * It dynamically maps all fields from Picqer to SQL columns, creating columns if they don't exist.
@@ -144,6 +144,7 @@ class GenericEntityService {
         await this.dbManager.ensureColumnsExist(this.tableName, dbData);
       }
 
+      // Define the operation to be executed within a transaction with IDENTITY_INSERT if needed
       const operation = async (request) => {
         console.log(`[${this.entityType}] Checking if entity ID ${dbEntityId} exists in table ${this.tableName}.`);
         const existingEntityResult = await request.input("entityIdParam", sql.NVarChar, dbEntityId)
@@ -152,7 +153,6 @@ class GenericEntityService {
         console.log(`[${this.entityType}] Entity ID ${dbEntityId} exists: ${entityExists}`);
 
         const columnsForSql = Object.keys(dbData);
-        const requestWithInputs = this.dbManager.pool.request(); // Use a new request for inputs
 
         if (entityExists) {
           console.log(`[${this.entityType}] Preparing UPDATE for ID ${dbEntityId}.`);
@@ -167,14 +167,15 @@ class GenericEntityService {
           }
           console.log(`[${this.entityType}] Update SET clause: ${setClauses}`);
           
-          requestWithInputs.input("id", sql.NVarChar, dbEntityId); // For the WHERE clause
+          // Add parameters to the request
+          request.input("id", sql.NVarChar, dbEntityId); // For the WHERE clause
           for (const col of columnsForSql) {
             if (col !== "id") {
-              requestWithInputs.input(col, this.dbManager.getSqlTypeFromJs(dbData[col], col), dbData[col]);
+              request.input(col, this.dbManager.getSqlTypeFromJs(dbData[col], col), dbData[col]);
             }
           }
           console.log(`[${this.entityType}] Executing UPDATE for ID ${dbEntityId}.`);
-          await requestWithInputs.query(`UPDATE ${this.tableName} SET ${setClauses} WHERE id = @id`);
+          await request.query(`UPDATE ${this.tableName} SET ${setClauses} WHERE id = @id`);
           console.log(`[${this.entityType}] Successfully updated ID ${dbEntityId}.`);
         } else {
           console.log(`[${this.entityType}] Preparing INSERT for new ID ${dbEntityId}.`);
@@ -183,11 +184,12 @@ class GenericEntityService {
           console.log(`[${this.entityType}] Insert columns: ${columnNames}`);
           console.log(`[${this.entityType}] Insert param names: ${paramNames}`);
 
+          // Add parameters to the request
           for (const col of columnsForSql) {
-            requestWithInputs.input(col, this.dbManager.getSqlTypeFromJs(dbData[col], col), dbData[col]);
+            request.input(col, this.dbManager.getSqlTypeFromJs(dbData[col], col), dbData[col]);
           }
           console.log(`[${this.entityType}] Executing INSERT for ID ${dbEntityId}.`);
-          await requestWithInputs.query(`INSERT INTO ${this.tableName} (${columnNames}) VALUES (${paramNames})`);
+          await request.query(`INSERT INTO ${this.tableName} (${columnNames}) VALUES (${paramNames})`);
           console.log(`[${this.entityType}] Successfully inserted new ID ${dbEntityId}.`);
         }
         return true;
@@ -256,7 +258,6 @@ class GenericEntityService {
   }
 
   async getCount() {
-    // ... (getCount method can remain similar, or be removed if not used by dashboard)
     console.log(`[${this.entityType}] Getting count from table ${this.tableName}`);
     try {
       if (!this.dbManager.pool) await this.dbManager.connect();
@@ -270,4 +271,3 @@ class GenericEntityService {
 }
 
 module.exports = GenericEntityService;
-
