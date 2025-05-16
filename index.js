@@ -9,6 +9,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const path = require('path');
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +20,9 @@ const DatabaseManager = require('./database-manager');
 const SyncManager = require('./sync-manager');
 const entityConfigs = require('./entity-configs');
 const entityAttributes = require('./entity-attributes');
+
+// Import dashboard route
+const dashboardRoute = require('./dashboard-route');
 
 // Create Express app
 const app = express();
@@ -51,6 +55,9 @@ const dbManager = new DatabaseManager({
 
 const syncManager = new SyncManager(apiClient, dbManager);
 
+// Mount dashboard route
+app.use('/dashboard', dashboardRoute);
+
 // API routes
 app.get('/', (req, res) => {
   res.json({
@@ -59,7 +66,8 @@ app.get('/', (req, res) => {
     endpoints: [
       '/api/sync/all',
       '/api/sync/:entityType',
-      '/api/sync/status'
+      '/api/sync/status',
+      '/dashboard'
     ]
   });
 });
@@ -114,6 +122,7 @@ app.get('/api/sync/status', async (req, res) => {
 app.listen(port, () => {
   console.log(`Enhanced Picqer Sync API server running on port ${port}`);
   console.log(`Using entity-specific attributes for: ${Object.keys(entityAttributes).join(', ')}`);
+  console.log(`Dashboard available at: http://localhost:${port}/dashboard`);
 });
 
 module.exports = app;
