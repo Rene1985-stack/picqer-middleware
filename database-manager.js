@@ -164,27 +164,51 @@ class DatabaseManager {
   async executeWithIdentityInsert(tableName, operation) {
     await this.connect();
     let identityInsertRequired = false;
+    
+    // Create a transaction to ensure all commands run in the same session
+    const transaction = new sql.Transaction(this.pool);
+    
     try {
+        // Start the transaction
+        await transaction.begin();
+        
+        // Create a request bound to the transaction
+        const request = new sql.Request(transaction);
+        
+        // Check if the table has an identity column
         const schema = await this.getTableSchema(tableName);
         const idColumn = schema.find(col => col.name.toLowerCase() === "id" && col.isIdentity);
+        
         if (idColumn) {
             identityInsertRequired = true;
-            console.log(`[DBManager] Identity column detected on ${tableName}. Enabling IDENTITY_INSERT.`);
-            await this.pool.request().query(`SET IDENTITY_INSERT ${tableName} ON;`);
+            console.log(`[DBManager] Identity column detected on ${tableName}. Enabling IDENTITY_INSERT within transaction.`);
+            await request.query(`SET IDENTITY_INSERT ${tableName} ON;`);
         }
-        const result = await operation(this.pool.request()); 
+        
+        // Execute the operation with the transaction-bound request
+        const result = await operation(request);
+        
+        // If we get here without errors, commit the transaction
+        await transaction.commit();
+        console.log(`[DBManager] Transaction committed successfully for ${tableName}.`);
+        
         return result;
     } catch (error) {
+        // If there's an error, roll back the transaction
+        try {
+            await transaction.rollback();
+            console.log(`[DBManager] Transaction rolled back due to error for ${tableName}.`);
+        } catch (rollbackError) {
+            console.error(`[DBManager] Error rolling back transaction for ${tableName}:`, rollbackError.message);
+        }
+        
         console.error(`[DBManager] Error during executeWithIdentityInsert for ${tableName}:`, error.message, error.stack);
         throw error;
     } finally {
+        // No need to explicitly disable IDENTITY_INSERT as it's scoped to the transaction
+        // and will be automatically disabled when the transaction ends
         if (identityInsertRequired) {
-            try {
-                console.log(`[DBManager] Disabling IDENTITY_INSERT for ${tableName}.`);
-                await this.pool.request().query(`SET IDENTITY_INSERT ${tableName} OFF;`);
-            } catch (setOffError) {
-                console.error(`[DBManager] CRITICAL: Failed to disable IDENTITY_INSERT for ${tableName}:`, setOffError.message, setOffError.stack);
-            }
+            console.log(`[DBManager] IDENTITY_INSERT automatically disabled when transaction ended for ${tableName}.`);
         }
     }
   }
