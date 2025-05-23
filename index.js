@@ -39,7 +39,8 @@ const dbConfig = {
   password: process.env.SQL_PASSWORD,
   options: {
     encrypt: true,
-    trustServerCertificate: false
+    trustServerCertificate: false,
+    connectionTimeout: 30000  // Increase to 30 seconds
   }
 };
 
