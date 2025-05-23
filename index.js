@@ -1,128 +1,141 @@
 /**
- * Picqer to SQL DB Synchronization API with Enhanced Functionality
+ * Final Index.js with Integrated Data Sync Implementation
  * 
- * This file sets up an Express server with API endpoints for syncing entities
- * between Picqer and SQL database with support for entity-specific attributes,
- * pagination, and rate limiting.
+ * This file integrates the actual data sync implementation with the API adapter,
+ * ensuring that when sync buttons are clicked in the dashboard, real data is
+ * synced from Picqer to the database.
  */
+
+// Import required modules
 const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const dotenv = require('dotenv');
 const path = require('path');
+const cors = require('cors');
+const sql = require('mssql');
+require('dotenv').config();
 
-// Load environment variables
-dotenv.config();
+// Import service classes
+const PicqerService = require('./picqer-service');
+const PicklistService = require('./picklist-service');
+const WarehouseService = require('./warehouse_service');
+const UserService = require('./user_service');
+const SupplierService = require('./supplier_service');
 
-// Import components with original filenames but enhanced functionality
-const PicqerApiClient = require('./picqer-api-client');
-const DatabaseManager = require('./database-manager');
-const SyncManager = require('./sync-manager');
-const entityConfigs = require('./entity-configs');
-const entityAttributes = require('./entity-attributes');
-
-// Import dashboard route
-const dashboardRoute = require('./dashboard-route');
+// Import API adapter with actual data sync implementation
+const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
 
 // Create Express app
 const app = express();
-const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(bodyParser.json());
+// Configure middleware
 app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Initialize components
-const apiClient = new PicqerApiClient({
-  apiUrl: process.env.PICQER_API_URL || process.env.PICQER_BASE_URL,
-  apiKey: process.env.PICQER_API_KEY,
-  waitOnRateLimit: process.env.PICQER_RATE_LIMIT_WAIT === 'true',
-  sleepTimeOnRateLimitHitInSeconds: parseInt(process.env.PICQER_RATE_LIMIT_SLEEP_MS || '20000') / 1000,
-  requestDelay: parseInt(process.env.PICQER_REQUEST_DELAY_MS || '100')
-});
-
-const dbManager = new DatabaseManager({
-  server: process.env.SQL_SERVER || process.env.DB_HOST,
-  database: process.env.SQL_DATABASE || process.env.DB_NAME,
-  user: process.env.SQL_USER || process.env.DB_USER,
-  password: process.env.SQL_PASSWORD || process.env.DB_PASSWORD,
-  port: parseInt(process.env.SQL_PORT || process.env.DB_PORT || '1433'),
+// Database configuration
+const dbConfig = {
+  server: process.env.SQL_SERVER,
+  database: process.env.SQL_DATABASE,
+  user: process.env.SQL_USER,
+  password: process.env.SQL_PASSWORD,
   options: {
     encrypt: true,
-    trustServerCertificate: true
+    trustServerCertificate: false
   }
+};
+
+// Picqer API configuration
+const apiKey = process.env.PICQER_API_KEY;
+const baseUrl = process.env.PICQER_BASE_URL;
+
+// Initialize services
+const picqerService = new PicqerService(apiKey, baseUrl, dbConfig);
+const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
+const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
+const userService = new UserService(apiKey, baseUrl, dbConfig);
+const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
+
+// Initialize API adapter with service instances
+initializeServices({
+  ProductService: picqerService,
+  PicklistService: picklistService,
+  WarehouseService: warehouseService,
+  UserService: userService,
+  SupplierService: supplierService
 });
-
-const syncManager = new SyncManager(apiClient, dbManager);
-
-// Mount dashboard route
-app.use('/dashboard', dashboardRoute);
 
 // API routes
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Picqer to SQL DB Sync API',
-    version: '2.0.0',
-    endpoints: [
-      '/api/sync/all',
-      '/api/sync/:entityType',
-      '/api/sync/status',
-      '/dashboard'
-    ]
-  });
+app.use('/api', apiAdapter);
+
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
 });
 
-// Sync all entities
-app.post('/api/sync/all', async (req, res) => {
-  try {
-    console.log('Starting sync for all entities...');
-    const result = await syncManager.syncAll();
-    res.json(result);
-  } catch (error) {
-    console.error('Error syncing all entities:', error.message);
-    res.status(500).json({
-      success: false,
-      message: `Error syncing all entities: ${error.message}`
-    });
-  }
-});
+// Serve static files from dashboard directory
+app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
 
-// Sync specific entity type
-app.post('/api/sync/:entityType', async (req, res) => {
-  const { entityType } = req.params;
-  
+// Initialize database
+async function initializeDatabase() {
   try {
-    console.log(`Starting sync for ${entityType}...`);
-    const result = await syncManager.syncEntity(entityType);
-    res.json(result);
+    console.log('Initializing database...');
+    
+    // Initialize product schema
+    await picqerService.initializeDatabase();
+    
+    // Initialize picklists schema
+    await picklistService.initializePicklistsDatabase();
+    
+    // Initialize warehouses schema
+    await warehouseService.initializeWarehousesDatabase();
+    
+    // Initialize users schema
+    await userService.initializeUsersDatabase();
+    
+    // Initialize suppliers schema
+    await supplierService.initializeSuppliersDatabase();
+    
+    console.log('Database initialized successfully');
   } catch (error) {
-    console.error(`Error syncing ${entityType}:`, error.message);
-    res.status(500).json({
-      success: false,
-      message: `Error syncing ${entityType}: ${error.message}`
-    });
+    console.error('Error initializing database:', error.message);
   }
-});
-
-// Get sync status
-app.get('/api/sync/status', async (req, res) => {
-  try {
-    const status = await syncManager.getSyncStatus();
-    res.json(status);
-  } catch (error) {
-    console.error('Error getting sync status:', error.message);
-    res.status(500).json({
-      success: false,
-      message: `Error getting sync status: ${error.message}`
-    });
-  }
-});
+}
 
 // Start server
-app.listen(port, () => {
-  console.log(`Enhanced Picqer Sync API server running on port ${port}`);
-  console.log(`Using entity-specific attributes for: ${Object.keys(entityAttributes).join(', ')}`);
-  console.log(`Dashboard available at: http://localhost:${port}/dashboard`);
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+  console.log(`Picqer middleware server running on port ${PORT}`);
+  
+  // Initialize database after server starts
+  await initializeDatabase();
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  
+  // Close database connection
+  try {
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
+  }
+  
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  
+  // Close database connection
+  try {
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
+  }
+  
+  process.exit(0);
 });
 
 module.exports = app;
