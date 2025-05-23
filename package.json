@@ -1,13 +1,12 @@
 {
-  "name": "picqer-middleware-simplified",
-  "version": "2.0.0",
-  "description": "Simplified middleware for synchronizing Picqer data to Azure SQL Database",
+  "name": "picqer-middleware",
+  "version": "1.1.0",
+  "description": "Middleware for synchronizing Picqer data to Azure SQL Database",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node test.js",
-    "dev": "nodemon index.js",
-    "postinstall": "bash ./deploy-dashboard.sh"
+    "test": "node test-middleware.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -15,8 +14,10 @@
     "dotenv": "^16.0.3",
     "axios": "^1.3.4",
     "node-cron": "^3.0.2",
+    "chart.js": "^4.3.0",
     "moment": "^2.29.4",
     "uuid": "^9.0.0",
+    "winston": "^3.8.2",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5"
   },
