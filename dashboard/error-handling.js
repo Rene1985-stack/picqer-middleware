@@ -1,16 +1,13 @@
-/**
- * Enhanced Error Handling for Picqer Middleware Dashboard
- * Updated to support identity column handling and improved error reporting
- */
+// error-handling.js - Enhanced error filtering and retry functionality for the middleware dashboard
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Use the API URL Helper for consistent endpoint access
-    const API_URLS = window.API_URLS || {
-        // Fallback if API_URLS is not defined
-        ERRORS: '/api/errors',
-        errorsByEntity: (entity) => `/api/errors/${entity}`,
-        retrySync: (syncId) => `/api/sync/retry/${syncId}`,
-        errorDetails: (errorId) => `/api/errors/details/${errorId}`
+    // API endpoints
+    const API_BASE = window.location.origin;
+    const ENDPOINTS = {
+        errors: `${API_BASE}/api/errors`,
+        errorsByEntity: (entity) => `${API_BASE}/api/errors/${entity}`,
+        retrySync: (syncId) => `${API_BASE}/api/sync/retry/${syncId}`,
+        errorDetails: (errorId) => `${API_BASE}/api/errors/details/${errorId}`
     };
     
     // Initialize error handling
@@ -37,18 +34,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Create error filter UI
     function createErrorFilterUI() {
         // Add error filter dropdown to sync history section
-        const syncHistoryHeaders = document.querySelectorAll('.card-header');
-        let syncHistoryHeader = null;
-        
-        // Find the sync history header by looking for the card title text
-        for (const header of syncHistoryHeaders) {
-            const cardTitle = header.querySelector('.card-title');
-            if (cardTitle && cardTitle.textContent.includes('Sync History')) {
-                syncHistoryHeader = header;
-                break;
-            }
-        }
-        
+        const syncHistoryHeader = document.querySelector('.card-header:has(h2.card-title:contains("Sync History"))');
         if (syncHistoryHeader) {
             const filterDropdown = document.createElement('div');
             filterDropdown.className = 'filter-dropdown';
@@ -58,17 +44,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="filter-option active" data-filter="all">All Errors</div>
                     <div class="filter-option" data-filter="api">API Errors</div>
                     <div class="filter-option" data-filter="database">Database Errors</div>
-                    <div class="filter-option" data-filter="identity">Identity Column Errors</div>
                     <div class="filter-option" data-filter="timeout">Timeout Errors</div>
                     <div class="filter-option" data-filter="validation">Validation Errors</div>
                     <div class="filter-option" data-filter="other">Other Errors</div>
                 </div>
             `;
             
-            const cardActions = syncHistoryHeader.querySelector('.card-actions');
-            if (cardActions) {
-                cardActions.appendChild(filterDropdown);
-            }
+            syncHistoryHeader.querySelector('.card-actions').appendChild(filterDropdown);
         }
         
         // Add error details modal to body
@@ -100,15 +82,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         <h4>Context</h4>
                         <pre id="error-context"></pre>
                     </div>
-                    <div id="identity-column-info" style="display: none;">
-                        <h4>Identity Column Handling</h4>
-                        <p>This error is related to identity column handling in the database. The system is using a two-step process to handle identity columns:</p>
-                        <ol>
-                            <li>Records are inserted with auto-generated IDs</li>
-                            <li>A separate picqer_id column stores the original Picqer ID</li>
-                        </ol>
-                        <p>This approach preserves database integrity while maintaining Picqer ID references.</p>
-                    </div>
                     <div class="error-actions">
                         <button class="btn btn-primary" id="modal-retry-btn">Retry Sync</button>
                         <button class="btn btn-outline" id="modal-close-btn">Close</button>
@@ -119,101 +92,85 @@ document.addEventListener('DOMContentLoaded', function() {
         
         document.body.appendChild(errorModal);
         
-        // Add modal styles if not already present
-        if (!document.querySelector('#error-modal-styles')) {
-            const modalStyles = document.createElement('style');
-            modalStyles.id = 'error-modal-styles';
-            modalStyles.textContent = `
-                .modal {
-                    display: none;
-                    position: fixed;
-                    z-index: 1000;
-                    left: 0;
-                    top: 0;
-                    width: 100%;
-                    height: 100%;
-                    background-color: rgba(0, 0, 0, 0.5);
-                }
-                
-                .modal-content {
-                    background-color: white;
-                    margin: 10% auto;
-                    padding: 0;
-                    border-radius: 8px;
-                    width: 80%;
-                    max-width: 800px;
-                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-                }
-                
-                .modal-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    padding: 15px 20px;
-                    border-bottom: 1px solid var(--light-gray);
-                }
-                
-                .modal-header h3 {
-                    margin: 0;
-                    color: var(--secondary);
-                }
-                
-                .close-modal {
-                    font-size: 24px;
-                    font-weight: bold;
-                    color: var(--gray);
-                    cursor: pointer;
-                }
-                
-                .modal-body {
-                    padding: 20px;
-                }
-                
-                .error-info {
-                    margin-bottom: 20px;
-                }
-                
-                .error-message, .error-stack, .error-context {
-                    margin-bottom: 20px;
-                }
-                
-                .error-message h4, .error-stack h4, .error-context h4 {
-                    margin-bottom: 10px;
-                    color: var(--secondary);
-                }
-                
-                .error-message pre, .error-stack pre, .error-context pre {
-                    background-color: var(--light-gray);
-                    padding: 10px;
-                    border-radius: 4px;
-                    overflow-x: auto;
-                    white-space: pre-wrap;
-                    word-wrap: break-word;
-                }
-                
-                .error-actions {
-                    display: flex;
-                    justify-content: flex-end;
-                    gap: 10px;
-                    margin-top: 20px;
-                }
-                
-                .error-badge {
-                    display: inline-block;
-                    background-color: var(--danger);
-                    color: white;
-                    border-radius: 50%;
-                    width: 18px;
-                    height: 18px;
-                    font-size: 12px;
-                    text-align: center;
-                    line-height: 18px;
-                    margin-left: 5px;
-                }
-            `;
+        // Add modal styles
+        const modalStyles = document.createElement('style');
+        modalStyles.textContent = `
+            .modal {
+                display: none;
+                position: fixed;
+                z-index: 1000;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.5);
+            }
             
-            document.head.appendChild(modalStyles);
-        }
+            .modal-content {
+                background-color: white;
+                margin: 10% auto;
+                padding: 0;
+                border-radius: 8px;
+                width: 80%;
+                max-width: 800px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            }
+            
+            .modal-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 15px 20px;
+                border-bottom: 1px solid var(--light-gray);
+            }
+            
+            .modal-header h3 {
+                margin: 0;
+                color: var(--secondary);
+            }
+            
+            .close-modal {
+                font-size: 24px;
+                font-weight: bold;
+                color: var(--gray);
+                cursor: pointer;
+            }
+            
+            .modal-body {
+                padding: 20px;
+            }
+            
+            .error-info {
+                margin-bottom: 20px;
+            }
+            
+            .error-message, .error-stack, .error-context {
+                margin-bottom: 20px;
+            }
+            
+            .error-message h4, .error-stack h4, .error-context h4 {
+                margin-bottom: 10px;
+                color: var(--secondary);
+            }
+            
+            .error-message pre, .error-stack pre, .error-context pre {
+                background-color: var(--light-gray);
+                padding: 10px;
+                border-radius: 4px;
+                overflow-x: auto;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+            
+            .error-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+                margin-top: 20px;
+            }
+        `;
+        
+        document.head.appendChild(modalStyles);
     }
     
     // Setup error filter listeners
@@ -281,7 +238,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update all errors
     function updateAllErrors() {
-        fetch(API_URLS.ERRORS)
+        fetch(ENDPOINTS.errors)
             .then(response => response.json())
             .then(data => {
                 // Get active filter
@@ -291,17 +248,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Apply filter
                 const filteredErrors = filterType === 'all' 
                     ? data.errors 
-                    : data.errors.filter(error => {
-                        // Special handling for identity column errors
-                        if (filterType === 'identity') {
-                            return error.message && (
-                                error.message.includes('identity') || 
-                                error.message.includes('IDENTITY_INSERT') ||
-                                error.message.includes('picqer_id')
-                            );
-                        }
-                        return error.type === filterType;
-                    });
+                    : data.errors.filter(error => error.type === filterType);
                 
                 // Update sync history with error information
                 updateSyncHistoryWithErrors(filteredErrors);
@@ -365,7 +312,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update error counts in entity tabs
     function updateErrorCountsInTabs(errorCounts) {
-        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers', 'batches'];
+        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
         
         entityTypes.forEach(entityType => {
             const tab = document.querySelector(`.entity-tab[data-entity="${entityType}"]`);
@@ -390,7 +337,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Show error details
     function showErrorDetails(errorId) {
-        fetch(API_URLS.errorDetails(errorId))
+        fetch(ENDPOINTS.errorDetails(errorId))
             .then(response => response.json())
             .then(data => {
                 // Populate modal with error details
@@ -404,17 +351,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // Set sync ID for retry button
                 document.getElementById('modal-retry-btn').setAttribute('data-sync-id', data.syncId);
-                
-                // Check if this is an identity column related error
-                const identityColumnInfo = document.getElementById('identity-column-info');
-                if (identityColumnInfo) {
-                    const isIdentityError = data.message && (
-                        data.message.includes('identity') || 
-                        data.message.includes('IDENTITY_INSERT') ||
-                        data.message.includes('picqer_id')
-                    );
-                    identityColumnInfo.style.display = isIdentityError ? 'block' : 'none';
-                }
                 
                 // Show modal
                 document.getElementById('error-details-modal').style.display = 'block';
@@ -432,7 +368,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Retry sync
     function retrySync(syncId) {
-        fetch(API_URLS.retrySync(syncId), { method: 'POST' })
+        fetch(ENDPOINTS.retrySync(syncId), { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
@@ -443,12 +379,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     setTimeout(updateAllErrors, 2000);
                 } else {
                     // Show error message
-                    alert('Error: ' + (data.message || 'Unknown error'));
+                    alert(`Failed to retry sync: ${data.message}`);
                 }
             })
             .catch(error => {
                 console.error('Error retrying sync:', error);
-                alert('Error: ' + error.message);
+                alert('Error retrying sync. Please try again.');
             });
     }
 });
