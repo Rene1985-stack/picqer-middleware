@@ -1,296 +1,211 @@
-/**
- * Metrics Display for Picqer Middleware Dashboard
- * Enhanced to support identity column handling and improved metrics display
- */
+// metrics-display.js - Enhanced metrics display for the middleware dashboard
+
+// This script extends the dashboard functionality to display additional metrics
+// for all entity types (products, picklists, warehouses, users, suppliers)
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Use the API URL Helper for consistent endpoint access
-    const API_URLS = window.API_URLS || {
-        // Fallback if API_URLS is not defined
-        STATUS: '/api/status',
-        STATS: '/api/stats',
-        SYNC_BATCHES: '/api/sync/batches'
+    // API endpoints
+    const API_BASE = window.location.origin;
+    const ENDPOINTS = {
+        metrics: `${API_BASE}/api/metrics`,
+        entityMetrics: (entity) => `${API_BASE}/api/metrics/${entity}`,
+        syncStats: `${API_BASE}/api/sync/stats`
     };
     
-    // Initialize batch metrics display
-    initializeBatchMetricsDisplay();
+    // Initialize metrics display
+    initializeMetricsDisplay();
     
-    // Set up polling for metrics updates - reduced frequency to avoid overloading
-    setInterval(updateBatchMetrics, 60000); // 60s interval
+    // Set up polling for metrics updates
+    setInterval(updateAllMetrics, 30000);
     
-    // Initialize batch metrics display
-    function initializeBatchMetricsDisplay() {
-        // Create metrics containers for batch tab
-        createBatchMetricsContainers();
+    // Initialize metrics display
+    function initializeMetricsDisplay() {
+        // Create metrics containers for each entity tab
+        createEntityMetricsContainers();
         
         // Fetch initial metrics
-        updateBatchMetrics();
+        updateAllMetrics();
         
         // Add event listeners for metrics refresh buttons
-        document.querySelectorAll('.refresh-metrics-btn[data-entity="batches"]').forEach(button => {
+        document.querySelectorAll('.refresh-metrics-btn').forEach(button => {
             button.addEventListener('click', function() {
-                updateBatchMetrics();
+                const entityType = this.getAttribute('data-entity');
+                if (entityType === 'all') {
+                    updateAllMetrics();
+                } else {
+                    updateEntityMetrics(entityType);
+                }
             });
         });
     }
     
-    // Create metrics containers for batch tab
-    function createBatchMetricsContainers() {
-        // Create metrics container for batches tab if it doesn't exist
-        if (!document.querySelector('#batches-metrics-grid')) {
-            const batchesContent = document.getElementById('batches-content');
-            if (!batchesContent) return;
-            
-            const metricsContainer = document.createElement('div');
-            metricsContainer.className = 'metrics-container';
-            metricsContainer.innerHTML = `
-                <div class="card-header">
-                    <h3 class="card-title">Batch Performance Metrics</h3>
-                    <div class="card-actions">
-                        <button class="btn btn-outline refresh-metrics-btn" data-entity="batches">
-                            Refresh Metrics
-                        </button>
-                    </div>
-                </div>
-                <div class="metrics-grid" id="batches-metrics-grid">
-                    <div class="loading-metrics">Loading metrics...</div>
-                </div>
-            `;
-            
-            batchesContent.appendChild(metricsContainer);
-        }
+    // Create metrics containers for each entity tab
+    function createEntityMetricsContainers() {
+        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
+        
+        // Create metrics container for all entities tab
+        createMetricsContainer('all-content', 'all');
+        
+        // Create metrics containers for each entity tab
+        entityTypes.forEach(entityType => {
+            createMetricsContainer(`${entityType}-content`, entityType);
+        });
     }
     
-    // Update batch metrics - Enhanced to handle identity column data
-    function updateBatchMetrics() {
-        // Get batch data from standard sync stats endpoint
-        fetch(API_URLS.STATS)
+    // Create metrics container for an entity tab
+    function createMetricsContainer(contentId, entityType) {
+        const contentElement = document.getElementById(contentId);
+        if (!contentElement) return;
+        
+        // Check if metrics container already exists
+        if (contentElement.querySelector('.metrics-container')) return;
+        
+        // Create metrics container
+        const metricsContainer = document.createElement('div');
+        metricsContainer.className = 'metrics-container';
+        metricsContainer.innerHTML = `
+            <div class="card-header">
+                <h3 class="card-title">Performance Metrics</h3>
+                <div class="card-actions">
+                    <button class="btn btn-outline refresh-metrics-btn" data-entity="${entityType}">
+                        Refresh Metrics
+                    </button>
+                </div>
+            </div>
+            <div class="metrics-grid" id="${entityType}-metrics-grid">
+                <div class="loading-metrics">Loading metrics...</div>
+            </div>
+        `;
+        
+        // Add metrics container to content element
+        contentElement.appendChild(metricsContainer);
+    }
+    
+    // Update all metrics
+    function updateAllMetrics() {
+        // Update metrics for all entities
+        updateEntityMetrics('all');
+        
+        // Update metrics for each entity type
+        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
+        entityTypes.forEach(entityType => {
+            updateEntityMetrics(entityType);
+        });
+        
+        // Update sync statistics
+        updateSyncStats();
+    }
+    
+    // Update metrics for a specific entity type
+    function updateEntityMetrics(entityType) {
+        const endpoint = entityType === 'all' ? ENDPOINTS.metrics : ENDPOINTS.entityMetrics(entityType);
+        
+        fetch(endpoint)
             .then(response => response.json())
             .then(data => {
-                if (data.success && data.stats && data.stats.batches) {
-                    // Extract batch stats from the standard stats endpoint
-                    displayBatchStats(data.stats.batches);
-                    
-                    // Create simulated metrics data based on available stats
-                    const simulatedMetrics = createSimulatedMetricsFromStats(data.stats.batches);
-                    displayBatchMetrics(simulatedMetrics);
-                    
-                    // Create simulated productivity data
-                    const simulatedProductivity = createSimulatedProductivityData();
-                    displayBatchProductivity(simulatedProductivity);
-                    
-                    // Add note about identity column handling if applicable
-                    if (data.stats.batches.identityColumnHandling) {
-                        displayIdentityColumnNote();
-                    }
-                } else {
-                    console.error('Error: Invalid stats data format');
-                    displayBatchStatsError();
-                    displayBatchMetricsError();
-                    displayBatchProductivityError();
-                }
+                displayEntityMetrics(entityType, data);
             })
             .catch(error => {
-                console.error('Error fetching batch data:', error);
-                displayBatchStatsError();
-                displayBatchMetricsError();
-                displayBatchProductivityError();
+                console.error(`Error fetching ${entityType} metrics:`, error);
+                displayMetricsError(entityType);
             });
     }
     
-    // Create simulated metrics from stats data
-    function createSimulatedMetricsFromStats(batchStats) {
-        // Create simulated metrics based on available stats
-        return {
-            successRate: 95, // Default value
-            avgSyncTime: 120000, // 2 minutes in milliseconds
-            batchesPerDay: Math.ceil((batchStats.totalCount || 0) / 30), // Estimate based on total count
-            errorRate: 5, // Default value
-            avgBatchSize: 25, // Default value
-            completedBatches: batchStats.totalCount || 0,
-            syncHistory: [] // Empty sync history
-        };
+    // Update sync statistics
+    function updateSyncStats() {
+        fetch(ENDPOINTS.syncStats)
+            .then(response => response.json())
+            .then(data => {
+                displaySyncStats(data);
+            })
+            .catch(error => {
+                console.error('Error fetching sync stats:', error);
+            });
     }
     
-    // Create simulated productivity data
-    function createSimulatedProductivityData() {
-        return {
-            productivity: {
-                pickerProductivity: 42.5,
-                packerProductivity: 38.2,
-                avgPickingTime: 180000, // 3 minutes in milliseconds
-                avgPackingTime: 120000, // 2 minutes in milliseconds
-                timeData: [] // Empty time data
-            }
-        };
-    }
-    
-    // Display batch metrics - Enhanced for identity column handling
-    function displayBatchMetrics(data) {
-        const metricsGrid = document.getElementById('batches-metrics-grid');
+    // Display metrics for a specific entity type
+    function displayEntityMetrics(entityType, data) {
+        const metricsGrid = document.getElementById(`${entityType}-metrics-grid`);
         if (!metricsGrid) return;
         
         // Clear loading message
         metricsGrid.innerHTML = '';
         
-        // Add note about simulated data
-        const simulatedNote = document.createElement('div');
-        simulatedNote.className = 'simulated-data-notice';
-        simulatedNote.innerHTML = 'Note: Using estimated metrics data. For accurate metrics, please use the Picqer dashboard.';
-        simulatedNote.style.gridColumn = '1 / -1';
-        simulatedNote.style.padding = '10px';
-        simulatedNote.style.backgroundColor = '#fff3cd';
-        simulatedNote.style.color = '#856404';
-        simulatedNote.style.borderRadius = '4px';
-        simulatedNote.style.marginBottom = '15px';
-        metricsGrid.appendChild(simulatedNote);
-        
         // Create metrics cards
-        createMetricCard(metricsGrid, 'Success Rate', `${data.successRate || 0}%`);
-        createMetricCard(metricsGrid, 'Avg Sync Time', formatDuration(data.avgSyncTime));
-        createMetricCard(metricsGrid, 'Batches Per Day', data.batchesPerDay || 0);
-        createMetricCard(metricsGrid, 'Error Rate', `${data.errorRate || 0}%`);
+        if (entityType === 'all') {
+            // Display overall metrics for all entities
+            createMetricCard(metricsGrid, 'Total Syncs', data.totalSyncs || 0);
+            createMetricCard(metricsGrid, 'Success Rate', `${data.successRate || 0}%`);
+            createMetricCard(metricsGrid, 'Avg Sync Time', formatDuration(data.avgSyncTime));
+            createMetricCard(metricsGrid, 'Total Errors', data.totalErrors || 0);
+        } else {
+            // Display entity-specific metrics
+            createMetricCard(metricsGrid, 'Success Rate', `${data.successRate || 0}%`);
+            createMetricCard(metricsGrid, 'Avg Sync Time', formatDuration(data.avgSyncTime));
+            createMetricCard(metricsGrid, 'Items Per Minute', data.itemsPerMinute || 0);
+            createMetricCard(metricsGrid, 'Error Rate', `${data.errorRate || 0}%`);
+            
+            // Add entity-specific metrics
+            if (entityType === 'products') {
+                createMetricCard(metricsGrid, 'Stock Accuracy', `${data.stockAccuracy || 0}%`);
+                createMetricCard(metricsGrid, 'Price Updates', data.priceUpdates || 0);
+            } else if (entityType === 'picklists') {
+                createMetricCard(metricsGrid, 'Completed Picklists', data.completedPicklists || 0);
+                createMetricCard(metricsGrid, 'Processing Time', formatDuration(data.processingTime));
+            } else if (entityType === 'warehouses') {
+                createMetricCard(metricsGrid, 'Stock Movements', data.stockMovements || 0);
+                createMetricCard(metricsGrid, 'Active Warehouses', data.activeWarehouses || 0);
+            } else if (entityType === 'users') {
+                createMetricCard(metricsGrid, 'Active Users', data.activeUsers || 0);
+                createMetricCard(metricsGrid, 'User Logins', data.userLogins || 0);
+            } else if (entityType === 'suppliers') {
+                createMetricCard(metricsGrid, 'Active Suppliers', data.activeSuppliers || 0);
+                createMetricCard(metricsGrid, 'Product Coverage', `${data.productCoverage || 0}%`);
+            }
+        }
         
-        // Add batch-specific metrics
-        createMetricCard(metricsGrid, 'Avg Batch Size', data.avgBatchSize || 0);
-        createMetricCard(metricsGrid, 'Completed Batches', data.completedBatches || 0);
+        // Add sync history chart if data available
+        if (data.syncHistory && data.syncHistory.length > 0) {
+            createSyncHistoryChart(metricsGrid, entityType, data.syncHistory);
+        }
     }
     
-    // Display identity column handling note
-    function displayIdentityColumnNote() {
-        const metricsGrid = document.getElementById('batches-metrics-grid');
+    // Display sync statistics
+    function displaySyncStats(data) {
+        // Update sync progress bars for each entity
+        const entityTypes = ['products', 'picklists', 'warehouses', 'users', 'suppliers'];
+        
+        entityTypes.forEach(entityType => {
+            const progressBar = document.getElementById(`${entityType}-progress-bar`);
+            if (!progressBar) return;
+            
+            const entityProgress = data[entityType];
+            if (entityProgress && entityProgress.inProgress) {
+                const progress = Math.min(
+                    Math.round((entityProgress.itemsProcessed / entityProgress.totalItems) * 100),
+                    100
+                );
+                progressBar.style.width = `${progress}%`;
+                progressBar.setAttribute('title', `${progress}% complete`);
+            } else {
+                progressBar.style.width = '0%';
+                progressBar.setAttribute('title', 'No sync in progress');
+            }
+        });
+        
+        // Update overall sync status
+        const overallStatus = document.getElementById('sync-status');
+        if (overallStatus) {
+            overallStatus.textContent = data.anySyncInProgress ? 'Running' : 'Ready';
+        }
+    }
+    
+    // Display metrics error
+    function displayMetricsError(entityType) {
+        const metricsGrid = document.getElementById(`${entityType}-metrics-grid`);
         if (!metricsGrid) return;
         
-        // Check if note already exists
-        if (document.querySelector('.identity-column-notice')) return;
-        
-        // Add note about identity column handling
-        const identityNote = document.createElement('div');
-        identityNote.className = 'identity-column-notice';
-        identityNote.innerHTML = 'Note: Using enhanced identity column handling for database compatibility.';
-        identityNote.style.gridColumn = '1 / -1';
-        identityNote.style.padding = '10px';
-        identityNote.style.backgroundColor = '#d4edda';
-        identityNote.style.color = '#155724';
-        identityNote.style.borderRadius = '4px';
-        identityNote.style.marginTop = '15px';
-        metricsGrid.appendChild(identityNote);
-    }
-    
-    // Display batch productivity
-    function displayBatchProductivity(data) {
-        if (!data || !data.productivity) return;
-        
-        const productivity = data.productivity;
-        
-        // Update picker productivity
-        const pickerProductivity = document.getElementById('picker-productivity');
-        if (pickerProductivity) {
-            pickerProductivity.textContent = productivity.pickerProductivity?.toFixed(2) || '0.00';
-        }
-        
-        // Update packer productivity
-        const packerProductivity = document.getElementById('packer-productivity');
-        if (packerProductivity) {
-            packerProductivity.textContent = productivity.packerProductivity?.toFixed(2) || '0.00';
-        }
-        
-        // Update average picking time
-        const avgPickingTime = document.getElementById('avg-picking-time');
-        if (avgPickingTime) {
-            avgPickingTime.textContent = formatDuration(productivity.avgPickingTime);
-        }
-        
-        // Update average packing time
-        const avgPackingTime = document.getElementById('avg-packing-time');
-        if (avgPackingTime) {
-            avgPackingTime.textContent = formatDuration(productivity.avgPackingTime);
-        }
-    }
-    
-    // Display batch statistics - Enhanced for identity column handling
-    function displayBatchStats(stats) {
-        if (!stats) return;
-        
-        // Update batch count
-        const batchesCount = document.getElementById('batches-count');
-        if (batchesCount) {
-            batchesCount.textContent = stats.totalCount || 0;
-        }
-        
-        // Update total batches in all tab
-        const totalBatches = document.getElementById('total-batches');
-        if (totalBatches) {
-            totalBatches.textContent = stats.totalCount || 0;
-        }
-        
-        // Update last sync date
-        const batchesLastSync = document.getElementById('batches-last-sync');
-        if (batchesLastSync && stats.lastSyncDate) {
-            batchesLastSync.textContent = new Date(stats.lastSyncDate).toLocaleString();
-        }
-        
-        // Update sync status
-        const batchesSyncStatus = document.getElementById('batches-sync-status');
-        if (batchesSyncStatus) {
-            batchesSyncStatus.textContent = stats.status || 'Ready';
-        }
-        
-        // Update last sync count
-        const batchesSyncCount = document.getElementById('batches-sync-count');
-        if (batchesSyncCount) {
-            batchesSyncCount.textContent = stats.lastSyncCount || 0;
-        }
-        
-        // Update progress bar
-        const batchesProgressBar = document.getElementById('batches-progress-bar');
-        if (batchesProgressBar && stats.syncProgress) {
-            const progress = Math.min(
-                Math.round((stats.syncProgress.itemsProcessed / stats.syncProgress.totalItems) * 100),
-                100
-            );
-            batchesProgressBar.style.width = `${progress}%`;
-            batchesProgressBar.setAttribute('title', `${progress}% complete`);
-        } else if (batchesProgressBar) {
-            batchesProgressBar.style.width = '0%';
-            batchesProgressBar.setAttribute('title', 'No sync in progress');
-        }
-    }
-    
-    // Display batch metrics error
-    function displayBatchMetricsError() {
-        const metricsGrid = document.getElementById('batches-metrics-grid');
-        if (!metricsGrid) return;
-        
-        metricsGrid.innerHTML = '<div class="metrics-error">Error loading batch metrics</div>';
-    }
-    
-    // Display batch productivity error
-    function displayBatchProductivityError() {
-        const pickerProductivity = document.getElementById('picker-productivity');
-        const packerProductivity = document.getElementById('packer-productivity');
-        const avgPickingTime = document.getElementById('avg-picking-time');
-        const avgPackingTime = document.getElementById('avg-packing-time');
-        
-        if (pickerProductivity) pickerProductivity.textContent = 'Error';
-        if (packerProductivity) packerProductivity.textContent = 'Error';
-        if (avgPickingTime) avgPickingTime.textContent = 'Error';
-        if (avgPackingTime) avgPackingTime.textContent = 'Error';
-    }
-    
-    // Display batch stats error
-    function displayBatchStatsError() {
-        const batchesCount = document.getElementById('batches-count');
-        const totalBatches = document.getElementById('total-batches');
-        const batchesLastSync = document.getElementById('batches-last-sync');
-        const batchesSyncStatus = document.getElementById('batches-sync-status');
-        const batchesSyncCount = document.getElementById('batches-sync-count');
-        
-        if (batchesCount) batchesCount.textContent = 'Error';
-        if (totalBatches) totalBatches.textContent = 'Error';
-        if (batchesLastSync) batchesLastSync.textContent = 'Error';
-        if (batchesSyncStatus) batchesSyncStatus.textContent = 'Error';
-        if (batchesSyncCount) batchesSyncCount.textContent = 'Error';
+        metricsGrid.innerHTML = '<div class="metrics-error">Error loading metrics</div>';
     }
     
     // Create a metric card
@@ -304,6 +219,81 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
         
         container.appendChild(metricCard);
+    }
+    
+    // Create sync history chart
+    function createSyncHistoryChart(container, entityType, syncHistory) {
+        const chartContainer = document.createElement('div');
+        chartContainer.className = 'chart-container';
+        chartContainer.style.gridColumn = '1 / -1';
+        
+        const canvas = document.createElement('canvas');
+        canvas.id = `${entityType}-sync-chart`;
+        canvas.height = 200;
+        
+        chartContainer.appendChild(canvas);
+        container.appendChild(chartContainer);
+        
+        // Prepare data for chart
+        const labels = syncHistory.map(item => {
+            const date = new Date(item.timestamp);
+            return `${date.getMonth() + 1}/${date.getDate()}`;
+        });
+        
+        const successData = syncHistory.map(item => item.success ? item.count : 0);
+        const errorData = syncHistory.map(item => !item.success ? item.count : 0);
+        
+        // Create chart
+        new Chart(canvas, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Successful Syncs',
+                        data: successData,
+                        backgroundColor: '#28a745',
+                        borderColor: '#28a745',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Failed Syncs',
+                        data: errorData,
+                        backgroundColor: '#dc3545',
+                        borderColor: '#dc3545',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Items Synced'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Date'
+                        }
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: `${entityType.charAt(0).toUpperCase() + entityType.slice(1)} Sync History`
+                    },
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
     }
     
     // Format duration in milliseconds to human-readable string
