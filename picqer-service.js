@@ -1,12 +1,19 @@
+/**
+ * Enhanced PicqerService with database initialization support
+ * Added initializeDatabase method to align with index.js expectations
+ */
 const axios = require('axios');
+const sql = require('mssql');
+const syncProgressSchema = require('./sync_progress_schema');
 
 /**
  * Service for interacting with the Picqer API using the same authentication method as Power BI
  */
 class PicqerService {
-  constructor(apiKey, baseUrl) {
+  constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
+    this.sqlConfig = sqlConfig;
     
     console.log('Initializing PicqerService with:');
     console.log('API Key (first 5 chars):', this.apiKey.substring(0, 5) + '...');
@@ -52,6 +59,128 @@ class PicqerService {
         return Promise.reject(error);
       }
     );
+  }
+
+  /**
+   * Initialize the database with products schema and sync progress tracking
+   * @returns {Promise<boolean>} - Success status
+   */
+  async initializeDatabase() {
+    try {
+      console.log('Initializing database with products schema...');
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Create Products table if it doesn't exist
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Products')
+        BEGIN
+            CREATE TABLE Products (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                idproduct INT NOT NULL,
+                idvatgroup INT NULL,
+                name NVARCHAR(255) NOT NULL,
+                price DECIMAL(18,2) NULL,
+                fixedstockprice DECIMAL(18,2) NULL,
+                idsupplier INT NULL,
+                productcode NVARCHAR(100) NOT NULL,
+                productcode_supplier NVARCHAR(100) NULL,
+                deliverytime INT NULL,
+                description NVARCHAR(MAX) NULL,
+                barcode NVARCHAR(100) NULL,
+                type NVARCHAR(50) NULL,
+                unlimitedstock BIT NULL,
+                weight INT NULL,
+                length INT NULL,
+                width INT NULL,
+                height INT NULL,
+                minimum_purchase_quantity INT NULL,
+                purchase_in_quantities_of INT NULL,
+                hs_code NVARCHAR(50) NULL,
+                country_of_origin NVARCHAR(2) NULL,
+                active BIT NULL,
+                idfulfilment_customer INT NULL,
+                analysis_pick_amount_per_day FLOAT NULL,
+                analysis_abc_classification NVARCHAR(1) NULL,
+                tags NVARCHAR(MAX) NULL,
+                productfields NVARCHAR(MAX) NULL,
+                images NVARCHAR(MAX) NULL,
+                pricelists NVARCHAR(MAX) NULL,
+                stock INT NULL,
+                created DATETIME NULL,
+                updated DATETIME NULL,
+                last_sync_date DATETIME NOT NULL DEFAULT GETDATE()
+            );
+            
+            -- Create indexes for better performance
+            CREATE INDEX IX_Products_idproduct ON Products(idproduct);
+            CREATE INDEX IX_Products_productcode ON Products(productcode);
+            CREATE INDEX IX_Products_updated ON Products(updated);
+            CREATE INDEX IX_Products_barcode ON Products(barcode);
+        END
+      `);
+      
+      // Create SyncProgress table for resumable sync if it doesn't exist
+      await pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
+      console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
+      
+      // Check if SyncStatus table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
+      
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (syncTableExists) {
+        // Check if entity_type column exists in SyncStatus
+        const columnResult = await pool.request().query(`
+          SELECT COUNT(*) AS columnExists 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
+        `);
+        
+        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
+        
+        if (entityTypeColumnExists) {
+          // Check if products record exists
+          const recordResult = await pool.request().query(`
+            SELECT COUNT(*) AS recordExists 
+            FROM SyncStatus 
+            WHERE entity_type = 'products'
+          `);
+          
+          const productsRecordExists = recordResult.recordset[0].recordExists > 0;
+          
+          if (productsRecordExists) {
+            // Update existing record
+            await pool.request().query(`
+              UPDATE SyncStatus 
+              SET entity_name = 'products' 
+              WHERE entity_type = 'products'
+            `);
+            console.log('Updated existing products entity in SyncStatus');
+          } else {
+            // Insert new record
+            await pool.request().query(`
+              INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
+              VALUES ('products', 'products', '2025-01-01T00:00:00.000Z')
+            `);
+            console.log('Added products record to SyncStatus table');
+          }
+        } else {
+          console.warn('entity_type column does not exist in SyncStatus table');
+        }
+      } else {
+        console.warn('SyncStatus table does not exist');
+      }
+      
+      console.log('✅ Products database schema initialized successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Error initializing products database schema:', error.message);
+      throw error;
+    }
   }
 
   /**
