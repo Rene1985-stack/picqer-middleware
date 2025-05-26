@@ -1,9 +1,6 @@
 /**
- * Simplified Batch service for Picqer middleware with fixed schema
+ * Picqer Batch Service - Strictly following Picqer API documentation
  * Handles synchronization of picklist batches between Picqer and SQL database
- * Uses a fixed schema approach for simplicity and reliability
- * 
- * UPDATED: Always starts from offset 0 for days parameter and full sync
  */
 const axios = require('axios');
 const sql = require('mssql');
@@ -135,6 +132,7 @@ class SimpleBatchService {
       }
       
       // Create SyncProgress table if it doesn't exist
+      // Modified to make batch_number nullable to avoid errors
       await pool.request().query(`
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress')
         BEGIN
@@ -143,7 +141,7 @@ class SimpleBatchService {
             entity_type NVARCHAR(100) NOT NULL,
             sync_id NVARCHAR(100) NOT NULL,
             current_offset INT DEFAULT 0,
-            batch_number INT DEFAULT 0,
+            batch_number INT NULL,
             items_processed INT DEFAULT 0,
             total_items INT,
             total_batches INT,
@@ -152,6 +150,21 @@ class SimpleBatchService {
             last_updated DATETIME,
             completed_at DATETIME
           );
+        END
+        ELSE
+        BEGIN
+          -- Check if batch_number column exists and is not nullable
+          IF EXISTS (
+            SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'SyncProgress' 
+            AND COLUMN_NAME = 'batch_number' 
+            AND IS_NULLABLE = 'NO'
+          )
+          BEGIN
+            -- Alter column to allow NULL values
+            ALTER TABLE SyncProgress ALTER COLUMN batch_number INT NULL;
+            PRINT 'Modified batch_number column to allow NULL values';
+          END
         END
       `);
       console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
@@ -238,11 +251,11 @@ class SimpleBatchService {
           .input('now', sql.DateTime, now)
           .query(`
             INSERT INTO SyncProgress (
-              entity_type, sync_id, current_offset, batch_number,
+              entity_type, sync_id, current_offset,
               items_processed, status, started_at, last_updated
             )
             VALUES (
-              @entityType, @syncId, 0, 0, 
+              @entityType, @syncId, 0,
               0, 'in_progress', @now, @now
             );
             
@@ -277,11 +290,11 @@ class SimpleBatchService {
         .input('now', sql.DateTime, now)
         .query(`
           INSERT INTO SyncProgress (
-            entity_type, sync_id, current_offset, batch_number,
+            entity_type, sync_id, current_offset,
             items_processed, status, started_at, last_updated
           )
           VALUES (
-            @entityType, @syncId, 0, 0, 
+            @entityType, @syncId, 0,
             0, 'in_progress', @now, @now
           );
           
@@ -297,7 +310,6 @@ class SimpleBatchService {
         entity_type: entityType,
         sync_id: uuidv4(),
         current_offset: 0,
-        batch_number: 0,
         items_processed: 0,
         status: 'in_progress',
         started_at: new Date().toISOString(),
@@ -324,16 +336,6 @@ class SimpleBatchService {
       if (updates.current_offset !== undefined) {
         updateFields.push('current_offset = @currentOffset');
         request.input('currentOffset', sql.Int, updates.current_offset);
-      }
-      
-      if (updates.batch_number !== undefined) {
-        updateFields.push('batch_number = @batchNumber');
-        request.input('batchNumber', sql.Int, updates.batch_number);
-      }
-      
-      if (updates.total_batches !== undefined) {
-        updateFields.push('total_batches = @totalBatches');
-        request.input('totalBatches', sql.Int, updates.total_batches);
       }
       
       if (updates.items_processed !== undefined) {
