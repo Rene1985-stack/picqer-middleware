@@ -1,7 +1,9 @@
 /**
- * Warehouse Service Class
- * Properly structured as a class for instantiation with 'new'
+ * Warehouse Service Wrapper
+ * This file serves as a compatibility wrapper to ensure proper class export
  */
+
+// Define the WarehouseService class directly in this file
 const axios = require('axios');
 const sql = require('mssql');
 
@@ -25,6 +27,8 @@ class WarehouseService {
         'User-Agent': 'PicqerMiddleware (middleware@skapa-global.com)'
       }
     });
+    
+    console.log('WarehouseService initialized successfully');
   }
 
   /**
@@ -348,4 +352,5 @@ class WarehouseService {
   }
 }
 
+// Export the class directly
 module.exports = WarehouseService;
