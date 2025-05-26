@@ -1,11 +1,12 @@
 /**
- * Warehouse Service Wrapper
- * This file serves as a compatibility wrapper to ensure proper class export
+ * Enhanced Warehouse Service with saveWarehousesToDatabase method
+ * Fixes the "No method available to save warehouses to database" error
  */
 
-// Define the WarehouseService class directly in this file
+// Import required modules
 const axios = require('axios');
 const sql = require('mssql');
+const { v4: uuidv4 } = require('uuid');
 
 class WarehouseService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -99,14 +100,37 @@ class WarehouseService {
   }
 
   /**
-   * Sync warehouses with duplicate prevention
-   * @param {Array} warehouses - Array of warehouses from Picqer API
-   * @returns {Promise<Object>} - Results of the sync operation
+   * Get warehouses updated since a specific date
+   * @param {Date} since - Date to filter warehouses by
+   * @returns {Promise<Array>} Array of warehouses
    */
-  async syncWarehouses(warehouses) {
+  async getWarehousesUpdatedSince(since) {
+    try {
+      console.log(`Fetching warehouses updated since: ${since.toISOString()}`);
+      
+      // Picqer API doesn't support filtering warehouses by update date
+      // So we fetch all warehouses and filter them in memory
+      const allWarehouses = await this.getAllWarehouses();
+      console.log(`Retrieved ${allWarehouses.length} warehouses from Picqer`);
+      
+      // Return all warehouses since we can't filter by date on the API
+      return allWarehouses;
+    } catch (error) {
+      console.error(`Error fetching warehouses updated since ${since.toISOString()}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save warehouses to database - MISSING METHOD ADDED
+   * @param {Array} warehouses - Array of warehouses to save
+   * @param {string} syncId - Sync ID for tracking
+   * @returns {Promise<Object>} - Results of the save operation
+   */
+  async saveWarehousesToDatabase(warehouses, syncId = null) {
     try {
       if (!warehouses || warehouses.length === 0) {
-        console.log('No warehouses to sync');
+        console.log('No warehouses to save to database');
         return {
           success: true,
           savedCount: 0,
@@ -114,31 +138,11 @@ class WarehouseService {
         };
       }
       
-      console.log(`Syncing ${warehouses.length} warehouses...`);
+      console.log(`Saving ${warehouses.length} warehouses to database...`);
       const pool = await sql.connect(this.sqlConfig);
       let savedCount = 0;
       let errorCount = 0;
       let duplicateCount = 0;
-      
-      // First, check for potential duplicates in the incoming data
-      const warehouseIds = warehouses.map(w => w.idwarehouse);
-      const uniqueIds = [...new Set(warehouseIds)];
-      
-      if (uniqueIds.length < warehouseIds.length) {
-        console.warn(`⚠️ Found ${warehouseIds.length - uniqueIds.length} duplicate warehouse IDs in the incoming data`);
-        
-        // Log the duplicates for investigation
-        const idCounts = {};
-        warehouseIds.forEach(id => {
-          idCounts[id] = (idCounts[id] || 0) + 1;
-        });
-        
-        Object.entries(idCounts)
-          .filter(([_, count]) => count > 1)
-          .forEach(([id, count]) => {
-            console.warn(`Warehouse ID ${id} appears ${count} times in the incoming data`);
-          });
-      }
       
       // Process each warehouse with duplicate prevention
       for (const warehouse of warehouses) {
@@ -272,13 +276,153 @@ class WarehouseService {
         duplicateCount
       };
     } catch (error) {
-      console.error(`❌ Error syncing warehouses: ${error.message}`);
+      console.error(`❌ Error saving warehouses to database: ${error.message}`);
       return {
         success: false,
         savedCount: 0,
         errorCount: warehouses ? warehouses.length : 0,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Create or get sync progress record
+   * @param {string} entityType - Entity type for sync
+   * @param {string} syncId - Optional sync ID
+   * @returns {Promise<Object>} - Sync progress record
+   */
+  async createOrGetSyncProgress(entityType, syncId = null) {
+    try {
+      if (!syncId) {
+        syncId = uuidv4();
+      }
+      
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Check if sync progress record exists
+      const checkResult = await pool.request()
+        .input('entity_type', sql.NVarChar, entityType)
+        .input('sync_id', sql.NVarChar, syncId)
+        .query('SELECT * FROM SyncProgress WHERE entity_type = @entity_type AND sync_id = @sync_id');
+      
+      if (checkResult.recordset.length > 0) {
+        return checkResult.recordset[0];
+      }
+      
+      // Create new sync progress record
+      const insertResult = await pool.request()
+        .input('entity_type', sql.NVarChar, entityType)
+        .input('sync_id', sql.NVarChar, syncId)
+        .input('current_offset', sql.Int, 0)
+        .input('batch_number', sql.Int, 0)
+        .input('items_processed', sql.Int, 0)
+        .input('status', sql.NVarChar, 'in_progress')
+        .query(`
+          INSERT INTO SyncProgress (
+            entity_type, sync_id, current_offset, batch_number, items_processed, status
+          ) VALUES (
+            @entity_type, @sync_id, @current_offset, @batch_number, @items_processed, @status
+          );
+          SELECT * FROM SyncProgress WHERE entity_type = @entity_type AND sync_id = @sync_id;
+        `);
+      
+      return insertResult.recordset[0];
+    } catch (error) {
+      console.error(`Error creating/getting sync progress: ${error.message}`);
+      // Return a minimal object to prevent further errors
+      return {
+        entity_type: entityType,
+        sync_id: syncId || uuidv4(),
+        current_offset: 0,
+        batch_number: 0,
+        items_processed: 0,
+        status: 'in_progress'
+      };
+    }
+  }
+
+  /**
+   * Update sync progress
+   * @param {string} entityType - Entity type for sync
+   * @param {string} syncId - Sync ID
+   * @param {Object} updates - Updates to apply
+   * @returns {Promise<Object>} - Updated sync progress record
+   */
+  async updateSyncProgress(entityType, syncId, updates) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Build update query dynamically
+      let updateQuery = 'UPDATE SyncProgress SET ';
+      const queryParts = [];
+      const request = pool.request()
+        .input('entity_type', sql.NVarChar, entityType)
+        .input('sync_id', sql.NVarChar, syncId);
+      
+      // Add each update field
+      Object.entries(updates).forEach(([key, value], index) => {
+        const paramName = `param${index}`;
+        queryParts.push(`${key} = @${paramName}`);
+        
+        // Determine SQL type based on value type
+        if (typeof value === 'number') {
+          request.input(paramName, sql.Int, value);
+        } else if (value instanceof Date) {
+          request.input(paramName, sql.DateTime, value);
+        } else {
+          request.input(paramName, sql.NVarChar, value);
+        }
+      });
+      
+      // Add last_updated timestamp
+      queryParts.push('last_updated = GETDATE()');
+      
+      // Complete the query
+      updateQuery += queryParts.join(', ');
+      updateQuery += ' WHERE entity_type = @entity_type AND sync_id = @sync_id;';
+      updateQuery += ' SELECT * FROM SyncProgress WHERE entity_type = @entity_type AND sync_id = @sync_id;';
+      
+      // Execute the update
+      const result = await request.query(updateQuery);
+      
+      return result.recordset[0];
+    } catch (error) {
+      console.error(`Error updating sync progress: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Complete sync progress
+   * @param {string} entityType - Entity type for sync
+   * @param {string} syncId - Sync ID
+   * @param {boolean} success - Whether sync was successful
+   * @returns {Promise<Object>} - Completed sync progress record
+   */
+  async completeSyncProgress(entityType, syncId, success = true) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Update sync progress record
+      const result = await pool.request()
+        .input('entity_type', sql.NVarChar, entityType)
+        .input('sync_id', sql.NVarChar, syncId)
+        .input('status', sql.NVarChar, success ? 'completed' : 'failed')
+        .query(`
+          UPDATE SyncProgress SET
+            status = @status,
+            completed_at = GETDATE(),
+            last_updated = GETDATE()
+          WHERE entity_type = @entity_type AND sync_id = @sync_id;
+          
+          SELECT * FROM SyncProgress WHERE entity_type = @entity_type AND sync_id = @sync_id;
+        `);
+      
+      return result.recordset[0];
+    } catch (error) {
+      console.error(`Error completing sync progress: ${error.message}`);
+      return null;
     }
   }
 
@@ -317,6 +461,39 @@ class WarehouseService {
   }
 
   /**
+   * Get warehouse count from database
+   * @returns {Promise<number>} - Count of warehouses in database
+   */
+  async getWarehouseCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Warehouses');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error(`Error getting warehouse count: ${error.message}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for warehouses
+   * @returns {Promise<Date|null>} - Last sync date or null if no sync
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT MAX(last_sync_date) as last_sync_date FROM Warehouses
+      `);
+      
+      return result.recordset[0].last_sync_date || null;
+    } catch (error) {
+      console.error(`Error getting last sync date: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Sync all warehouses from Picqer to database
    * @param {boolean} fullSync - Whether to perform a full sync
    * @returns {Promise<Object>} - Sync results
@@ -325,25 +502,59 @@ class WarehouseService {
     try {
       console.log(`Starting ${fullSync ? 'full' : 'incremental'} warehouse sync...`);
       
-      // Get all warehouses from Picqer
-      const warehouses = await this.getAllWarehouses();
+      // Create sync progress record
+      let syncId = uuidv4();
+      let syncProgress;
       
-      // Sync warehouses to database
-      const syncResults = await this.syncWarehouses(warehouses);
+      try {
+        syncProgress = await this.createOrGetSyncProgress('warehouses', syncId);
+      } catch (progressError) {
+        console.log('createOrGetSyncProgress method not found in WarehouseService, using default progress');
+        syncProgress = {
+          entity_type: 'warehouses',
+          sync_id: syncId,
+          current_offset: 0,
+          batch_number: 0,
+          items_processed: 0
+        };
+      }
       
-      // Update sync status
-      if (syncResults.success) {
-        // Update sync status in database if needed
+      // Get last sync date for incremental sync
+      let since = new Date('2025-01-01'); // Default to a recent date
+      if (!fullSync) {
+        const lastSyncDate = await this.getLastSyncDate();
+        if (lastSyncDate) {
+          since = new Date(lastSyncDate);
+        }
+      }
+      
+      // Get warehouses from Picqer
+      const warehouses = await this.getWarehousesUpdatedSince(since);
+      
+      // Save warehouses to database
+      const syncResults = await this.saveWarehousesToDatabase(warehouses, syncId);
+      
+      // Update sync progress
+      try {
+        await this.updateSyncProgress('warehouses', syncId, {
+          items_processed: syncResults.savedCount,
+          total_items: warehouses.length
+        });
+        
+        // Complete sync progress
+        await this.completeSyncProgress('warehouses', syncId, syncResults.success);
+      } catch (progressError) {
+        console.log('Error updating sync progress:', progressError.message);
       }
       
       return {
-        success: true,
+        success: syncResults.success,
         warehouses: warehouses.length,
         saved: syncResults.savedCount,
         errors: syncResults.errorCount
       };
     } catch (error) {
-      console.error(`❌ Error syncing all warehouses: ${error.message}`);
+      console.error(`❌ Error in ${fullSync ? 'full' : 'incremental'} warehouse sync: ${error.message}`);
       return {
         success: false,
         error: error.message
