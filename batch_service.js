@@ -1,22 +1,28 @@
 /**
- * Enhanced Batch service for Picqer middleware with robust picklist_batchid validation
- * and proper days parameter filtering
+ * Adaptive Batch service for Picqer middleware with automatic schema alignment
  * Handles synchronization of picklist batches between Picqer and SQL database
+ * Automatically adapts to schema changes and prevents column name errors
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const batchesSchema = require('./batches_schema');
+const adaptiveBatchesSchema = require('./adaptive_batches_schema');
 const syncProgressSchema = require('./sync_progress_schema');
 
-class BatchService {
+class AdaptiveBatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.sqlConfig = sqlConfig;
     this.batchSize = 100; // Use larger batch size for better performance
+    this.fieldMap = new Map(); // Map of API field names to DB column names
     
-    console.log('Initializing BatchService with:');
+    // Initialize field map from schema
+    adaptiveBatchesSchema.knownBatchFields.forEach(field => {
+      this.fieldMap.set(field.apiField, field.dbColumn);
+    });
+    
+    console.log('Initializing AdaptiveBatchService with:');
     console.log('API Key (first 5 chars):', this.apiKey ? this.apiKey.substring(0, 5) + '...' : 'undefined');
     console.log('Base URL:', this.baseUrl);
     
@@ -104,21 +110,34 @@ class BatchService {
 
   /**
    * Initialize the database with batches schema and sync progress tracking
+   * Automatically adds any missing columns to ensure schema compatibility
    * @returns {Promise<boolean>} - Success status
    */
   async initializeBatchesDatabase() {
     try {
-      console.log('Initializing database with batches schema...');
+      console.log('Initializing database with adaptive batches schema...');
       const pool = await sql.connect(this.sqlConfig);
       
-      // Create Batches table
-      await pool.request().query(batchesSchema.createBatchesTableSQL);
+      // Create Batches table with core fields
+      await pool.request().query(adaptiveBatchesSchema.createBatchesTableSQL);
       
-      // Create BatchProducts table
-      await pool.request().query(batchesSchema.createBatchProductsTableSQL);
+      // Create BatchProducts table with core fields
+      await pool.request().query(adaptiveBatchesSchema.createBatchProductsTableSQL);
       
-      // Create BatchPicklists table
-      await pool.request().query(batchesSchema.createBatchPicklistsTableSQL);
+      // Create BatchPicklists table with core fields
+      await pool.request().query(adaptiveBatchesSchema.createBatchPicklistsTableSQL);
+      
+      // Ensure all known batch fields exist
+      console.log('Checking and adding any missing batch columns...');
+      await pool.request().query(adaptiveBatchesSchema.ensureBatchColumnsSQL);
+      
+      // Ensure all known batch product fields exist
+      console.log('Checking and adding any missing batch product columns...');
+      await pool.request().query(adaptiveBatchesSchema.ensureBatchProductColumnsSQL);
+      
+      // Ensure all known batch picklist fields exist
+      console.log('Checking and adding any missing batch picklist columns...');
+      await pool.request().query(adaptiveBatchesSchema.ensureBatchPicklistColumnsSQL);
       
       // Create SyncProgress table for resumable sync if it doesn't exist
       await pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
@@ -176,10 +195,10 @@ class BatchService {
         console.warn('SyncStatus table does not exist');
       }
       
-      console.log('✅ Batches database schema initialized successfully');
+      console.log('✅ Adaptive batches database schema initialized successfully');
       return true;
     } catch (error) {
-      console.error('❌ Error initializing batches database schema:', error.message);
+      console.error('❌ Error initializing adaptive batches database schema:', error.message);
       throw error;
     }
   }
@@ -517,6 +536,10 @@ class BatchService {
       
       if (response.data) {
         console.log(`Retrieved details for batch ${idpicklist_batch}`);
+        
+        // Analyze batch data to discover new fields
+        await this.discoverAndAddNewFields(response.data);
+        
         return response.data;
       }
       
@@ -540,7 +563,76 @@ class BatchService {
   }
 
   /**
-   * Save batch to database
+   * Discover and add new fields from API response
+   * @param {Object} batchData - Batch data from API
+   * @returns {Promise<void>}
+   */
+  async discoverAndAddNewFields(batchData) {
+    try {
+      // Get all field names from the API response
+      const apiFields = Object.keys(batchData);
+      
+      // Check if any fields are not in our known fields list
+      const unknownFields = apiFields.filter(field => 
+        !adaptiveBatchesSchema.knownBatchFields.some(known => known.apiField === field)
+      );
+      
+      if (unknownFields.length > 0) {
+        console.log(`Discovered ${unknownFields.length} new fields in API response:`, unknownFields);
+        
+        // Connect to database
+        const pool = await sql.connect(this.sqlConfig);
+        
+        // Add each unknown field to the database
+        for (const field of unknownFields) {
+          // Determine SQL type based on value type
+          let sqlType = 'NVARCHAR(255)';
+          const value = batchData[field];
+          
+          if (typeof value === 'number') {
+            if (Number.isInteger(value)) {
+              sqlType = 'INT';
+            } else {
+              sqlType = 'FLOAT';
+            }
+          } else if (typeof value === 'boolean') {
+            sqlType = 'BIT';
+          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+            sqlType = 'DATETIME';
+          } else if (typeof value === 'string' && value.length > 255) {
+            sqlType = 'NVARCHAR(MAX)';
+          }
+          
+          // Use the same name for both API field and DB column
+          const columnName = field;
+          
+          // Add column to database
+          const addColumnSQL = `
+          IF NOT EXISTS (
+              SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+              WHERE TABLE_NAME = 'Batches' AND COLUMN_NAME = '${columnName}'
+          )
+          BEGIN
+              ALTER TABLE Batches ADD ${columnName} ${sqlType};
+              PRINT 'Added new column ${columnName} (${sqlType}) to Batches table';
+          END
+          `;
+          
+          await pool.request().query(addColumnSQL);
+          console.log(`Added new column ${columnName} (${sqlType}) to Batches table`);
+          
+          // Add to field map
+          this.fieldMap.set(field, columnName);
+        }
+      }
+    } catch (error) {
+      console.error('Error discovering and adding new fields:', error.message);
+      // Continue execution even if this fails
+    }
+  }
+
+  /**
+   * Save batch to database with adaptive column mapping
    * @param {Object} batchDetails - Batch details from Picqer API
    * @returns {Promise<boolean>} - Success status
    */
@@ -587,78 +679,126 @@ class BatchService {
         picklist_batchid = `BATCH-${batchDetails.idpicklist_batch}`;
       }
       
-      // Sanitize other string fields
-      const status = String(batchDetails.status || '').substring(0, 50);
-      
-      // Ensure dates are valid
-      let created = null;
-      if (batchDetails.created_at) {
-        created = new Date(batchDetails.created_at);
-      }
-      
-      let updated = null;
-      if (batchDetails.updated_at) {
-        updated = new Date(batchDetails.updated_at);
-      }
-      
-      // Sanitize numeric fields
-      const iduser = batchDetails.iduser || null;
-      const idwarehouse = batchDetails.idwarehouse || null;
-      const idfulfilment_customer = batchDetails.idfulfilment_customer || null;
-      
       // Current timestamp for last_sync_date
       const last_sync_date = new Date();
       
+      // Build dynamic SQL for insert/update based on available fields
       if (batchExists) {
         // Update existing batch
-        await pool.request()
-          .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-          .input('picklist_batchid', sql.NVarChar, picklist_batchid)
-          .input('status', sql.NVarChar, status)
-          .input('created', sql.DateTime, created)
-          .input('updated', sql.DateTime, updated)
-          .input('iduser', sql.Int, iduser)
-          .input('idwarehouse', sql.Int, idwarehouse)
-          .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
-          .input('last_sync_date', sql.DateTime, last_sync_date)
-          .query(`
-            UPDATE Batches 
-            SET 
-              picklist_batchid = @picklist_batchid,
-              status = @status,
-              created_at = @created,
-              updated_at = @updated,
-              iduser = @iduser,
-              idwarehouse = @idwarehouse,
-              idfulfilment_customer = @idfulfilment_customer,
-              last_sync_date = @last_sync_date
-            WHERE idpicklist_batch = @idpicklist_batch
-          `);
+        let updateFields = [];
+        const request = new sql.Request(pool);
         
+        // Always include idpicklist_batch for WHERE clause
+        request.input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch);
+        
+        // Always include picklist_batchid and last_sync_date
+        updateFields.push('picklist_batchid = @picklist_batchid');
+        request.input('picklist_batchid', sql.NVarChar, picklist_batchid);
+        
+        updateFields.push('last_sync_date = @last_sync_date');
+        request.input('last_sync_date', sql.DateTime, last_sync_date);
+        
+        // Add all other fields from batch details
+        for (const [apiField, value] of Object.entries(batchDetails)) {
+          // Skip idpicklist_batch as it's used in WHERE clause
+          if (apiField === 'idpicklist_batch') continue;
+          
+          // Skip picklist_batchid as it's already handled
+          if (apiField === 'picklist_batchid') continue;
+          
+          // Get corresponding DB column name
+          const columnName = this.fieldMap.get(apiField) || apiField;
+          
+          // Skip if value is undefined
+          if (value === undefined) continue;
+          
+          // Add to update fields
+          updateFields.push(`${columnName} = @${columnName}`);
+          
+          // Add parameter with appropriate type
+          if (value === null) {
+            request.input(columnName, value);
+          } else if (typeof value === 'number') {
+            if (Number.isInteger(value)) {
+              request.input(columnName, sql.Int, value);
+            } else {
+              request.input(columnName, sql.Float, value);
+            }
+          } else if (typeof value === 'boolean') {
+            request.input(columnName, sql.Bit, value ? 1 : 0);
+          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+            request.input(columnName, sql.DateTime, new Date(value));
+          } else if (typeof value === 'string') {
+            request.input(columnName, sql.NVarChar, value);
+          } else {
+            // Convert objects or arrays to strings
+            request.input(columnName, sql.NVarChar, JSON.stringify(value));
+          }
+        }
+        
+        // Execute update query
+        const updateQuery = `
+          UPDATE Batches 
+          SET ${updateFields.join(', ')}
+          WHERE idpicklist_batch = @idpicklist_batch
+        `;
+        
+        await request.query(updateQuery);
         console.log(`Updated existing batch ${batchDetails.idpicklist_batch}`);
       } else {
         // Insert new batch
-        await pool.request()
-          .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-          .input('picklist_batchid', sql.NVarChar, picklist_batchid)
-          .input('status', sql.NVarChar, status)
-          .input('created', sql.DateTime, created)
-          .input('updated', sql.DateTime, updated)
-          .input('iduser', sql.Int, iduser)
-          .input('idwarehouse', sql.Int, idwarehouse)
-          .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
-          .input('last_sync_date', sql.DateTime, last_sync_date)
-          .query(`
-            INSERT INTO Batches (
-              idpicklist_batch, picklist_batchid, status, created_at, updated_at,
-              iduser, idwarehouse, idfulfilment_customer, last_sync_date
-            )
-            VALUES (
-              @idpicklist_batch, @picklist_batchid, @status, @created, @updated,
-              @iduser, @idwarehouse, @idfulfilment_customer, @last_sync_date
-            )
-          `);
+        let columnNames = ['idpicklist_batch', 'picklist_batchid', 'last_sync_date'];
+        let paramNames = ['@idpicklist_batch', '@picklist_batchid', '@last_sync_date'];
+        const request = new sql.Request(pool);
         
+        // Add required parameters
+        request.input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch);
+        request.input('picklist_batchid', sql.NVarChar, picklist_batchid);
+        request.input('last_sync_date', sql.DateTime, last_sync_date);
+        
+        // Add all other fields from batch details
+        for (const [apiField, value] of Object.entries(batchDetails)) {
+          // Skip idpicklist_batch and picklist_batchid as they're already handled
+          if (apiField === 'idpicklist_batch' || apiField === 'picklist_batchid') continue;
+          
+          // Skip if value is undefined
+          if (value === undefined) continue;
+          
+          // Get corresponding DB column name
+          const columnName = this.fieldMap.get(apiField) || apiField;
+          
+          // Add to column and parameter lists
+          columnNames.push(columnName);
+          paramNames.push(`@${columnName}`);
+          
+          // Add parameter with appropriate type
+          if (value === null) {
+            request.input(columnName, value);
+          } else if (typeof value === 'number') {
+            if (Number.isInteger(value)) {
+              request.input(columnName, sql.Int, value);
+            } else {
+              request.input(columnName, sql.Float, value);
+            }
+          } else if (typeof value === 'boolean') {
+            request.input(columnName, sql.Bit, value ? 1 : 0);
+          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+            request.input(columnName, sql.DateTime, new Date(value));
+          } else if (typeof value === 'string') {
+            request.input(columnName, sql.NVarChar, value);
+          } else {
+            // Convert objects or arrays to strings
+            request.input(columnName, sql.NVarChar, JSON.stringify(value));
+          }
+        }
+        
+        // Execute insert query
+        const insertQuery = `
+          INSERT INTO Batches (${columnNames.join(', ')})
+          VALUES (${paramNames.join(', ')})
+        `;
+        
+        await request.query(insertQuery);
         console.log(`Inserted new batch ${batchDetails.idpicklist_batch}`);
       }
       
@@ -680,7 +820,7 @@ class BatchService {
   }
 
   /**
-   * Save batch products to database
+   * Save batch products to database with adaptive column mapping
    * @param {number} idpicklist_batch - Batch ID
    * @param {Array} products - Array of products in the batch
    * @returns {Promise<boolean>} - Success status
@@ -702,24 +842,110 @@ class BatchService {
       
       // Insert new batch products
       for (const product of products) {
-        // Sanitize values to prevent SQL validation errors
-        const productcode = String(product.productcode || '').substring(0, 100);
-        const name = String(product.name || '').substring(0, 255);
+        // Build dynamic SQL for insert based on available fields
+        let columnNames = ['idpicklist_batch'];
+        let paramNames = ['@idpicklist_batch'];
+        const request = new sql.Request(pool);
         
-        await pool.request()
-          .input('idpicklist_batch', sql.Int, idpicklist_batch)
-          .input('idproduct', sql.Int, product.idproduct || null)
-          .input('productcode', sql.NVarChar, productcode)
-          .input('name', sql.NVarChar, name)
-          .input('amount', sql.Int, product.amount || 0)
-          .query(`
-            INSERT INTO BatchProducts (
-              idpicklist_batch, idproduct, productcode, name, amount
-            )
-            VALUES (
-              @idpicklist_batch, @idproduct, @productcode, @name, @amount
-            )
-          `);
+        // Add required parameters
+        request.input('idpicklist_batch', sql.Int, idpicklist_batch);
+        
+        // Add all fields from product
+        for (const [apiField, value] of Object.entries(product)) {
+          // Skip if value is undefined
+          if (value === undefined) continue;
+          
+          // Get corresponding DB column name from known fields or use API field name
+          const columnName = apiField;
+          
+          // Add to column and parameter lists
+          columnNames.push(columnName);
+          paramNames.push(`@${columnName}`);
+          
+          // Add parameter with appropriate type
+          if (value === null) {
+            request.input(columnName, value);
+          } else if (typeof value === 'number') {
+            if (Number.isInteger(value)) {
+              request.input(columnName, sql.Int, value);
+            } else {
+              request.input(columnName, sql.Float, value);
+            }
+          } else if (typeof value === 'boolean') {
+            request.input(columnName, sql.Bit, value ? 1 : 0);
+          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+            request.input(columnName, sql.DateTime, new Date(value));
+          } else if (typeof value === 'string') {
+            request.input(columnName, sql.NVarChar, value);
+          } else {
+            // Convert objects or arrays to strings
+            request.input(columnName, sql.NVarChar, JSON.stringify(value));
+          }
+        }
+        
+        // Add last_sync_date
+        columnNames.push('last_sync_date');
+        paramNames.push('@last_sync_date');
+        request.input('last_sync_date', sql.DateTime, new Date());
+        
+        // Execute insert query
+        const insertQuery = `
+          INSERT INTO BatchProducts (${columnNames.join(', ')})
+          VALUES (${paramNames.join(', ')})
+        `;
+        
+        try {
+          await request.query(insertQuery);
+        } catch (error) {
+          // If insert fails due to missing column, add the column and retry
+          if (error.message.includes('Invalid column name')) {
+            const match = error.message.match(/Invalid column name '([^']+)'/);
+            if (match && match[1]) {
+              const missingColumn = match[1];
+              console.log(`Adding missing column ${missingColumn} to BatchProducts table...`);
+              
+              // Determine SQL type based on value type
+              let sqlType = 'NVARCHAR(255)';
+              const value = product[missingColumn];
+              
+              if (typeof value === 'number') {
+                if (Number.isInteger(value)) {
+                  sqlType = 'INT';
+                } else {
+                  sqlType = 'FLOAT';
+                }
+              } else if (typeof value === 'boolean') {
+                sqlType = 'BIT';
+              } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+                sqlType = 'DATETIME';
+              } else if (typeof value === 'string' && value.length > 255) {
+                sqlType = 'NVARCHAR(MAX)';
+              }
+              
+              // Add column to database
+              const addColumnSQL = `
+              IF NOT EXISTS (
+                  SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+                  WHERE TABLE_NAME = 'BatchProducts' AND COLUMN_NAME = '${missingColumn}'
+              )
+              BEGIN
+                  ALTER TABLE BatchProducts ADD ${missingColumn} ${sqlType};
+                  PRINT 'Added new column ${missingColumn} (${sqlType}) to BatchProducts table';
+              END
+              `;
+              
+              await pool.request().query(addColumnSQL);
+              console.log(`Added new column ${missingColumn} (${sqlType}) to BatchProducts table`);
+              
+              // Retry insert
+              await request.query(insertQuery);
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        }
       }
       
       console.log(`✅ Saved ${products.length} products for batch ${idpicklist_batch}`);
@@ -731,7 +957,7 @@ class BatchService {
   }
 
   /**
-   * Save batch picklists to database
+   * Save batch picklists to database with adaptive column mapping
    * @param {number} idpicklist_batch - Batch ID
    * @param {Array} picklists - Array of picklists in the batch
    * @returns {Promise<boolean>} - Success status
@@ -753,21 +979,110 @@ class BatchService {
       
       // Insert new batch picklists
       for (const picklist of picklists) {
-        // Sanitize values to prevent SQL validation errors
-        const picklistid = String(picklist.picklistid || '').substring(0, 100);
+        // Build dynamic SQL for insert based on available fields
+        let columnNames = ['idpicklist_batch'];
+        let paramNames = ['@idpicklist_batch'];
+        const request = new sql.Request(pool);
         
-        await pool.request()
-          .input('idpicklist_batch', sql.Int, idpicklist_batch)
-          .input('idpicklist', sql.Int, picklist.idpicklist || null)
-          .input('picklistid', sql.NVarChar, picklistid)
-          .query(`
-            INSERT INTO BatchPicklists (
-              idpicklist_batch, idpicklist, picklistid
-            )
-            VALUES (
-              @idpicklist_batch, @idpicklist, @picklistid
-            )
-          `);
+        // Add required parameters
+        request.input('idpicklist_batch', sql.Int, idpicklist_batch);
+        
+        // Add all fields from picklist
+        for (const [apiField, value] of Object.entries(picklist)) {
+          // Skip if value is undefined
+          if (value === undefined) continue;
+          
+          // Get corresponding DB column name from known fields or use API field name
+          const columnName = apiField;
+          
+          // Add to column and parameter lists
+          columnNames.push(columnName);
+          paramNames.push(`@${columnName}`);
+          
+          // Add parameter with appropriate type
+          if (value === null) {
+            request.input(columnName, value);
+          } else if (typeof value === 'number') {
+            if (Number.isInteger(value)) {
+              request.input(columnName, sql.Int, value);
+            } else {
+              request.input(columnName, sql.Float, value);
+            }
+          } else if (typeof value === 'boolean') {
+            request.input(columnName, sql.Bit, value ? 1 : 0);
+          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+            request.input(columnName, sql.DateTime, new Date(value));
+          } else if (typeof value === 'string') {
+            request.input(columnName, sql.NVarChar, value);
+          } else {
+            // Convert objects or arrays to strings
+            request.input(columnName, sql.NVarChar, JSON.stringify(value));
+          }
+        }
+        
+        // Add last_sync_date
+        columnNames.push('last_sync_date');
+        paramNames.push('@last_sync_date');
+        request.input('last_sync_date', sql.DateTime, new Date());
+        
+        // Execute insert query
+        const insertQuery = `
+          INSERT INTO BatchPicklists (${columnNames.join(', ')})
+          VALUES (${paramNames.join(', ')})
+        `;
+        
+        try {
+          await request.query(insertQuery);
+        } catch (error) {
+          // If insert fails due to missing column, add the column and retry
+          if (error.message.includes('Invalid column name')) {
+            const match = error.message.match(/Invalid column name '([^']+)'/);
+            if (match && match[1]) {
+              const missingColumn = match[1];
+              console.log(`Adding missing column ${missingColumn} to BatchPicklists table...`);
+              
+              // Determine SQL type based on value type
+              let sqlType = 'NVARCHAR(255)';
+              const value = picklist[missingColumn];
+              
+              if (typeof value === 'number') {
+                if (Number.isInteger(value)) {
+                  sqlType = 'INT';
+                } else {
+                  sqlType = 'FLOAT';
+                }
+              } else if (typeof value === 'boolean') {
+                sqlType = 'BIT';
+              } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
+                sqlType = 'DATETIME';
+              } else if (typeof value === 'string' && value.length > 255) {
+                sqlType = 'NVARCHAR(MAX)';
+              }
+              
+              // Add column to database
+              const addColumnSQL = `
+              IF NOT EXISTS (
+                  SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+                  WHERE TABLE_NAME = 'BatchPicklists' AND COLUMN_NAME = '${missingColumn}'
+              )
+              BEGIN
+                  ALTER TABLE BatchPicklists ADD ${missingColumn} ${sqlType};
+                  PRINT 'Added new column ${missingColumn} (${sqlType}) to BatchPicklists table';
+              END
+              `;
+              
+              await pool.request().query(addColumnSQL);
+              console.log(`Added new column ${missingColumn} (${sqlType}) to BatchPicklists table`);
+              
+              // Retry insert
+              await request.query(insertQuery);
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        }
       }
       
       console.log(`✅ Saved ${picklists.length} picklists for batch ${idpicklist_batch}`);
@@ -934,6 +1249,22 @@ class BatchService {
       return false;
     }
   }
+
+  /**
+   * Get batch count from database
+   * Compatibility method for dashboard
+   * @returns {Promise<number>} - Number of batches in database
+   */
+  async getBatchCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Batches');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting batch count from database:', error.message);
+      return 0;
+    }
+  }
 }
 
-module.exports = BatchService;
+module.exports = AdaptiveBatchService;
