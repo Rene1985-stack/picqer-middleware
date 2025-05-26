@@ -6,7 +6,7 @@
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const batchesSchema = require('./batches_schema');
+const batchesSchema = require('./fixed_batches_schema');
 const syncProgressSchema = require('./sync_progress_schema');
 
 class BatchService {
@@ -533,6 +533,7 @@ class BatchService {
       request.input('processed', sql.DateTime, batchDetails.processed ? new Date(batchDetails.processed) : null);
       request.input('cancelled', sql.DateTime, batchDetails.cancelled ? new Date(batchDetails.cancelled) : null);
       request.input('assigned', sql.DateTime, batchDetails.assigned ? new Date(batchDetails.assigned) : null);
+      request.input('idfulfilment_customer', sql.Int, batchDetails.idfulfilment_customer || null);
       request.input('last_sync_date', sql.DateTime, new Date());
       
       if (batchExists) {
@@ -552,6 +553,7 @@ class BatchService {
             processed = @processed,
             cancelled = @cancelled,
             assigned = @assigned,
+            idfulfilment_customer = @idfulfilment_customer,
             last_sync_date = @last_sync_date
           WHERE idpicklist_batch = @idpicklist_batch
         `);
@@ -561,12 +563,12 @@ class BatchService {
           INSERT INTO Batches (
             idpicklist_batch, picklist_batchid, idwarehouse, iduser_created,
             iduser_assigned, iduser_processed, iduser_cancelled, status,
-            created, updated, processed, cancelled, assigned, last_sync_date
+            created, updated, processed, cancelled, assigned, idfulfilment_customer, last_sync_date
           )
           VALUES (
             @idpicklist_batch, @picklist_batchid, @idwarehouse, @iduser_created,
             @iduser_assigned, @iduser_processed, @iduser_cancelled, @status,
-            @created, @updated, @processed, @cancelled, @assigned, @last_sync_date
+            @created, @updated, @processed, @cancelled, @assigned, @idfulfilment_customer, @last_sync_date
           )
         `);
       }
@@ -613,18 +615,18 @@ class BatchService {
         request.input('productcode', sql.NVarChar, product.productcode || '');
         request.input('name', sql.NVarChar, product.name || '');
         request.input('amount', sql.Int, product.amount || 0);
-        request.input('amount_processed', sql.Int, product.amount_processed || 0);
-        request.input('amount_cancelled', sql.Int, product.amount_cancelled || 0);
+        request.input('amount_picked', sql.Int, product.amount_picked || 0);
+        request.input('amount_collected', sql.Int, product.amount_collected || 0);
         request.input('last_sync_date', sql.DateTime, new Date());
         
         await request.query(`
           INSERT INTO BatchProducts (
             idpicklist_batch, idproduct, productcode, name,
-            amount, amount_processed, amount_cancelled, last_sync_date
+            amount, amount_picked, amount_collected, last_sync_date
           )
           VALUES (
             @idpicklist_batch, @idproduct, @productcode, @name,
-            @amount, @amount_processed, @amount_cancelled, @last_sync_date
+            @amount, @amount_picked, @amount_collected, @last_sync_date
           )
         `);
       }
