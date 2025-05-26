@@ -1,14 +1,8 @@
 /**
- * Actual Data Sync Implementation for Picqer Middleware
+ * Updated Sync Implementation with BatchService integration
  * 
- * This file implements the actual data synchronization methods that were missing
- * in the original implementation. It provides concrete implementations for:
- * 
- * 1. Incremental sync for all entity types
- * 2. Full sync for all entity types
- * 3. Retry functionality for failed syncs
- * 
- * These methods connect to the Picqer API, fetch data, and store it in the database.
+ * This file implements the actual data synchronization methods including
+ * the new BatchService for syncing picklist batches from Picqer.
  */
 
 // Import required modules
@@ -22,6 +16,246 @@ class SyncImplementation {
   constructor(services) {
     this.services = services;
     console.log('SyncImplementation initialized with service instances');
+  }
+
+  /**
+   * Get entity count from database
+   * @param {string} entityType - Entity type (e.g., 'products', 'batches')
+   * @returns {Promise<number>} - Entity count
+   */
+  async getEntityCount(entityType) {
+    try {
+      console.log(`Getting count for entity type: ${entityType}`);
+      
+      switch (entityType) {
+        case 'products':
+          if (this.services.ProductService && typeof this.services.ProductService.getProductCountFromDatabase === 'function') {
+            return await this.services.ProductService.getProductCountFromDatabase();
+          } else {
+            console.log('getProductCountFromDatabase method not found, using direct database query');
+            return await this.getCountFromDatabase(entityType);
+          }
+        
+        case 'picklists':
+          if (this.services.PicklistService && typeof this.services.PicklistService.getPicklistCountFromDatabase === 'function') {
+            return await this.services.PicklistService.getPicklistCountFromDatabase();
+          } else {
+            return await this.getCountFromDatabase(entityType);
+          }
+        
+        case 'warehouses':
+          if (this.services.WarehouseService && typeof this.services.WarehouseService.getWarehouseCountFromDatabase === 'function') {
+            return await this.services.WarehouseService.getWarehouseCountFromDatabase();
+          } else {
+            return await this.getCountFromDatabase(entityType);
+          }
+        
+        case 'users':
+          if (this.services.UserService && typeof this.services.UserService.getUserCountFromDatabase === 'function') {
+            return await this.services.UserService.getUserCountFromDatabase();
+          } else {
+            return await this.getCountFromDatabase(entityType);
+          }
+        
+        case 'suppliers':
+          if (this.services.SupplierService && typeof this.services.SupplierService.getSupplierCountFromDatabase === 'function') {
+            return await this.services.SupplierService.getSupplierCountFromDatabase();
+          } else {
+            console.log('getSupplierCountFromDatabase method not found, using direct database query');
+            return await this.getCountFromDatabase(entityType);
+          }
+          
+        case 'batches':
+          if (this.services.BatchService && typeof this.services.BatchService.getBatchCountFromDatabase === 'function') {
+            return await this.services.BatchService.getBatchCountFromDatabase();
+          } else {
+            console.log('getBatchCountFromDatabase method not found, using direct database query');
+            return await this.getCountFromDatabase(entityType);
+          }
+        
+        default:
+          return 0;
+      }
+    } catch (error) {
+      console.error(`Error getting count for entity type ${entityType}:`, error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get count from database using direct query
+   * @param {string} entityType - Entity type (e.g., 'products', 'batches')
+   * @returns {Promise<number>} - Entity count
+   */
+  async getCountFromDatabase(entityType) {
+    try {
+      // Get SQL config from any service
+      const sqlConfig = this.getSqlConfig();
+      
+      if (!sqlConfig) {
+        console.error('SQL config not available');
+        return 0;
+      }
+      
+      const pool = await sql.connect(sqlConfig);
+      
+      // Map entity type to table name
+      let tableName;
+      switch (entityType) {
+        case 'products':
+          tableName = 'Products';
+          break;
+        case 'picklists':
+          tableName = 'Picklists';
+          break;
+        case 'warehouses':
+          tableName = 'Warehouses';
+          break;
+        case 'users':
+          tableName = 'Users';
+          break;
+        case 'suppliers':
+          tableName = 'Suppliers';
+          break;
+        case 'batches':
+          tableName = 'Batches';
+          break;
+        default:
+          return 0;
+      }
+      
+      const result = await pool.request().query(`SELECT COUNT(*) as count FROM ${tableName}`);
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error(`Error getting count from database for ${entityType}:`, error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for entity
+   * @param {string} entityType - Entity type (e.g., 'products', 'batches')
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDate(entityType) {
+    try {
+      console.log(`Getting last sync date for entity type: ${entityType}`);
+      
+      switch (entityType) {
+        case 'products':
+          if (this.services.ProductService && typeof this.services.ProductService.getLastSyncDate === 'function') {
+            return await this.services.ProductService.getLastSyncDate();
+          } else {
+            console.log('getLastSyncDate method not found, using direct database query');
+            return await this.getLastSyncDateFromDatabase(entityType);
+          }
+        
+        case 'picklists':
+          if (this.services.PicklistService && typeof this.services.PicklistService.getLastSyncDate === 'function') {
+            return await this.services.PicklistService.getLastSyncDate();
+          } else {
+            console.log('getLastSyncDate method not found, using direct database query');
+            return await this.getLastSyncDateFromDatabase(entityType);
+          }
+        
+        case 'warehouses':
+          if (this.services.WarehouseService && typeof this.services.WarehouseService.getLastSyncDate === 'function') {
+            return await this.services.WarehouseService.getLastSyncDate();
+          } else {
+            console.log('getLastSyncDate method not found, using direct database query');
+            return await this.getLastSyncDateFromDatabase(entityType);
+          }
+        
+        case 'users':
+          if (this.services.UserService && typeof this.services.UserService.getLastSyncDate === 'function') {
+            return await this.services.UserService.getLastSyncDate();
+          } else {
+            console.log('getLastSyncDate method not found, using direct database query');
+            return await this.getLastSyncDateFromDatabase(entityType);
+          }
+        
+        case 'suppliers':
+          if (this.services.SupplierService && typeof this.services.SupplierService.getLastSyncDate === 'function') {
+            console.log('getLastSyncDate method called, using getLastSuppliersSyncDate instead');
+            return await this.services.SupplierService.getLastSyncDate();
+          } else {
+            return await this.getLastSyncDateFromDatabase(entityType);
+          }
+          
+        case 'batches':
+          if (this.services.BatchService && typeof this.services.BatchService.getLastSyncDate === 'function') {
+            return await this.services.BatchService.getLastSyncDate();
+          } else {
+            console.log('getLastSyncDate method not found for batches, using direct database query');
+            return await this.getLastSyncDateFromDatabase(entityType);
+          }
+        
+        default:
+          return null;
+      }
+    } catch (error) {
+      console.error(`Error getting last sync date for entity type ${entityType}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get last sync date from database using direct query
+   * @param {string} entityType - Entity type (e.g., 'products', 'batches')
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDateFromDatabase(entityType) {
+    try {
+      // Get SQL config from any service
+      const sqlConfig = this.getSqlConfig();
+      
+      if (!sqlConfig) {
+        console.error('SQL config not available');
+        return null;
+      }
+      
+      const pool = await sql.connect(sqlConfig);
+      
+      const result = await pool.request()
+        .input('entityType', sql.NVarChar, entityType)
+        .query(`
+          SELECT last_sync_date 
+          FROM SyncStatus 
+          WHERE entity_type = @entityType
+        `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error(`Error getting last sync date from database for ${entityType}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get SQL config from any available service
+   * @returns {Object|null} - SQL config or null if not available
+   */
+  getSqlConfig() {
+    // Try to get SQL config from any service
+    if (this.services.ProductService && this.services.ProductService.sqlConfig) {
+      return this.services.ProductService.sqlConfig;
+    } else if (this.services.PicklistService && this.services.PicklistService.sqlConfig) {
+      return this.services.PicklistService.sqlConfig;
+    } else if (this.services.WarehouseService && this.services.WarehouseService.sqlConfig) {
+      return this.services.WarehouseService.sqlConfig;
+    } else if (this.services.UserService && this.services.UserService.sqlConfig) {
+      return this.services.UserService.sqlConfig;
+    } else if (this.services.SupplierService && this.services.SupplierService.sqlConfig) {
+      return this.services.SupplierService.sqlConfig;
+    } else if (this.services.BatchService && this.services.BatchService.sqlConfig) {
+      return this.services.BatchService.sqlConfig;
+    }
+    
+    return null;
   }
 
   /**
@@ -480,8 +714,8 @@ class SyncImplementation {
         // For incremental sync, get last sync date or use 30 days ago
         if (typeof supplierService.getLastSyncDate === 'function') {
           startDate = await supplierService.getLastSyncDate('suppliers');
-        } else if (typeof supplierService.getLastSync === 'function') {
-          startDate = await supplierService.getLastSync('suppliers');
+        } else if (typeof supplierService.getLastSuppliersSyncDate === 'function') {
+          startDate = await supplierService.getLastSuppliersSyncDate();
         } else {
           // Default to 30 days ago if method not available
           const thirtyDaysAgo = new Date();
@@ -543,217 +777,166 @@ class SyncImplementation {
   }
 
   /**
-   * Retry a failed sync
-   * @param {string} syncId - ID of the failed sync
-   * @returns {Promise<Object>} - Retry result
+   * Perform incremental sync for batches
+   * @param {boolean} isFullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Sync result
    */
-  async retrySync(syncId) {
+  async syncBatches(isFullSync = false) {
     try {
-      console.log(`Retrying sync with ID: ${syncId}`);
+      console.log(`Starting ${isFullSync ? 'full' : 'incremental'} batch sync...`);
       
-      // Parse entity type from syncId (format: entity_timestamp)
-      const parts = syncId.split('_');
-      if (parts.length < 2) {
-        throw new Error(`Invalid sync ID format: ${syncId}`);
+      // Get the BatchService instance
+      const batchService = this.services.BatchService;
+      
+      if (!batchService) {
+        throw new Error('BatchService not available');
       }
       
-      const entityType = parts[0];
-      
-      // Determine which sync method to call based on entity type
-      let result;
-      switch (entityType) {
-        case 'products':
-          result = await this.syncProducts(true);
-          break;
-        case 'picklists':
-          result = await this.syncPicklists(true);
-          break;
-        case 'warehouses':
-          result = await this.syncWarehouses(true);
-          break;
-        case 'users':
-          result = await this.syncUsers(true);
-          break;
-        case 'suppliers':
-          result = await this.syncSuppliers(true);
-          break;
-        default:
-          throw new Error(`Unknown entity type: ${entityType}`);
+      // Create sync progress record
+      let syncProgress;
+      if (typeof batchService.createOrGetSyncProgress === 'function') {
+        syncProgress = await batchService.createOrGetSyncProgress('batches', isFullSync);
+      } else {
+        console.log('createOrGetSyncProgress method not found in BatchService, using default progress');
+        syncProgress = {
+          entity_type: 'batches',
+          sync_id: `batches_${Date.now()}`,
+          current_offset: 0,
+          batch_number: 0,
+          items_processed: 0,
+          status: 'in_progress',
+          started_at: new Date().toISOString(),
+          last_updated: new Date().toISOString()
+        };
       }
       
-      console.log(`✅ Retry of sync ${syncId} completed with result:`, result);
+      // Determine date range for sync
+      let startDate;
+      if (isFullSync) {
+        // For full sync, use January 1, 2025 as start date
+        startDate = new Date('2025-01-01T00:00:00.000Z');
+      } else {
+        // For incremental sync, get last sync date or use 30 days ago
+        if (typeof batchService.getLastSyncDate === 'function') {
+          startDate = await batchService.getLastSyncDate();
+        } else {
+          // Default to 30 days ago if method not available
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          startDate = thirtyDaysAgo;
+        }
+      }
+      
+      console.log(`Fetching batches updated since: ${startDate.toISOString()}`);
+      
+      // Fetch batches from Picqer
+      let batches = [];
+      if (typeof batchService.getBatchesUpdatedSince === 'function') {
+        batches = await batchService.getBatchesUpdatedSince(startDate);
+      } else if (typeof batchService.getAllBatches === 'function') {
+        batches = await batchService.getAllBatches(startDate, syncProgress);
+      } else {
+        throw new Error('No method available to fetch batches from Picqer');
+      }
+      
+      console.log(`Retrieved ${batches.length} batches from Picqer`);
+      
+      // Save batches to database
+      if (batches.length > 0) {
+        if (typeof batchService.saveBatchesToDatabase === 'function') {
+          await batchService.saveBatchesToDatabase(batches, syncProgress);
+        } else {
+          throw new Error('No method available to save batches to database');
+        }
+      }
+      
+      // Update sync status
+      if (typeof batchService.updateSyncStatus === 'function') {
+        await batchService.updateSyncStatus('batches', batches.length);
+      }
+      
+      // Complete sync progress
+      if (typeof batchService.completeSyncProgress === 'function') {
+        await batchService.completeSyncProgress(syncProgress, true);
+      }
+      
+      console.log(`✅ ${isFullSync ? 'Full' : 'Incremental'} batch sync completed successfully`);
       return {
         success: true,
-        original_sync_id: syncId,
-        new_sync_id: result.syncId,
-        entity: entityType,
-        count: result.count
+        entity: 'batches',
+        count: batches.length,
+        syncId: syncProgress.sync_id
       };
     } catch (error) {
-      console.error(`❌ Error retrying sync ${syncId}:`, error.message);
+      console.error(`❌ Error in ${isFullSync ? 'full' : 'incremental'} batch sync:`, error.message);
       return {
         success: false,
-        original_sync_id: syncId,
+        entity: 'batches',
         error: error.message
       };
     }
   }
 
   /**
-   * Get the count of entities in the database
-   * @param {string} entityType - Type of entity
-   * @returns {Promise<number>} - Count of entities
+   * Retry a failed sync
+   * @param {string} syncId - Sync ID to retry
+   * @returns {Promise<Object>} - Retry result
    */
-  async getEntityCount(entityType) {
+  async retrySync(syncId) {
     try {
-      console.log(`Getting count for entity type: ${entityType}`);
+      console.log(`Retrying sync with ID ${syncId}...`);
       
-      // Get the appropriate service based on entity type
-      let service;
-      let countMethod;
+      // Get SQL config from any service
+      const sqlConfig = this.getSqlConfig();
       
-      switch (entityType) {
-        case 'products':
-          service = this.services.ProductService;
-          countMethod = 'getProductCountFromDatabase';
-          break;
-        case 'picklists':
-          service = this.services.PicklistService;
-          countMethod = 'getPicklistCountFromDatabase';
-          break;
-        case 'warehouses':
-          service = this.services.WarehouseService;
-          countMethod = 'getWarehouseCountFromDatabase';
-          break;
-        case 'users':
-          service = this.services.UserService;
-          countMethod = 'getUserCountFromDatabase';
-          break;
-        case 'suppliers':
-          service = this.services.SupplierService;
-          countMethod = 'getSupplierCountFromDatabase';
-          break;
-        default:
-          throw new Error(`Unknown entity type: ${entityType}`);
+      if (!sqlConfig) {
+        throw new Error('SQL config not available');
       }
       
-      if (!service) {
-        throw new Error(`Service for entity type ${entityType} not available`);
-      }
+      // Connect to database
+      const pool = await sql.connect(sqlConfig);
       
-      // Try to call the count method
-      if (typeof service[countMethod] === 'function') {
-        return await service[countMethod]();
-      } else {
-        // Fallback to direct database query if method not available
-        console.log(`${countMethod} method not found, using direct database query`);
-        
-        // Connect to database
-        const pool = await sql.connect(service.sqlConfig);
-        
-        // Determine table name based on entity type
-        let tableName;
-        switch (entityType) {
-          case 'products':
-            tableName = 'Products';
-            break;
-          case 'picklists':
-            tableName = 'Picklists';
-            break;
-          case 'warehouses':
-            tableName = 'Warehouses';
-            break;
-          case 'users':
-            tableName = 'Users';
-            break;
-          case 'suppliers':
-            tableName = 'Suppliers';
-            break;
-          default:
-            throw new Error(`Unknown entity type: ${entityType}`);
-        }
-        
-        // Query database for count
-        const result = await pool.request().query(`
-          SELECT COUNT(*) AS count FROM ${tableName}
+      // Get sync record
+      const result = await pool.request()
+        .input('syncId', sql.NVarChar, syncId)
+        .query(`
+          SELECT * FROM SyncProgress 
+          WHERE sync_id = @syncId
         `);
-        
-        return result.recordset[0].count;
+      
+      if (result.recordset.length === 0) {
+        throw new Error(`Sync record with ID ${syncId} not found`);
       }
-    } catch (error) {
-      console.error(`Error getting count for entity type ${entityType}:`, error.message);
-      return 0;
-    }
-  }
-
-  /**
-   * Get the last sync date for an entity type
-   * @param {string} entityType - Type of entity
-   * @returns {Promise<Date>} - Last sync date
-   */
-  async getLastSyncDate(entityType) {
-    try {
-      console.log(`Getting last sync date for entity type: ${entityType}`);
       
-      // Get the appropriate service based on entity type
-      let service;
+      const syncRecord = result.recordset[0];
+      const entityType = syncRecord.entity_type;
+      const isFullSync = syncRecord.is_full_sync === 1;
       
+      console.log(`Found sync record for entity type ${entityType}, full sync: ${isFullSync}`);
+      
+      // Retry sync based on entity type
       switch (entityType) {
         case 'products':
-          service = this.services.ProductService;
-          break;
+          return await this.syncProducts(isFullSync);
         case 'picklists':
-          service = this.services.PicklistService;
-          break;
+          return await this.syncPicklists(isFullSync);
         case 'warehouses':
-          service = this.services.WarehouseService;
-          break;
+          return await this.syncWarehouses(isFullSync);
         case 'users':
-          service = this.services.UserService;
-          break;
+          return await this.syncUsers(isFullSync);
         case 'suppliers':
-          service = this.services.SupplierService;
-          break;
+          return await this.syncSuppliers(isFullSync);
+        case 'batches':
+          return await this.syncBatches(isFullSync);
         default:
           throw new Error(`Unknown entity type: ${entityType}`);
       }
-      
-      if (!service) {
-        throw new Error(`Service for entity type ${entityType} not available`);
-      }
-      
-      // Try to call the getLastSyncDate method
-      if (typeof service.getLastSyncDate === 'function') {
-        return await service.getLastSyncDate(entityType);
-      } else if (typeof service.getLastSync === 'function') {
-        return await service.getLastSync(entityType);
-      } else {
-        // Fallback to direct database query if method not available
-        console.log('getLastSyncDate method not found, using direct database query');
-        
-        // Connect to database
-        const pool = await sql.connect(service.sqlConfig);
-        
-        // Query database for last sync date
-        const result = await pool.request()
-          .input('entityType', sql.NVarChar, entityType)
-          .query(`
-            SELECT last_sync_date 
-            FROM SyncStatus 
-            WHERE entity_type = @entityType
-          `);
-        
-        if (result.recordset.length > 0) {
-          return new Date(result.recordset[0].last_sync_date);
-        } else {
-          // Default to January 1, 2025 if no record found
-          return new Date('2025-01-01T00:00:00.000Z');
-        }
-      }
     } catch (error) {
-      console.error(`Error getting last sync date for entity type ${entityType}:`, error.message);
-      // Default to January 1, 2025 if error occurs
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.error(`Error retrying sync ${syncId}:`, error.message);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   }
 }
