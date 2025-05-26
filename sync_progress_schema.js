@@ -12,8 +12,6 @@ BEGIN
         entity_type NVARCHAR(50) NOT NULL,
         sync_id NVARCHAR(36) NOT NULL,
         current_offset INT NOT NULL DEFAULT 0,
-        batch_number INT NOT NULL DEFAULT 0,
-        total_batches INT NULL,
         items_processed INT NOT NULL DEFAULT 0,
         total_items INT NULL,
         status NVARCHAR(20) NOT NULL DEFAULT 'in_progress',
