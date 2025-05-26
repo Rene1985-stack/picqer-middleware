@@ -1,5 +1,5 @@
 /**
- * Adaptive Batch service for Picqer middleware with automatic schema alignment
+ * Fixed Batch service for Picqer middleware with adaptive schema and proper JSON field handling
  * Handles synchronization of picklist batches between Picqer and SQL database
  * Automatically adapts to schema changes and prevents column name errors
  */
@@ -9,7 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const adaptiveBatchesSchema = require('./batches_schema');
 const syncProgressSchema = require('./sync_progress_schema');
 
-class AdaptiveBatchService {
+class BatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
@@ -22,7 +22,7 @@ class AdaptiveBatchService {
       this.fieldMap.set(field.apiField, field.dbColumn);
     });
     
-    console.log('Initializing AdaptiveBatchService with:');
+    console.log('Initializing BatchService with:');
     console.log('API Key (first 5 chars):', this.apiKey ? this.apiKey.substring(0, 5) + '...' : 'undefined');
     console.log('Base URL:', this.baseUrl);
     
@@ -109,6 +109,48 @@ class AdaptiveBatchService {
   }
 
   /**
+   * Determine SQL type for a field based on its value and name
+   * @param {string} fieldName - Field name
+   * @param {any} value - Field value
+   * @returns {string} - SQL type
+   */
+  getSqlTypeForField(fieldName, value) {
+    // Check if field is likely to contain JSON data
+    const jsonLikeFields = ['products', 'picklists', 'barcodes', 'tags', 'items', 'data'];
+    const isJsonLikeField = jsonLikeFields.some(term => fieldName.toLowerCase().includes(term));
+    
+    // Check if value is an array or object
+    const isArrayOrObject = value && (Array.isArray(value) || typeof value === 'object');
+    
+    if (isJsonLikeField || isArrayOrObject) {
+      return 'NVARCHAR(MAX)';
+    }
+    
+    // Determine type based on value
+    if (value === null || value === undefined) {
+      return 'NVARCHAR(255)'; // Default for unknown types
+    }
+    
+    if (typeof value === 'number') {
+      // Check if it's an integer or float
+      return Number.isInteger(value) ? 'INT' : 'FLOAT';
+    }
+    
+    if (typeof value === 'boolean') {
+      return 'BIT';
+    }
+    
+    if (value instanceof Date || 
+        (typeof value === 'string' && !isNaN(Date.parse(value)) && 
+         (value.includes('T') || value.includes('-') || value.includes('/')))) {
+      return 'DATETIME';
+    }
+    
+    // Default to string
+    return 'NVARCHAR(255)';
+  }
+
+  /**
    * Initialize the database with batches schema and sync progress tracking
    * Automatically adds any missing columns to ensure schema compatibility
    * @returns {Promise<boolean>} - Success status
@@ -126,6 +168,9 @@ class AdaptiveBatchService {
       
       // Create BatchPicklists table with core fields
       await pool.request().query(adaptiveBatchesSchema.createBatchPicklistsTableSQL);
+      
+      // Fix any existing JSON-like columns that might be too small
+      await this.fixJsonColumns();
       
       // Ensure all known batch fields exist
       console.log('Checking and adding any missing batch columns...');
@@ -200,6 +245,154 @@ class AdaptiveBatchService {
     } catch (error) {
       console.error('❌ Error initializing adaptive batches database schema:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Fix JSON columns that might be too small (NVARCHAR(255))
+   * @returns {Promise<boolean>} - Success status
+   */
+  async fixJsonColumns() {
+    try {
+      console.log('Checking for JSON columns that need to be expanded...');
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Check if Batches table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'Batches'
+      `);
+      
+      if (tableResult.recordset[0].tableExists === 0) {
+        console.log('Batches table does not exist yet, skipping JSON column fix');
+        return true;
+      }
+      
+      // Get all columns from Batches table
+      const columnsResult = await pool.request().query(`
+        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'Batches'
+      `);
+      
+      // JSON-like column names that should be NVARCHAR(MAX)
+      const jsonLikeColumns = ['products', 'picklists', 'barcodes', 'tags', 'items', 'data'];
+      
+      // Check each column
+      for (const column of columnsResult.recordset) {
+        const columnName = column.COLUMN_NAME;
+        const dataType = column.DATA_TYPE;
+        const maxLength = column.CHARACTER_MAXIMUM_LENGTH;
+        
+        // Check if this is a JSON-like column that's not already NVARCHAR(MAX)
+        const isJsonLike = jsonLikeColumns.some(term => columnName.toLowerCase().includes(term));
+        const needsExpansion = isJsonLike && dataType.toLowerCase() === 'nvarchar' && maxLength !== -1;
+        
+        if (needsExpansion) {
+          console.log(`Expanding column ${columnName} from NVARCHAR(${maxLength}) to NVARCHAR(MAX)...`);
+          
+          try {
+            // Alter the column to NVARCHAR(MAX)
+            await pool.request().query(`
+              ALTER TABLE Batches
+              ALTER COLUMN ${columnName} NVARCHAR(MAX)
+            `);
+            console.log(`✅ Successfully expanded column ${columnName} to NVARCHAR(MAX)`);
+          } catch (alterError) {
+            console.error(`Error expanding column ${columnName}:`, alterError.message);
+          }
+        }
+      }
+      
+      // Also check BatchProducts table
+      const bpTableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'BatchProducts'
+      `);
+      
+      if (bpTableResult.recordset[0].tableExists > 0) {
+        // Get all columns from BatchProducts table
+        const bpColumnsResult = await pool.request().query(`
+          SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME = 'BatchProducts'
+        `);
+        
+        // Check each column
+        for (const column of bpColumnsResult.recordset) {
+          const columnName = column.COLUMN_NAME;
+          const dataType = column.DATA_TYPE;
+          const maxLength = column.CHARACTER_MAXIMUM_LENGTH;
+          
+          // Check if this is a JSON-like column that's not already NVARCHAR(MAX)
+          const isJsonLike = jsonLikeColumns.some(term => columnName.toLowerCase().includes(term));
+          const needsExpansion = isJsonLike && dataType.toLowerCase() === 'nvarchar' && maxLength !== -1;
+          
+          if (needsExpansion) {
+            console.log(`Expanding column ${columnName} in BatchProducts from NVARCHAR(${maxLength}) to NVARCHAR(MAX)...`);
+            
+            try {
+              // Alter the column to NVARCHAR(MAX)
+              await pool.request().query(`
+                ALTER TABLE BatchProducts
+                ALTER COLUMN ${columnName} NVARCHAR(MAX)
+              `);
+              console.log(`✅ Successfully expanded column ${columnName} in BatchProducts to NVARCHAR(MAX)`);
+            } catch (alterError) {
+              console.error(`Error expanding column ${columnName} in BatchProducts:`, alterError.message);
+            }
+          }
+        }
+      }
+      
+      console.log('✅ Completed JSON column expansion check');
+      return true;
+    } catch (error) {
+      console.error('Error fixing JSON columns:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Add missing column to database table
+   * @param {string} tableName - Table name
+   * @param {string} columnName - Column name
+   * @param {string} columnType - Column type (e.g., 'NVARCHAR(255)')
+   * @returns {Promise<boolean>} - Success status
+   */
+  async addMissingColumn(tableName, columnName, columnType) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Check if column already exists
+      const result = await pool.request()
+        .input('tableName', sql.NVarChar, tableName)
+        .input('columnName', sql.NVarChar, columnName)
+        .query(`
+          SELECT COUNT(*) AS columnExists 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_NAME = @tableName AND COLUMN_NAME = @columnName
+        `);
+      
+      const columnExists = result.recordset[0].columnExists > 0;
+      
+      if (!columnExists) {
+        // Add column
+        await pool.request().query(`
+          ALTER TABLE ${tableName}
+          ADD ${columnName} ${columnType}
+        `);
+        
+        console.log(`Added new column ${columnName} (${columnType}) to ${tableName} table`);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error(`Error adding column ${columnName} to ${tableName}:`, error.message);
+      return false;
     }
   }
 
@@ -366,14 +559,16 @@ class AdaptiveBatchService {
    * Get all batches from Picqer API with pagination
    * @param {Date|null} updatedSince - Only get batches updated since this date
    * @param {Object|null} syncProgress - Sync progress record for resumable sync
+   * @param {Date|null} cutoffDate - Optional cutoff date for days parameter optimization
    * @returns {Promise<Array>} - Array of batches
    */
-  async getAllBatches(updatedSince = null, syncProgress = null) {
+  async getAllBatches(updatedSince = null, syncProgress = null, cutoffDate = null) {
     try {
       const limit = 100; // Number of batches per page
       let offset = syncProgress ? syncProgress.current_offset : 0;
       let hasMoreBatches = true;
       let allBatches = [];
+      let foundOlderBatch = false;
       
       // Format date for API request if provided
       let updatedSinceParam = null;
@@ -381,11 +576,15 @@ class AdaptiveBatchService {
         updatedSinceParam = updatedSince.toISOString().replace('T', ' ').substring(0, 19);
         console.log(`Fetching batches updated since: ${updatedSinceParam}`);
       } else {
-        console.log('Fetching all batches from Picqer...');
+        console.log('Fetching batches from Picqer...');
       }
       
-      // Continue fetching until we have all batches
-      while (hasMoreBatches) {
+      if (cutoffDate) {
+        console.log(`Using cutoff date for optimization: ${cutoffDate.toISOString()}`);
+      }
+      
+      // Continue fetching until we have all batches or find batches older than cutoff date
+      while (hasMoreBatches && !foundOlderBatch) {
         console.log(`Fetching batches with offset ${offset}...`);
         
         // Update sync progress if provided
@@ -415,6 +614,42 @@ class AdaptiveBatchService {
             return !existingIds.has(batch.idpicklist_batch);
           });
           
+          // Check if any batches are older than cutoff date
+          if (cutoffDate) {
+            // Sort batches by updated_at in descending order (newest first)
+            newBatches.sort((a, b) => {
+              const dateA = a.updated_at ? new Date(a.updated_at) : new Date(0);
+              const dateB = b.updated_at ? new Date(b.updated_at) : new Date(0);
+              return dateB - dateA;
+            });
+            
+            // Check if the oldest batch in this page is older than cutoff date
+            const oldestBatchInPage = newBatches[newBatches.length - 1];
+            if (oldestBatchInPage && oldestBatchInPage.updated_at) {
+              const oldestDate = new Date(oldestBatchInPage.updated_at);
+              if (oldestDate < cutoffDate) {
+                console.log(`Found batch older than cutoff date (${oldestDate.toISOString()}), stopping pagination`);
+                
+                // Filter out batches older than cutoff date
+                const recentBatches = newBatches.filter(batch => {
+                  if (!batch.updated_at) return false;
+                  const batchDate = new Date(batch.updated_at);
+                  return batchDate >= cutoffDate;
+                });
+                
+                // Add only recent batches to our collection
+                allBatches = [...allBatches, ...recentBatches];
+                console.log(`Added ${recentBatches.length} recent batches (filtered out ${newBatches.length - recentBatches.length} older batches)`);
+                
+                // Stop pagination
+                foundOlderBatch = true;
+                hasMoreBatches = false;
+                break;
+              }
+            }
+          }
+          
+          // Add all batches if no cutoff date or all batches are newer than cutoff
           allBatches = [...allBatches, ...newBatches];
           console.log(`Retrieved ${newBatches.length} new batches (total unique: ${allBatches.length})`);
           
@@ -452,7 +687,7 @@ class AdaptiveBatchService {
         await new Promise(resolve => setTimeout(resolve, 20000));
         
         // Retry the request
-        return this.getAllBatches(updatedSince, syncProgress);
+        return this.getAllBatches(updatedSince, syncProgress, cutoffDate);
       }
       
       throw error;
@@ -461,64 +696,61 @@ class AdaptiveBatchService {
 
   /**
    * Get batches updated in the last N days
+   * Uses optimized fetching to stop pagination when older batches are encountered
    * @param {number} days - Number of days to look back
    * @param {Object|null} syncProgress - Sync progress record for resumable sync
-   * @returns {Promise<Array>} - Array of batches
+   * @returns {Promise<Array>} - Array of batches updated in the last N days
    */
   async getBatchesUpdatedInLastDays(days, syncProgress = null) {
     try {
       // Calculate date for days parameter
       const daysAgo = new Date();
       daysAgo.setDate(daysAgo.getDate() - days);
+      daysAgo.setHours(0, 0, 0, 0); // Set to beginning of the day for consistent comparison
       
-      console.log(`Fetching batches updated in the last ${days} days (since ${daysAgo.toISOString()})...`);
+      console.log(`Using custom date range: syncing batches updated since ${daysAgo.toISOString()}`);
       
-      // Get all batches first (Picqer API may not properly filter by updated_since)
-      const allBatches = await this.getAllBatches(null, syncProgress);
+      // Get batches with cutoff date optimization
+      const batches = await this.getAllBatches(null, syncProgress, daysAgo);
       
-      // Filter batches by updated_at date client-side
-      const filteredBatches = allBatches.filter(batch => {
+      // Double-check all batches are within the date range (defensive programming)
+      const filteredBatches = batches.filter(batch => {
         if (!batch.updated_at) return false;
         
         const batchUpdatedAt = new Date(batch.updated_at);
         return batchUpdatedAt >= daysAgo;
       });
       
-      console.log(`Filtered to ${filteredBatches.length} batches updated since ${daysAgo.toISOString()}`);
+      if (filteredBatches.length !== batches.length) {
+        console.log(`Filtered out ${batches.length - filteredBatches.length} batches outside the date range`);
+      }
+      
+      console.log(`Found ${filteredBatches.length} batches updated in the last ${days} days`);
       
       return filteredBatches;
     } catch (error) {
-      console.error(`Error getting batches updated in the last ${days} days:`, error.message);
+      console.error(`Error getting batches updated in last ${days} days:`, error.message);
       throw error;
     }
   }
 
   /**
    * Get batches updated since a specific date
-   * @param {Date} date - Date to look back from
+   * For incremental syncs, use a 30-day rolling window
+   * @param {Date} date - The date to check updates from
    * @param {Object|null} syncProgress - Sync progress record for resumable sync
-   * @returns {Promise<Array>} - Array of batches
+   * @returns {Promise<Array>} - Array of updated batches
    */
   async getBatchesUpdatedSince(date, syncProgress = null) {
     try {
-      console.log(`Fetching batches updated since ${date.toISOString()}...`);
+      // For incremental syncs, use a 30-day rolling window
+      // This ensures we don't miss any updates due to timezone differences
+      const thirtyDaysAgo = new Date(date.getTime() - (30 * 24 * 60 * 60 * 1000));
       
-      // Get all batches first (Picqer API may not properly filter by updated_since)
-      const allBatches = await this.getAllBatches(null, syncProgress);
-      
-      // Filter batches by updated_at date client-side
-      const filteredBatches = allBatches.filter(batch => {
-        if (!batch.updated_at) return false;
-        
-        const batchUpdatedAt = new Date(batch.updated_at);
-        return batchUpdatedAt >= date;
-      });
-      
-      console.log(`Filtered to ${filteredBatches.length} batches updated since ${date.toISOString()}`);
-      
-      return filteredBatches;
+      console.log(`Using 30-day rolling window for incremental sync: ${thirtyDaysAgo.toISOString()}`);
+      return this.getAllBatches(thirtyDaysAgo, syncProgress);
     } catch (error) {
-      console.error(`Error getting batches updated since ${date.toISOString()}:`, error.message);
+      console.error('Error getting batches updated since date:', error.message);
       throw error;
     }
   }
@@ -537,8 +769,8 @@ class AdaptiveBatchService {
       if (response.data) {
         console.log(`Retrieved details for batch ${idpicklist_batch}`);
         
-        // Analyze batch data to discover new fields
-        await this.discoverAndAddNewFields(response.data);
+        // Check for new fields in API response and add them to database
+        await this.handleNewFields(response.data);
         
         return response.data;
       }
@@ -558,81 +790,148 @@ class AdaptiveBatchService {
         return this.getBatchDetails(idpicklist_batch);
       }
       
+      // Return null on error to continue with other batches
+      return null;
+    }
+  }
+
+  /**
+   * Handle new fields in API response
+   * @param {Object} batchData - Batch data from API
+   * @returns {Promise<boolean>} - Success status
+   */
+  async handleNewFields(batchData) {
+    try {
+      // Get known field names from field map
+      const knownFields = Array.from(this.fieldMap.keys());
+      
+      // Get field names from API response
+      const apiFields = Object.keys(batchData);
+      
+      // Find new fields
+      const newFields = apiFields.filter(field => !knownFields.includes(field));
+      
+      if (newFields.length > 0) {
+        console.log(`Discovered ${newFields.length} new fields in API response:`, JSON.stringify(newFields, null, 2));
+        
+        // Add new fields to database
+        for (const field of newFields) {
+          // Skip fields that are handled separately
+          if (field === 'products' || field === 'picklists') {
+            continue;
+          }
+          
+          // Determine SQL type for field
+          const sqlType = this.getSqlTypeForField(field, batchData[field]);
+          
+          // Add field to Batches table
+          await this.addMissingColumn('Batches', field, sqlType);
+          
+          // Add field to field map
+          this.fieldMap.set(field, field);
+        }
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error handling new fields:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Save batches to database
+   * @param {Array} batches - Array of batches to save
+   * @param {Object|null} syncProgress - Sync progress record for resumable sync
+   * @returns {Promise<number>} - Number of batches saved
+   */
+  async saveBatchesToDatabase(batches, syncProgress = null) {
+    try {
+      console.log(`Saving ${batches.length} batches to database...`);
+      
+      // Connect to database
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Process batches in chunks to avoid overwhelming the database
+      const chunkSize = 10;
+      const chunks = [];
+      
+      for (let i = 0; i < batches.length; i += chunkSize) {
+        chunks.push(batches.slice(i, i + chunkSize));
+      }
+      
+      console.log(`Processing batches in ${chunks.length} chunks of ${chunkSize}...`);
+      
+      let savedCount = 0;
+      let failedCount = 0;
+      
+      // Process each chunk
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        console.log(`Processing chunk ${i + 1} of ${chunks.length} (${chunk.length} batches)...`);
+        
+        // Process each batch in the chunk
+        for (const batch of chunk) {
+          try {
+            // Get batch details from Picqer API
+            const batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
+            
+            if (!batchDetails) {
+              console.warn(`Skipping batch ${batch.idpicklist_batch} - could not retrieve details`);
+              failedCount++;
+              continue;
+            }
+            
+            try {
+              // Save batch to database
+              const saved = await this.saveBatchToDatabase(batchDetails);
+              
+              if (saved) {
+                savedCount++;
+              } else {
+                failedCount++;
+              }
+            } catch (error) {
+              console.error(`Error saving batch ${batch.idpicklist_batch}:`, error.message);
+              failedCount++;
+            }
+          } catch (error) {
+            console.error(`Error processing batch ${batch.idpicklist_batch}:`, error.message);
+            failedCount++;
+          }
+          
+          // Add a small delay between batches to avoid overwhelming the database
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        // Update sync progress after each chunk if provided
+        if (syncProgress) {
+          await this.updateSyncProgress(syncProgress, {
+            items_processed: savedCount + failedCount
+          });
+        }
+      }
+      
+      console.log(`✅ Saved ${savedCount} out of ${batches.length} batches to database (${failedCount} failed)`);
+      
+      // Update SyncStatus table with last sync date
+      await pool.request()
+        .input('lastSyncDate', sql.DateTime, new Date().toISOString())
+        .query(`
+          UPDATE SyncStatus 
+          SET last_sync_date = @lastSyncDate 
+          WHERE entity_type = 'batches'
+        `);
+      
+      return savedCount;
+    } catch (error) {
+      console.error('Error saving batches to database:', error.message);
       throw error;
     }
   }
 
   /**
-   * Discover and add new fields from API response
-   * @param {Object} batchData - Batch data from API
-   * @returns {Promise<void>}
-   */
-  async discoverAndAddNewFields(batchData) {
-    try {
-      // Get all field names from the API response
-      const apiFields = Object.keys(batchData);
-      
-      // Check if any fields are not in our known fields list
-      const unknownFields = apiFields.filter(field => 
-        !adaptiveBatchesSchema.knownBatchFields.some(known => known.apiField === field)
-      );
-      
-      if (unknownFields.length > 0) {
-        console.log(`Discovered ${unknownFields.length} new fields in API response:`, unknownFields);
-        
-        // Connect to database
-        const pool = await sql.connect(this.sqlConfig);
-        
-        // Add each unknown field to the database
-        for (const field of unknownFields) {
-          // Determine SQL type based on value type
-          let sqlType = 'NVARCHAR(255)';
-          const value = batchData[field];
-          
-          if (typeof value === 'number') {
-            if (Number.isInteger(value)) {
-              sqlType = 'INT';
-            } else {
-              sqlType = 'FLOAT';
-            }
-          } else if (typeof value === 'boolean') {
-            sqlType = 'BIT';
-          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-            sqlType = 'DATETIME';
-          } else if (typeof value === 'string' && value.length > 255) {
-            sqlType = 'NVARCHAR(MAX)';
-          }
-          
-          // Use the same name for both API field and DB column
-          const columnName = field;
-          
-          // Add column to database
-          const addColumnSQL = `
-          IF NOT EXISTS (
-              SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
-              WHERE TABLE_NAME = 'Batches' AND COLUMN_NAME = '${columnName}'
-          )
-          BEGIN
-              ALTER TABLE Batches ADD ${columnName} ${sqlType};
-              PRINT 'Added new column ${columnName} (${sqlType}) to Batches table';
-          END
-          `;
-          
-          await pool.request().query(addColumnSQL);
-          console.log(`Added new column ${columnName} (${sqlType}) to Batches table`);
-          
-          // Add to field map
-          this.fieldMap.set(field, columnName);
-        }
-      }
-    } catch (error) {
-      console.error('Error discovering and adding new fields:', error.message);
-      // Continue execution even if this fails
-    }
-  }
-
-  /**
-   * Save batch to database with adaptive column mapping
+   * Save a single batch to database
    * @param {Object} batchDetails - Batch details from Picqer API
    * @returns {Promise<boolean>} - Success status
    */
@@ -644,172 +943,114 @@ class AdaptiveBatchService {
       const pool = await sql.connect(this.sqlConfig);
       
       // Check if batch already exists
-      const existsResult = await pool.request()
+      const checkResult = await pool.request()
         .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-        .query(`
-          SELECT COUNT(*) as count 
-          FROM Batches 
-          WHERE idpicklist_batch = @idpicklist_batch
-        `);
+        .query('SELECT id FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
       
-      const batchExists = existsResult.recordset[0].count > 0;
+      const batchExists = checkResult.recordset.length > 0;
       
-      // Sanitize picklist_batchid to prevent validation errors
-      // Check multiple possible field names and provide fallback
-      let picklist_batchid = '';
+      // Get picklist_batchid with fallbacks for different field names
+      let picklist_batchid = batchDetails.picklist_batchid || 
+                            batchDetails.picklistbatchid || 
+                            batchDetails.picklist_batch_id ||
+                            batchDetails.picklistBatchId ||
+                            `BATCH-${batchDetails.idpicklist_batch}`;
       
-      if (batchDetails.picklist_batchid) {
-        picklist_batchid = String(batchDetails.picklist_batchid).trim();
-      } else if (batchDetails.picklistbatchid) {
-        picklist_batchid = String(batchDetails.picklistbatchid).trim();
-      } else if (batchDetails.picklist_batch_id) {
-        picklist_batchid = String(batchDetails.picklist_batch_id).trim();
-      } else if (batchDetails.picklistBatchId) {
-        picklist_batchid = String(batchDetails.picklistBatchId).trim();
-      } else {
-        // Fallback to a generated ID if none exists
-        picklist_batchid = `BATCH-${batchDetails.idpicklist_batch}`;
+      // Ensure picklist_batchid is a valid string
+      picklist_batchid = String(picklist_batchid).trim();
+      
+      // Sanitize string fields
+      const status = batchDetails.status ? String(batchDetails.status).trim() : null;
+      
+      // Parse dates
+      let created = null;
+      if (batchDetails.created_at) {
+        created = new Date(batchDetails.created_at);
       }
       
-      // Remove any problematic characters
-      picklist_batchid = picklist_batchid.replace(/[^\w\s-]/g, '');
-      
-      // Ensure it's not empty
-      if (!picklist_batchid) {
-        picklist_batchid = `BATCH-${batchDetails.idpicklist_batch}`;
+      let updated = null;
+      if (batchDetails.updated_at) {
+        updated = new Date(batchDetails.updated_at);
       }
+      
+      // Sanitize numeric fields
+      const iduser = batchDetails.iduser || null;
+      const idwarehouse = batchDetails.idwarehouse || null;
+      const idfulfilment_customer = batchDetails.idfulfilment_customer || null;
       
       // Current timestamp for last_sync_date
       const last_sync_date = new Date();
       
-      // Build dynamic SQL for insert/update based on available fields
+      // Handle products and picklists separately
+      const products = batchDetails.products || [];
+      const picklists = batchDetails.picklists || [];
+      
+      // Remove products and picklists from batchDetails to avoid saving them directly
+      const batchDetailsCopy = { ...batchDetails };
+      delete batchDetailsCopy.products;
+      delete batchDetailsCopy.picklists;
+      
       if (batchExists) {
         // Update existing batch
-        let updateFields = [];
-        const request = new sql.Request(pool);
+        await pool.request()
+          .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
+          .input('picklist_batchid', sql.NVarChar, picklist_batchid)
+          .input('status', sql.NVarChar, status)
+          .input('created', sql.DateTime, created)
+          .input('updated', sql.DateTime, updated)
+          .input('iduser', sql.Int, iduser)
+          .input('idwarehouse', sql.Int, idwarehouse)
+          .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
+          .input('last_sync_date', sql.DateTime, last_sync_date)
+          .query(`
+            UPDATE Batches 
+            SET 
+              picklist_batchid = @picklist_batchid,
+              status = @status,
+              created_at = @created,
+              updated_at = @updated,
+              iduser = @iduser,
+              idwarehouse = @idwarehouse,
+              idfulfilment_customer = @idfulfilment_customer,
+              last_sync_date = @last_sync_date
+            WHERE idpicklist_batch = @idpicklist_batch
+          `);
         
-        // Always include idpicklist_batch for WHERE clause
-        request.input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch);
-        
-        // Always include picklist_batchid and last_sync_date
-        updateFields.push('picklist_batchid = @picklist_batchid');
-        request.input('picklist_batchid', sql.NVarChar, picklist_batchid);
-        
-        updateFields.push('last_sync_date = @last_sync_date');
-        request.input('last_sync_date', sql.DateTime, last_sync_date);
-        
-        // Add all other fields from batch details
-        for (const [apiField, value] of Object.entries(batchDetails)) {
-          // Skip idpicklist_batch as it's used in WHERE clause
-          if (apiField === 'idpicklist_batch') continue;
-          
-          // Skip picklist_batchid as it's already handled
-          if (apiField === 'picklist_batchid') continue;
-          
-          // Get corresponding DB column name
-          const columnName = this.fieldMap.get(apiField) || apiField;
-          
-          // Skip if value is undefined
-          if (value === undefined) continue;
-          
-          // Add to update fields
-          updateFields.push(`${columnName} = @${columnName}`);
-          
-          // Add parameter with appropriate type
-          if (value === null) {
-            request.input(columnName, value);
-          } else if (typeof value === 'number') {
-            if (Number.isInteger(value)) {
-              request.input(columnName, sql.Int, value);
-            } else {
-              request.input(columnName, sql.Float, value);
-            }
-          } else if (typeof value === 'boolean') {
-            request.input(columnName, sql.Bit, value ? 1 : 0);
-          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-            request.input(columnName, sql.DateTime, new Date(value));
-          } else if (typeof value === 'string') {
-            request.input(columnName, sql.NVarChar, value);
-          } else {
-            // Convert objects or arrays to strings
-            request.input(columnName, sql.NVarChar, JSON.stringify(value));
-          }
-        }
-        
-        // Execute update query
-        const updateQuery = `
-          UPDATE Batches 
-          SET ${updateFields.join(', ')}
-          WHERE idpicklist_batch = @idpicklist_batch
-        `;
-        
-        await request.query(updateQuery);
         console.log(`Updated existing batch ${batchDetails.idpicklist_batch}`);
       } else {
         // Insert new batch
-        let columnNames = ['idpicklist_batch', 'picklist_batchid', 'last_sync_date'];
-        let paramNames = ['@idpicklist_batch', '@picklist_batchid', '@last_sync_date'];
-        const request = new sql.Request(pool);
+        await pool.request()
+          .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
+          .input('picklist_batchid', sql.NVarChar, picklist_batchid)
+          .input('status', sql.NVarChar, status)
+          .input('created', sql.DateTime, created)
+          .input('updated', sql.DateTime, updated)
+          .input('iduser', sql.Int, iduser)
+          .input('idwarehouse', sql.Int, idwarehouse)
+          .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
+          .input('last_sync_date', sql.DateTime, last_sync_date)
+          .query(`
+            INSERT INTO Batches (
+              idpicklist_batch, picklist_batchid, status, created_at, updated_at,
+              iduser, idwarehouse, idfulfilment_customer, last_sync_date
+            )
+            VALUES (
+              @idpicklist_batch, @picklist_batchid, @status, @created, @updated,
+              @iduser, @idwarehouse, @idfulfilment_customer, @last_sync_date
+            )
+          `);
         
-        // Add required parameters
-        request.input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch);
-        request.input('picklist_batchid', sql.NVarChar, picklist_batchid);
-        request.input('last_sync_date', sql.DateTime, last_sync_date);
-        
-        // Add all other fields from batch details
-        for (const [apiField, value] of Object.entries(batchDetails)) {
-          // Skip idpicklist_batch and picklist_batchid as they're already handled
-          if (apiField === 'idpicklist_batch' || apiField === 'picklist_batchid') continue;
-          
-          // Skip if value is undefined
-          if (value === undefined) continue;
-          
-          // Get corresponding DB column name
-          const columnName = this.fieldMap.get(apiField) || apiField;
-          
-          // Add to column and parameter lists
-          columnNames.push(columnName);
-          paramNames.push(`@${columnName}`);
-          
-          // Add parameter with appropriate type
-          if (value === null) {
-            request.input(columnName, value);
-          } else if (typeof value === 'number') {
-            if (Number.isInteger(value)) {
-              request.input(columnName, sql.Int, value);
-            } else {
-              request.input(columnName, sql.Float, value);
-            }
-          } else if (typeof value === 'boolean') {
-            request.input(columnName, sql.Bit, value ? 1 : 0);
-          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-            request.input(columnName, sql.DateTime, new Date(value));
-          } else if (typeof value === 'string') {
-            request.input(columnName, sql.NVarChar, value);
-          } else {
-            // Convert objects or arrays to strings
-            request.input(columnName, sql.NVarChar, JSON.stringify(value));
-          }
-        }
-        
-        // Execute insert query
-        const insertQuery = `
-          INSERT INTO Batches (${columnNames.join(', ')})
-          VALUES (${paramNames.join(', ')})
-        `;
-        
-        await request.query(insertQuery);
         console.log(`Inserted new batch ${batchDetails.idpicklist_batch}`);
       }
       
       // Save batch products if available
-      if (batchDetails.products && Array.isArray(batchDetails.products)) {
-        await this.saveBatchProductsToDatabase(batchDetails.idpicklist_batch, batchDetails.products);
+      if (products.length > 0) {
+        await this.saveBatchProductsToDatabase(batchDetails.idpicklist_batch, products);
       }
       
       // Save batch picklists if available
-      if (batchDetails.picklists && Array.isArray(batchDetails.picklists)) {
-        await this.saveBatchPicklistsToDatabase(batchDetails.idpicklist_batch, batchDetails.picklists);
+      if (picklists.length > 0) {
+        await this.saveBatchPicklistsToDatabase(batchDetails.idpicklist_batch, picklists);
       }
       
       return true;
@@ -820,7 +1061,7 @@ class AdaptiveBatchService {
   }
 
   /**
-   * Save batch products to database with adaptive column mapping
+   * Save batch products to database
    * @param {number} idpicklist_batch - Batch ID
    * @param {Array} products - Array of products in the batch
    * @returns {Promise<boolean>} - Success status
@@ -842,122 +1083,59 @@ class AdaptiveBatchService {
       
       // Insert new batch products
       for (const product of products) {
-        // Build dynamic SQL for insert based on available fields
-        let columnNames = ['idpicklist_batch'];
-        let paramNames = ['@idpicklist_batch'];
-        const request = new sql.Request(pool);
+        // Sanitize string fields
+        const name = product.name ? String(product.name).trim() : null;
+        const productcode = product.productcode ? String(product.productcode).trim() : null;
+        const productcode_supplier = product.productcode_supplier ? String(product.productcode_supplier).trim() : null;
+        const stock_location = product.stock_location ? String(product.stock_location).trim() : null;
+        const image = product.image ? String(product.image).trim() : null;
         
-        // Add required parameters
-        request.input('idpicklist_batch', sql.Int, idpicklist_batch);
+        // Sanitize numeric fields
+        const idproduct = product.idproduct || null;
+        const amount = product.amount || 0;
+        const amount_picked = product.amount_picked || 0;
+        const amount_collected = product.amount_collected || 0;
         
-        // Add all fields from product
-        for (const [apiField, value] of Object.entries(product)) {
-          // Skip if value is undefined
-          if (value === undefined) continue;
-          
-          // Get corresponding DB column name from known fields or use API field name
-          const columnName = apiField;
-          
-          // Add to column and parameter lists
-          columnNames.push(columnName);
-          paramNames.push(`@${columnName}`);
-          
-          // Add parameter with appropriate type
-          if (value === null) {
-            request.input(columnName, value);
-          } else if (typeof value === 'number') {
-            if (Number.isInteger(value)) {
-              request.input(columnName, sql.Int, value);
-            } else {
-              request.input(columnName, sql.Float, value);
-            }
-          } else if (typeof value === 'boolean') {
-            request.input(columnName, sql.Bit, value ? 1 : 0);
-          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-            request.input(columnName, sql.DateTime, new Date(value));
-          } else if (typeof value === 'string') {
-            request.input(columnName, sql.NVarChar, value);
-          } else {
-            // Convert objects or arrays to strings
-            request.input(columnName, sql.NVarChar, JSON.stringify(value));
-          }
-        }
+        // Convert barcodes to string
+        const barcodes = product.barcodes ? JSON.stringify(product.barcodes) : '[]';
         
-        // Add last_sync_date
-        columnNames.push('last_sync_date');
-        paramNames.push('@last_sync_date');
-        request.input('last_sync_date', sql.DateTime, new Date());
-        
-        // Execute insert query
-        const insertQuery = `
-          INSERT INTO BatchProducts (${columnNames.join(', ')})
-          VALUES (${paramNames.join(', ')})
-        `;
-        
-        try {
-          await request.query(insertQuery);
-        } catch (error) {
-          // If insert fails due to missing column, add the column and retry
-          if (error.message.includes('Invalid column name')) {
-            const match = error.message.match(/Invalid column name '([^']+)'/);
-            if (match && match[1]) {
-              const missingColumn = match[1];
-              console.log(`Adding missing column ${missingColumn} to BatchProducts table...`);
-              
-              // Determine SQL type based on value type
-              let sqlType = 'NVARCHAR(255)';
-              const value = product[missingColumn];
-              
-              if (typeof value === 'number') {
-                if (Number.isInteger(value)) {
-                  sqlType = 'INT';
-                } else {
-                  sqlType = 'FLOAT';
-                }
-              } else if (typeof value === 'boolean') {
-                sqlType = 'BIT';
-              } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-                sqlType = 'DATETIME';
-              } else if (typeof value === 'string' && value.length > 255) {
-                sqlType = 'NVARCHAR(MAX)';
-              }
-              
-              // Add column to database
-              const addColumnSQL = `
-              IF NOT EXISTS (
-                  SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
-                  WHERE TABLE_NAME = 'BatchProducts' AND COLUMN_NAME = '${missingColumn}'
-              )
-              BEGIN
-                  ALTER TABLE BatchProducts ADD ${missingColumn} ${sqlType};
-                  PRINT 'Added new column ${missingColumn} (${sqlType}) to BatchProducts table';
-              END
-              `;
-              
-              await pool.request().query(addColumnSQL);
-              console.log(`Added new column ${missingColumn} (${sqlType}) to BatchProducts table`);
-              
-              // Retry insert
-              await request.query(insertQuery);
-            } else {
-              throw error;
-            }
-          } else {
-            throw error;
-          }
-        }
+        await pool.request()
+          .input('idpicklist_batch', sql.Int, idpicklist_batch)
+          .input('idproduct', sql.Int, idproduct)
+          .input('name', sql.NVarChar, name)
+          .input('productcode', sql.NVarChar, productcode)
+          .input('productcode_supplier', sql.NVarChar, productcode_supplier)
+          .input('stock_location', sql.NVarChar, stock_location)
+          .input('image', sql.NVarChar, image)
+          .input('barcodes', sql.NVarChar, barcodes)
+          .input('amount', sql.Int, amount)
+          .input('amount_picked', sql.Int, amount_picked)
+          .input('amount_collected', sql.Int, amount_collected)
+          .input('last_sync_date', sql.DateTime, new Date())
+          .query(`
+            INSERT INTO BatchProducts (
+              idpicklist_batch, idproduct, name, productcode, productcode_supplier,
+              stock_location, image, barcodes, amount, amount_picked, amount_collected,
+              last_sync_date
+            )
+            VALUES (
+              @idpicklist_batch, @idproduct, @name, @productcode, @productcode_supplier,
+              @stock_location, @image, @barcodes, @amount, @amount_picked, @amount_collected,
+              @last_sync_date
+            )
+          `);
       }
       
       console.log(`✅ Saved ${products.length} products for batch ${idpicklist_batch}`);
       return true;
     } catch (error) {
-      console.error(`Error saving batch products for batch ${idpicklist_batch}:`, error.message);
+      console.error(`Error saving products for batch ${idpicklist_batch}:`, error.message);
       return false;
     }
   }
 
   /**
-   * Save batch picklists to database with adaptive column mapping
+   * Save batch picklists to database
    * @param {number} idpicklist_batch - Batch ID
    * @param {Array} picklists - Array of picklists in the batch
    * @returns {Promise<boolean>} - Success status
@@ -979,116 +1157,64 @@ class AdaptiveBatchService {
       
       // Insert new batch picklists
       for (const picklist of picklists) {
-        // Build dynamic SQL for insert based on available fields
-        let columnNames = ['idpicklist_batch'];
-        let paramNames = ['@idpicklist_batch'];
-        const request = new sql.Request(pool);
+        // Sanitize string fields
+        const picklistid = picklist.picklistid ? String(picklist.picklistid).trim() : null;
+        const reference = picklist.reference ? String(picklist.reference).trim() : null;
+        const status = picklist.status ? String(picklist.status).trim() : null;
+        const alias = picklist.alias ? String(picklist.alias).trim() : null;
+        const picking_container = picklist.picking_container ? String(picklist.picking_container).trim() : null;
+        const delivery_name = picklist.delivery_name ? String(picklist.delivery_name).trim() : null;
+        const customer_remarks = picklist.customer_remarks ? String(picklist.customer_remarks).trim() : null;
         
-        // Add required parameters
-        request.input('idpicklist_batch', sql.Int, idpicklist_batch);
+        // Sanitize numeric fields
+        const idpicklist = picklist.idpicklist || null;
+        const total_products = picklist.total_products || 0;
         
-        // Add all fields from picklist
-        for (const [apiField, value] of Object.entries(picklist)) {
-          // Skip if value is undefined
-          if (value === undefined) continue;
-          
-          // Get corresponding DB column name from known fields or use API field name
-          const columnName = apiField;
-          
-          // Add to column and parameter lists
-          columnNames.push(columnName);
-          paramNames.push(`@${columnName}`);
-          
-          // Add parameter with appropriate type
-          if (value === null) {
-            request.input(columnName, value);
-          } else if (typeof value === 'number') {
-            if (Number.isInteger(value)) {
-              request.input(columnName, sql.Int, value);
-            } else {
-              request.input(columnName, sql.Float, value);
-            }
-          } else if (typeof value === 'boolean') {
-            request.input(columnName, sql.Bit, value ? 1 : 0);
-          } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-            request.input(columnName, sql.DateTime, new Date(value));
-          } else if (typeof value === 'string') {
-            request.input(columnName, sql.NVarChar, value);
-          } else {
-            // Convert objects or arrays to strings
-            request.input(columnName, sql.NVarChar, JSON.stringify(value));
-          }
+        // Sanitize boolean fields
+        const has_notes = picklist.has_notes ? 1 : 0;
+        const has_customer_remarks = picklist.has_customer_remarks ? 1 : 0;
+        
+        // Parse dates
+        let created_at = null;
+        if (picklist.created_at) {
+          created_at = new Date(picklist.created_at);
         }
         
-        // Add last_sync_date
-        columnNames.push('last_sync_date');
-        paramNames.push('@last_sync_date');
-        request.input('last_sync_date', sql.DateTime, new Date());
-        
-        // Execute insert query
-        const insertQuery = `
-          INSERT INTO BatchPicklists (${columnNames.join(', ')})
-          VALUES (${paramNames.join(', ')})
-        `;
-        
-        try {
-          await request.query(insertQuery);
-        } catch (error) {
-          // If insert fails due to missing column, add the column and retry
-          if (error.message.includes('Invalid column name')) {
-            const match = error.message.match(/Invalid column name '([^']+)'/);
-            if (match && match[1]) {
-              const missingColumn = match[1];
-              console.log(`Adding missing column ${missingColumn} to BatchPicklists table...`);
-              
-              // Determine SQL type based on value type
-              let sqlType = 'NVARCHAR(255)';
-              const value = picklist[missingColumn];
-              
-              if (typeof value === 'number') {
-                if (Number.isInteger(value)) {
-                  sqlType = 'INT';
-                } else {
-                  sqlType = 'FLOAT';
-                }
-              } else if (typeof value === 'boolean') {
-                sqlType = 'BIT';
-              } else if (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value)))) {
-                sqlType = 'DATETIME';
-              } else if (typeof value === 'string' && value.length > 255) {
-                sqlType = 'NVARCHAR(MAX)';
-              }
-              
-              // Add column to database
-              const addColumnSQL = `
-              IF NOT EXISTS (
-                  SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
-                  WHERE TABLE_NAME = 'BatchPicklists' AND COLUMN_NAME = '${missingColumn}'
-              )
-              BEGIN
-                  ALTER TABLE BatchPicklists ADD ${missingColumn} ${sqlType};
-                  PRINT 'Added new column ${missingColumn} (${sqlType}) to BatchPicklists table';
-              END
-              `;
-              
-              await pool.request().query(addColumnSQL);
-              console.log(`Added new column ${missingColumn} (${sqlType}) to BatchPicklists table`);
-              
-              // Retry insert
-              await request.query(insertQuery);
-            } else {
-              throw error;
-            }
-          } else {
-            throw error;
-          }
-        }
+        await pool.request()
+          .input('idpicklist_batch', sql.Int, idpicklist_batch)
+          .input('idpicklist', sql.Int, idpicklist)
+          .input('picklistid', sql.NVarChar, picklistid)
+          .input('reference', sql.NVarChar, reference)
+          .input('status', sql.NVarChar, status)
+          .input('alias', sql.NVarChar, alias)
+          .input('picking_container', sql.NVarChar, picking_container)
+          .input('total_products', sql.Int, total_products)
+          .input('delivery_name', sql.NVarChar, delivery_name)
+          .input('has_notes', sql.Bit, has_notes)
+          .input('has_customer_remarks', sql.Bit, has_customer_remarks)
+          .input('customer_remarks', sql.NVarChar, customer_remarks)
+          .input('created_at', sql.DateTime, created_at)
+          .input('last_sync_date', sql.DateTime, new Date())
+          .query(`
+            INSERT INTO BatchPicklists (
+              idpicklist_batch, idpicklist, picklistid, reference, status,
+              alias, picking_container, total_products, delivery_name,
+              has_notes, has_customer_remarks, customer_remarks, created_at,
+              last_sync_date
+            )
+            VALUES (
+              @idpicklist_batch, @idpicklist, @picklistid, @reference, @status,
+              @alias, @picking_container, @total_products, @delivery_name,
+              @has_notes, @has_customer_remarks, @customer_remarks, @created_at,
+              @last_sync_date
+            )
+          `);
       }
       
       console.log(`✅ Saved ${picklists.length} picklists for batch ${idpicklist_batch}`);
       return true;
     } catch (error) {
-      console.error(`Error saving batch picklists for batch ${idpicklist_batch}:`, error.message);
+      console.error(`Error saving picklists for batch ${idpicklist_batch}:`, error.message);
       return false;
     }
   }
@@ -1096,28 +1222,27 @@ class AdaptiveBatchService {
   /**
    * Sync batches from Picqer to database
    * @param {boolean} fullSync - Whether to perform a full sync
-   * @param {number|null} days - Number of days to look back (optional)
+   * @param {number|null} days - Optional number of days to limit sync to
    * @returns {Promise<Object>} - Sync results
    */
   async syncBatches(fullSync = false, days = null) {
     try {
-      console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync${days ? ` for last ${days} days` : ''}...`);
       
-      // Create sync progress record
+      // Create or get sync progress record
       const syncProgress = await this.createOrGetSyncProgress('batches', fullSync);
       
-      // Get batches from Picqer
       let batches = [];
       
-      if (days !== null && !isNaN(days) && days > 0) {
-        // If days parameter is provided, get batches updated in the last N days
+      if (days) {
+        // Days parameter: Get batches updated in the last N days
         console.log(`Using days parameter: ${days}`);
-        batches = await this.getBatchesUpdatedInLastDays(days, syncProgress);
+        batches = await this.getBatchesUpdatedInLastDays(parseInt(days), syncProgress);
       } else if (fullSync) {
-        // For full sync, get all batches
+        // Full sync: Get all batches
         batches = await this.getAllBatches(null, syncProgress);
       } else {
-        // For incremental sync, get batches updated since last sync
+        // Incremental sync: Get batches updated since last sync
         const lastSyncDate = await this.getLastSyncDate();
         
         if (lastSyncDate) {
@@ -1129,142 +1254,35 @@ class AdaptiveBatchService {
         }
       }
       
-      console.log(`Retrieved ${batches.length} batches to sync`);
-      
-      // Update sync progress with total items
-      await this.updateSyncProgress(syncProgress, {
-        total_items: batches.length
-      });
+      console.log(`Retrieved ${batches.length} batches from Picqer`);
       
       // Save batches to database
-      let successCount = 0;
-      let errorCount = 0;
-      
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        
-        // Update sync progress
-        await this.updateSyncProgress(syncProgress, {
-          items_processed: i + 1,
-          batch_number: i + 1
-        });
-        
-        try {
-          // Get batch details
-          const batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
-          
-          if (batchDetails) {
-            // Save batch to database
-            const success = await this.saveBatchToDatabase(batchDetails);
-            
-            if (success) {
-              successCount++;
-            } else {
-              errorCount++;
-              console.error(`Error saving batch ${batch.idpicklist_batch}`);
-            }
-          } else {
-            errorCount++;
-            console.error(`Could not retrieve details for batch ${batch.idpicklist_batch}`);
-          }
-        } catch (error) {
-          errorCount++;
-          console.error(`Error processing batch ${batch.idpicklist_batch}:`, error.message);
-        }
-        
-        // Add a small delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
-      // Update sync status
-      try {
-        const pool = await sql.connect(this.sqlConfig);
-        
-        await pool.request()
-          .input('entityType', sql.NVarChar, 'batches')
-          .input('lastSyncDate', sql.DateTime, new Date())
-          .input('totalCount', sql.Int, successCount)
-          .query(`
-            UPDATE SyncStatus 
-            SET 
-              last_sync_date = @lastSyncDate,
-              total_count = @totalCount
-            WHERE entity_type = @entityType
-          `);
-        
-        console.log(`Updated sync status for batches`);
-      } catch (error) {
-        console.error('Error updating sync status:', error.message);
-      }
+      const savedCount = await this.saveBatchesToDatabase(batches, syncProgress);
       
       // Complete sync progress
       await this.completeSyncProgress(syncProgress, true);
       
-      console.log(`✅ ${fullSync ? 'Full' : 'Incremental'} batch sync completed successfully`);
-      console.log(`Processed ${batches.length} batches: ${successCount} succeeded, ${errorCount} failed`);
+      console.log(`✅ Batch sync completed: ${savedCount} batches saved`);
       
       return {
         success: true,
-        entity: 'batches',
-        total: batches.length,
-        succeeded: successCount,
-        failed: errorCount,
-        syncId: syncProgress.sync_id
+        totalBatches: batches.length,
+        savedBatches: savedCount
       };
     } catch (error) {
-      console.error(`❌ Error in ${fullSync ? 'full' : 'incremental'} batch sync:`, error.message);
+      console.error('❌ Error in batch sync:', error.message);
+      
+      // Update sync progress with failure status
+      if (syncProgress) {
+        await this.completeSyncProgress(syncProgress, false);
+      }
+      
       return {
         success: false,
-        entity: 'batches',
         error: error.message
       };
     }
   }
-
-  /**
-   * Update sync status for batches
-   * @param {number} count - Number of batches synced
-   * @returns {Promise<boolean>} - Success status
-   */
-  async updateSyncStatus(count) {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      
-      await pool.request()
-        .input('entityType', sql.NVarChar, 'batches')
-        .input('lastSyncDate', sql.DateTime, new Date())
-        .input('totalCount', sql.Int, count)
-        .query(`
-          UPDATE SyncStatus 
-          SET 
-            last_sync_date = @lastSyncDate,
-            total_count = @totalCount
-          WHERE entity_type = @entityType
-        `);
-      
-      console.log(`Updated sync status for batches`);
-      return true;
-    } catch (error) {
-      console.error('Error updating sync status:', error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Get batch count from database
-   * Compatibility method for dashboard
-   * @returns {Promise<number>} - Number of batches in database
-   */
-  async getBatchCountFromDatabase() {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query('SELECT COUNT(*) as count FROM Batches');
-      return result.recordset[0].count;
-    } catch (error) {
-      console.error('Error getting batch count from database:', error.message);
-      return 0;
-    }
-  }
 }
 
-module.exports = AdaptiveBatchService;
+module.exports = BatchService;
