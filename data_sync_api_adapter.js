@@ -1,5 +1,5 @@
 /**
- * Updated Data Sync API Adapter with compatibility fixes
+ * Updated Data Sync API Adapter with BatchService support
  * Integrates all services and exposes API endpoints for data synchronization
  */
 const express = require('express');
@@ -17,7 +17,7 @@ let syncImplementation = null;
  */
 function initializeServices(serviceInstances) {
   services = serviceInstances;
-  console.log('API adapter initialized with service instances and sync implementation');
+  console.log('API adapter initialized with service instances');
 }
 
 /**
@@ -26,7 +26,7 @@ function initializeServices(serviceInstances) {
  */
 function setSyncImplementation(implementation) {
   syncImplementation = implementation;
-  console.log('Sync implementation set in API adapter');
+  console.log('Sync implementation initialized with service instances');
 }
 
 // Health check endpoint
@@ -278,20 +278,27 @@ router.post('/sync/batches', async (req, res) => {
       return res.status(500).json({ error: 'Sync implementation not initialized' });
     }
     
-    if (!services.BatchService) {
-      return res.status(500).json({ error: 'Batch service not initialized' });
-    }
-    
-    // Use the days parameter if provided
-    if (days !== null && !isNaN(days)) {
-      console.log(`Syncing batches from the last ${days} days`);
+    // Use direct BatchService sync if available and days parameter is provided
+    if (days !== null && !isNaN(days) && services.BatchService && typeof services.BatchService.syncBatches === 'function') {
+      console.log(`Syncing batches from the last ${days} days using BatchService directly`);
       const result = await services.BatchService.syncBatches(fullSync, days);
       return res.json(result);
     }
     
-    // Otherwise use the standard sync method
-    const result = await syncImplementation.syncBatches(fullSync);
-    res.json(result);
+    // Check if syncBatches exists in syncImplementation
+    if (typeof syncImplementation.syncBatches === 'function') {
+      const result = await syncImplementation.syncBatches(fullSync);
+      return res.json(result);
+    } else {
+      // Fallback to direct BatchService sync if available
+      if (services.BatchService && typeof services.BatchService.syncBatches === 'function') {
+        console.log('Using BatchService directly for sync');
+        const result = await services.BatchService.syncBatches(fullSync);
+        return res.json(result);
+      } else {
+        return res.status(500).json({ error: 'No method available to sync batches' });
+      }
+    }
   } catch (error) {
     console.error('Error syncing batches:', error.message);
     res.status(500).json({ error: error.message });
