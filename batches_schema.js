@@ -12,20 +12,16 @@ BEGIN
         idpicklist_batch INT NOT NULL,
         picklist_batchid NVARCHAR(50) NOT NULL,
         idwarehouse INT NULL,
-        type NVARCHAR(50) NULL,
+        iduser_created INT NULL,
+        iduser_assigned INT NULL,
+        iduser_processed INT NULL,
+        iduser_cancelled INT NULL,
         status NVARCHAR(50) NULL,
-        assigned_to_iduser INT NULL,
-        assigned_to_full_name NVARCHAR(255) NULL,
-        assigned_to_username NVARCHAR(100) NULL,
-        completed_by_iduser INT NULL,
-        completed_by_full_name NVARCHAR(255) NULL,
-        completed_by_username NVARCHAR(100) NULL,
-        total_products INT NULL,
-        total_picklists INT NULL,
-        completed_at DATETIME NULL,
-        created_at DATETIME NULL,
-        updated_at DATETIME NULL,
-        idfulfilment_customer INT NULL,
+        created DATETIME NULL,
+        updated DATETIME NULL,
+        processed DATETIME NULL,
+        cancelled DATETIME NULL,
+        assigned DATETIME NULL,
         last_sync_date DATETIME NOT NULL DEFAULT GETDATE(),
         
         -- Create indexes for better performance
@@ -33,8 +29,17 @@ BEGIN
         INDEX IX_Batches_picklist_batchid (picklist_batchid),
         INDEX IX_Batches_idwarehouse (idwarehouse),
         INDEX IX_Batches_status (status),
-        INDEX IX_Batches_updated_at (updated_at)
+        INDEX IX_Batches_updated (updated)
     );
+END
+ELSE
+BEGIN
+    -- Check if idfulfilment_customer column exists and add it if it doesn't
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Batches' AND COLUMN_NAME = 'idfulfilment_customer')
+    BEGIN
+        ALTER TABLE Batches ADD idfulfilment_customer INT NULL;
+        PRINT 'Added missing idfulfilment_customer column to Batches table';
+    END
 END
 `;
 
