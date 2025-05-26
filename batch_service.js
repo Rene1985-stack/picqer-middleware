@@ -2,11 +2,13 @@
  * Simplified Batch service for Picqer middleware with fixed schema
  * Handles synchronization of picklist batches between Picqer and SQL database
  * Uses a fixed schema approach for simplicity and reliability
+ * 
+ * UPDATED: Always starts from offset 0 for days parameter and full sync
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const batchesSchema = require('./batches_schema');
+const batchesSchema = require('./comprehensive_batches_schema');
 
 class SimpleBatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -205,13 +207,53 @@ class SimpleBatchService {
    * Create or get sync progress record
    * @param {string} entityType - Entity type (e.g., 'batches')
    * @param {boolean} isFullSync - Whether this is a full sync
+   * @param {boolean} usesDaysParam - Whether days parameter is being used
    * @returns {Promise<Object>} - Sync progress record
    */
-  async createOrGetSyncProgress(entityType = 'batches', isFullSync = false) {
+  async createOrGetSyncProgress(entityType = 'batches', isFullSync = false, usesDaysParam = false) {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      // Check for existing in-progress sync
+      // For full sync or days parameter, always create a new sync progress record
+      // This ensures we start from offset 0
+      if (isFullSync || usesDaysParam) {
+        console.log(`Creating new sync progress for ${entityType} (${isFullSync ? 'full sync' : 'days parameter sync'})`);
+        
+        // First, mark any in-progress syncs as abandoned
+        await pool.request()
+          .input('entityType', sql.NVarChar, entityType)
+          .query(`
+            UPDATE SyncProgress 
+            SET status = 'abandoned', last_updated = GETDATE()
+            WHERE entity_type = @entityType AND status = 'in_progress'
+          `);
+        
+        // Create a new sync progress record
+        const syncId = uuidv4();
+        const now = new Date().toISOString();
+        
+        const result = await pool.request()
+          .input('entityType', sql.NVarChar, entityType)
+          .input('syncId', sql.NVarChar, syncId)
+          .input('now', sql.DateTime, now)
+          .query(`
+            INSERT INTO SyncProgress (
+              entity_type, sync_id, current_offset, batch_number,
+              items_processed, status, started_at, last_updated
+            )
+            VALUES (
+              @entityType, @syncId, 0, 0, 
+              0, 'in_progress', @now, @now
+            );
+            
+            SELECT * FROM SyncProgress WHERE entity_type = @entityType AND sync_id = @syncId
+          `);
+        
+        console.log(`Created new sync progress record for ${entityType} with ID ${syncId} (starting from offset 0)`);
+        return result.recordset[0];
+      }
+      
+      // For regular incremental sync, check for existing in-progress sync
       const inProgressResult = await pool.request()
         .input('entityType', sql.NVarChar, entityType)
         .query(`
@@ -995,7 +1037,9 @@ class SimpleBatchService {
       console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync${days ? ` for last ${days} days` : ''}...`);
       
       // Create or get sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('batches', fullSync);
+      // Pass usesDaysParam=true when days parameter is provided
+      // This ensures we always start from offset 0 for days parameter syncs
+      const syncProgress = await this.createOrGetSyncProgress('batches', fullSync, days !== null);
       
       let batches = [];
       
