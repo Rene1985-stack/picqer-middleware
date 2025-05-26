@@ -1,5 +1,5 @@
 /**
- * Updated Data Sync API Adapter with BatchService integration
+ * Data Sync API Adapter with days parameter support
  * 
  * This adapter connects the dashboard to the actual sync implementation,
  * ensuring that when sync buttons are clicked, real data is synced from
@@ -21,7 +21,7 @@ function initializeServices(services) {
   WarehouseService = services.WarehouseService;
   UserService = services.UserService;
   SupplierService = services.SupplierService;
-  BatchService = services.BatchService; // Added BatchService
+  BatchService = services.BatchService;
   
   // Initialize sync implementation with services
   syncImplementation = new SyncImplementation({
@@ -30,7 +30,7 @@ function initializeServices(services) {
     WarehouseService,
     UserService,
     SupplierService,
-    BatchService // Added BatchService
+    BatchService
   });
   
   console.log('API adapter initialized with service instances and sync implementation');
@@ -303,6 +303,9 @@ router.post('/sync', async (req, res) => {
     // Determine if this is a full sync
     const fullSync = req.query.full === 'true';
     
+    // Check for days parameter
+    const days = req.query.days ? parseInt(req.query.days, 10) : null;
+    
     // Start sync processes in background with actual sync implementation
     if (fullSync) {
       // Full sync for all entities
@@ -315,7 +318,7 @@ router.post('/sync', async (req, res) => {
         syncImplementation.syncWarehouses(true),
         syncImplementation.syncUsers(true),
         syncImplementation.syncSuppliers(true),
-        syncImplementation.syncBatches(true) // Added batches sync
+        syncImplementation.syncBatches(true, days)
       ]).catch(error => {
         console.error('Error in full sync:', error.message);
       });
@@ -330,7 +333,7 @@ router.post('/sync', async (req, res) => {
         syncImplementation.syncWarehouses(false),
         syncImplementation.syncUsers(false),
         syncImplementation.syncSuppliers(false),
-        syncImplementation.syncBatches(false) // Added batches sync
+        syncImplementation.syncBatches(false, days)
       ]).catch(error => {
         console.error('Error in incremental sync:', error.message);
       });
@@ -339,7 +342,7 @@ router.post('/sync', async (req, res) => {
     // Return success immediately since sync is running in background
     res.json({
       success: true,
-      message: `${fullSync ? 'Full' : 'Incremental'} sync started for all entities`,
+      message: `${fullSync ? 'Full' : 'Incremental'} sync started for all entities${days ? ` (last ${days} days)` : ''}`,
       background: true
     });
   } catch (error) {
@@ -360,6 +363,13 @@ router.post('/sync/:entity', async (req, res) => {
     // Determine if this is a full sync
     const fullSync = req.query.full === 'true';
     
+    // Check for days parameter
+    const days = req.query.days ? parseInt(req.query.days, 10) : null;
+    
+    if (days) {
+      console.log(`Sync limited to last ${days} days`);
+    }
+    
     // Start sync process in background based on entity type
     let syncPromise;
     
@@ -379,8 +389,8 @@ router.post('/sync/:entity', async (req, res) => {
       case 'suppliers':
         syncPromise = syncImplementation.syncSuppliers(fullSync);
         break;
-      case 'batches': // Added batches case
-        syncPromise = syncImplementation.syncBatches(fullSync);
+      case 'batches':
+        syncPromise = syncImplementation.syncBatches(fullSync, days);
         break;
       default:
         return res.status(400).json({ 
@@ -397,7 +407,7 @@ router.post('/sync/:entity', async (req, res) => {
     // Return success immediately since sync is running in background
     res.json({
       success: true,
-      message: `${fullSync ? 'Full' : 'Incremental'} sync started for ${entity}`,
+      message: `${fullSync ? 'Full' : 'Incremental'} sync started for ${entity}${days ? ` (last ${days} days)` : ''}`,
       background: true
     });
   } catch (error) {
@@ -480,7 +490,7 @@ router.get('/test', async (req, res) => {
     // Check if services are initialized
     const servicesInitialized = ProductService && PicklistService && 
                                WarehouseService && UserService && 
-                               SupplierService && BatchService; // Added BatchService
+                               SupplierService && BatchService;
     
     // Check if sync implementation is initialized
     const syncImplementationInitialized = !!syncImplementation;
