@@ -2,6 +2,7 @@
  * Picqer Batch Service - Strictly following Picqer API documentation
  * Handles synchronization of picklist batches between Picqer and SQL database
  * All non-Picqer API fields removed for strict compliance
+ * SIMPLIFIED VERSION: Assumes batch_number column has already been removed
  */
 const axios = require('axios');
 const sql = require('mssql');
@@ -133,7 +134,7 @@ class SimpleBatchService {
       }
       
       // Create SyncProgress table if it doesn't exist
-      // Removed batch_number field for strict Picqer API compliance
+      // Simplified version - no batch_number column
       await pool.request().query(`
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress')
         BEGIN
@@ -149,20 +150,6 @@ class SimpleBatchService {
             last_updated DATETIME,
             completed_at DATETIME
           );
-        END
-        ELSE
-        BEGIN
-          -- Check if batch_number column exists and remove it
-          IF EXISTS (
-            SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = 'SyncProgress' 
-            AND COLUMN_NAME = 'batch_number'
-          )
-          BEGIN
-            -- Drop the batch_number column
-            ALTER TABLE SyncProgress DROP COLUMN batch_number;
-            PRINT 'Removed batch_number column from SyncProgress table';
-          END
         END
       `);
       console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
