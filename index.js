@@ -1,5 +1,5 @@
 /**
- * Final Index.js with Integrated Data Sync Implementation
+ * Updated index.js with BatchService integration
  * 
  * This file integrates the actual data sync implementation with the API adapter,
  * ensuring that when sync buttons are clicked in the dashboard, real data is
@@ -19,6 +19,7 @@ const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
+const BatchService = require('./batch_service'); // Added BatchService import
 
 // Import API adapter with actual data sync implementation
 const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
@@ -54,6 +55,7 @@ const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
 const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
 const userService = new UserService(apiKey, baseUrl, dbConfig);
 const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
+const batchService = new BatchService(apiKey, baseUrl, dbConfig); // Initialize BatchService
 
 // Initialize API adapter with service instances
 initializeServices({
@@ -61,7 +63,8 @@ initializeServices({
   PicklistService: picklistService,
   WarehouseService: warehouseService,
   UserService: userService,
-  SupplierService: supplierService
+  SupplierService: supplierService,
+  BatchService: batchService // Add BatchService to services
 });
 
 // API routes
@@ -94,6 +97,9 @@ async function initializeDatabase() {
     
     // Initialize suppliers schema
     await supplierService.initializeSuppliersDatabase();
+    
+    // Initialize batches schema
+    await batchService.initializeBatchesDatabase();
     
     console.log('Database initialized successfully');
   } catch (error) {
