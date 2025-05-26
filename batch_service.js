@@ -1,13 +1,11 @@
 /**
- * Enhanced Batch service for Picqer middleware with debug logging
+ * Enhanced Batch service for Picqer middleware with days parameter support
  * Handles synchronization of picklist batches between Picqer and SQL database
  * Based on the Picqer API documentation: https://picqer.com/en/api/picklists/batches
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const fs = require('fs');
-const path = require('path');
 const batchesSchema = require('./batches_schema');
 const syncProgressSchema = require('./sync_progress_schema');
 
@@ -17,10 +15,6 @@ class BatchService {
     this.baseUrl = baseUrl;
     this.sqlConfig = sqlConfig;
     this.batchSize = 100; // Use larger batch size for better performance
-    this.debugLogPath = path.join(__dirname, 'batch_debug.log');
-    
-    // Initialize debug log
-    fs.writeFileSync(this.debugLogPath, `Batch Service Debug Log - ${new Date().toISOString()}\n\n`, 'utf8');
     
     // Create Base64 encoded credentials (apiKey + ":")
     const credentials = `${this.apiKey}:`;
@@ -38,58 +32,28 @@ class BatchService {
     
     // Add request interceptor for debugging
     this.client.interceptors.request.use(request => {
-      this.logDebug('Making request to: ' + request.baseURL + request.url);
+      console.log('Making request to:', request.baseURL + request.url);
       return request;
     });
     
     // Add response interceptor for debugging
     this.client.interceptors.response.use(
       response => {
-        this.logDebug('Response status: ' + response.status);
+        console.log('Response status:', response.status);
         return response;
       },
       error => {
-        this.logDebug('Request failed:');
+        console.error('Request failed:');
         if (error.response) {
-          this.logDebug('Response status: ' + error.response.status);
+          console.error('Response status:', error.response.status);
         } else if (error.request) {
-          this.logDebug('No response received');
+          console.error('No response received');
         } else {
-          this.logDebug('Error message: ' + error.message);
+          console.error('Error message:', error.message);
         }
         return Promise.reject(error);
       }
     );
-  }
-
-  /**
-   * Log debug information to console and file
-   * @param {string} message - Debug message
-   * @param {Object} data - Optional data to log
-   */
-  logDebug(message, data = null) {
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] ${message}`;
-    
-    console.log(logMessage);
-    
-    // Append to debug log file
-    try {
-      let logContent = logMessage + '\n';
-      
-      if (data) {
-        // Format data for better readability
-        const dataString = typeof data === 'object' 
-          ? JSON.stringify(data, null, 2) 
-          : String(data);
-        
-        logContent += dataString + '\n\n';
-      }
-      
-      fs.appendFileSync(this.debugLogPath, logContent, 'utf8');
-    } catch (error) {
-      console.error('Error writing to debug log:', error.message);
-    }
   }
 
   /**
@@ -98,7 +62,7 @@ class BatchService {
    */
   async initializeBatchesDatabase() {
     try {
-      this.logDebug('Initializing database with batches schema...');
+      console.log('Initializing database with batches schema...');
       const pool = await sql.connect(this.sqlConfig);
       
       // Create Batches table
@@ -112,7 +76,7 @@ class BatchService {
       
       // Create SyncProgress table for resumable sync if it doesn't exist
       await pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
-      this.logDebug('✅ Created/verified SyncProgress table for resumable sync functionality');
+      console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
       
       // Check if SyncStatus table exists
       const tableResult = await pool.request().query(`
@@ -150,26 +114,26 @@ class BatchService {
               SET entity_name = 'batches' 
               WHERE entity_type = 'batches'
             `);
-            this.logDebug('Updated existing batches entity in SyncStatus');
+            console.log('Updated existing batches entity in SyncStatus');
           } else {
             // Insert new record
             await pool.request().query(`
               INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
               VALUES ('batches', 'batches', '2025-01-01T00:00:00.000Z')
             `);
-            this.logDebug('Added batches record to SyncStatus table');
+            console.log('Added batches record to SyncStatus table');
           }
         } else {
-          this.logDebug('entity_type column does not exist in SyncStatus table', 'warning');
+          console.warn('entity_type column does not exist in SyncStatus table');
         }
       } else {
-        this.logDebug('SyncStatus table does not exist', 'warning');
+        console.warn('SyncStatus table does not exist');
       }
       
-      this.logDebug('✅ Batches database schema initialized successfully');
+      console.log('✅ Batches database schema initialized successfully');
       return true;
     } catch (error) {
-      this.logDebug('❌ Error initializing batches database schema: ' + error.message);
+      console.error('❌ Error initializing batches database schema:', error.message);
       throw error;
     }
   }
@@ -194,7 +158,7 @@ class BatchService {
         `);
       
       if (inProgressResult.recordset.length > 0) {
-        this.logDebug(`Found in-progress sync for ${entityType}, will resume from last position`);
+        console.log(`Found in-progress sync for ${entityType}, will resume from last position`);
         return inProgressResult.recordset[0];
       }
       
@@ -220,10 +184,10 @@ class BatchService {
           SELECT * FROM SyncProgress WHERE entity_type = @entityType AND sync_id = @syncId
         `);
       
-      this.logDebug(`Created new sync progress record for ${entityType} with ID ${syncId}`);
+      console.log(`Created new sync progress record for ${entityType} with ID ${syncId}`);
       return result.recordset[0];
     } catch (error) {
-      this.logDebug('Error creating or getting sync progress: ' + error.message);
+      console.error('Error creating or getting sync progress:', error.message);
       // Return a default progress object if database operation fails
       return {
         entity_type: entityType,
@@ -310,7 +274,7 @@ class BatchService {
       
       return false;
     } catch (error) {
-      this.logDebug('Error updating sync progress: ' + error.message);
+      console.error('Error updating sync progress:', error.message);
       return false;
     }
   }
@@ -328,7 +292,7 @@ class BatchService {
         completed_at: new Date().toISOString()
       });
     } catch (error) {
-      this.logDebug('Error completing sync progress: ' + error.message);
+      console.error('Error completing sync progress:', error.message);
       return false;
     }
   }
@@ -350,14 +314,14 @@ class BatchService {
       let updatedSinceParam = null;
       if (updatedSince) {
         updatedSinceParam = updatedSince.toISOString().replace('T', ' ').substring(0, 19);
-        this.logDebug(`Fetching batches updated since: ${updatedSinceParam}`);
+        console.log(`Fetching batches updated since: ${updatedSinceParam}`);
       } else {
-        this.logDebug('Fetching all batches from Picqer...');
+        console.log('Fetching all batches from Picqer...');
       }
       
       // Continue fetching until we have all batches
       while (hasMoreBatches) {
-        this.logDebug(`Fetching batches with offset ${offset}...`);
+        console.log(`Fetching batches with offset ${offset}...`);
         
         // Update sync progress if provided
         if (syncProgress) {
@@ -379,11 +343,6 @@ class BatchService {
         
         const response = await this.client.get('/picklists/batches', { params });
         
-        // Log the first batch for debugging
-        if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-          this.logDebug('Sample batch data from API:', response.data[0]);
-        }
-        
         if (response.data && Array.isArray(response.data) && response.data.length > 0) {
           // Filter out duplicates by idpicklist_batch
           const existingIds = new Set(allBatches.map(b => b.idpicklist_batch));
@@ -392,7 +351,7 @@ class BatchService {
           });
           
           allBatches = [...allBatches, ...newBatches];
-          this.logDebug(`Retrieved ${newBatches.length} new batches (total unique: ${allBatches.length})`);
+          console.log(`Retrieved ${newBatches.length} new batches (total unique: ${allBatches.length})`);
           
           // Check if we have more batches
           hasMoreBatches = response.data.length === limit;
@@ -407,7 +366,7 @@ class BatchService {
         }
       }
       
-      this.logDebug(`✅ Retrieved ${allBatches.length} unique batches from Picqer`);
+      console.log(`✅ Retrieved ${allBatches.length} unique batches from Picqer`);
       
       // Update sync progress with total items if provided
       if (syncProgress) {
@@ -418,11 +377,11 @@ class BatchService {
       
       return allBatches;
     } catch (error) {
-      this.logDebug('Error fetching batches from Picqer: ' + error.message);
+      console.error('Error fetching batches from Picqer:', error.message);
       
       // Handle rate limiting (429 Too Many Requests)
       if (error.response && error.response.status === 429) {
-        this.logDebug('Rate limit hit, waiting before retrying...');
+        console.log('Rate limit hit, waiting before retrying...');
         
         // Wait for 20 seconds before retrying
         await new Promise(resolve => setTimeout(resolve, 20000));
@@ -442,30 +401,22 @@ class BatchService {
    */
   async getBatchDetails(idpicklist_batch) {
     try {
-      this.logDebug(`Fetching details for batch ${idpicklist_batch}...`);
+      console.log(`Fetching details for batch ${idpicklist_batch}...`);
       
       const response = await this.client.get(`/picklists/batches/${idpicklist_batch}`);
       
       if (response.data) {
-        this.logDebug(`Retrieved details for batch ${idpicklist_batch}`);
-        
-        // Log the full batch details for debugging
-        this.logDebug(`Batch ${idpicklist_batch} details:`, response.data);
-        
-        // Specifically log the picklist_batchid field
-        this.logDebug(`Batch ${idpicklist_batch} picklist_batchid: ${response.data.picklist_batchid}`);
-        this.logDebug(`Batch ${idpicklist_batch} picklist_batchid type: ${typeof response.data.picklist_batchid}`);
-        
+        console.log(`Retrieved details for batch ${idpicklist_batch}`);
         return response.data;
       }
       
       return null;
     } catch (error) {
-      this.logDebug(`Error fetching details for batch ${idpicklist_batch}: ${error.message}`);
+      console.error(`Error fetching details for batch ${idpicklist_batch}:`, error.message);
       
       // Handle rate limiting (429 Too Many Requests)
       if (error.response && error.response.status === 429) {
-        this.logDebug('Rate limit hit, waiting before retrying...');
+        console.log('Rate limit hit, waiting before retrying...');
         
         // Wait for 20 seconds before retrying
         await new Promise(resolve => setTimeout(resolve, 20000));
@@ -491,10 +442,29 @@ class BatchService {
       // This ensures we don't miss any updates due to timezone differences
       const thirtyDaysAgo = new Date(date.getTime() - (30 * 24 * 60 * 60 * 1000));
       
-      this.logDebug(`Using 30-day rolling window for incremental sync: ${thirtyDaysAgo.toISOString()}`);
+      console.log(`Using 30-day rolling window for incremental sync: ${thirtyDaysAgo.toISOString()}`);
       return this.getAllBatches(thirtyDaysAgo);
     } catch (error) {
-      this.logDebug('Error getting batches updated since date: ' + error.message);
+      console.error('Error getting batches updated since date:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get batches updated in the last N days
+   * @param {number} days - Number of days to look back
+   * @returns {Promise<Array>} - Array of updated batches
+   */
+  async getBatchesFromLastDays(days) {
+    try {
+      // Calculate date N days ago
+      const daysAgo = new Date();
+      daysAgo.setDate(daysAgo.getDate() - days);
+      
+      console.log(`Fetching batches from the last ${days} days (since ${daysAgo.toISOString()})`);
+      return this.getAllBatches(daysAgo);
+    } catch (error) {
+      console.error(`Error getting batches from last ${days} days:`, error.message);
       throw error;
     }
   }
@@ -507,7 +477,7 @@ class BatchService {
    */
   async saveBatchesToDatabase(batches, syncProgress = null) {
     try {
-      this.logDebug(`Saving ${batches.length} batches to database...`);
+      console.log(`Saving ${batches.length} batches to database...`);
       const pool = await sql.connect(this.sqlConfig);
       let savedCount = 0;
       
@@ -515,7 +485,7 @@ class BatchService {
       const chunkSize = 10;
       for (let i = 0; i < batches.length; i += chunkSize) {
         const chunk = batches.slice(i, i + chunkSize);
-        this.logDebug(`Processing batch chunk ${i / chunkSize + 1} of ${Math.ceil(batches.length / chunkSize)}...`);
+        console.log(`Processing batch chunk ${i / chunkSize + 1} of ${Math.ceil(batches.length / chunkSize)}...`);
         
         // Update sync progress if provided
         if (syncProgress) {
@@ -533,7 +503,7 @@ class BatchService {
             const batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
             
             if (!batchDetails) {
-              this.logDebug(`Skipping batch ${batch.idpicklist_batch} due to missing details`);
+              console.warn(`Skipping batch ${batch.idpicklist_batch} due to missing details`);
               continue;
             }
             
@@ -558,22 +528,19 @@ class BatchService {
               // Check if picklist_batchid exists in the API response
               let picklist_batchid = '';
               
-              // Log the presence of picklist_batchid in the response
+              // Check for different field name variations
               if ('picklist_batchid' in batchDetails) {
-                this.logDebug(`Batch ${batchDetails.idpicklist_batch} has picklist_batchid field: ${batchDetails.picklist_batchid}`);
                 picklist_batchid = String(batchDetails.picklist_batchid || '');
               } else if ('picklistbatchid' in batchDetails) {
                 // Check for camelCase variant
-                this.logDebug(`Batch ${batchDetails.idpicklist_batch} has picklistbatchid field: ${batchDetails.picklistbatchid}`);
                 picklist_batchid = String(batchDetails.picklistbatchid || '');
+              } else if ('picklist_batch_id' in batchDetails) {
+                // Check for alternative naming
+                picklist_batchid = String(batchDetails.picklist_batch_id || '');
               } else {
                 // If neither exists, use a fallback based on the ID
-                this.logDebug(`Batch ${batchDetails.idpicklist_batch} missing picklist_batchid field, using fallback`);
                 picklist_batchid = `BATCH-${batchDetails.idpicklist_batch}`;
               }
-              
-              // Log the final value we'll use
-              this.logDebug(`Using picklist_batchid value: "${picklist_batchid}" for batch ${batchDetails.idpicklist_batch}`);
               
               // Insert or update batch
               const batchRequest = new sql.Request(transaction);
@@ -736,14 +703,14 @@ class BatchService {
               // Commit transaction
               await transaction.commit();
               savedCount++;
-              this.logDebug(`✅ Saved batch ${batchDetails.idpicklist_batch} to database`);
+              console.log(`✅ Saved batch ${batchDetails.idpicklist_batch} to database`);
             } catch (error) {
               // Rollback transaction on error
               await transaction.rollback();
-              this.logDebug(`Error saving batch ${batch.idpicklist_batch} to database: ${error.message}`);
+              console.error(`Error saving batch ${batch.idpicklist_batch} to database:`, error.message);
             }
           } catch (error) {
-            this.logDebug(`Error processing batch ${batch.idpicklist_batch}: ${error.message}`);
+            console.error(`Error processing batch ${batch.idpicklist_batch}:`, error.message);
           }
           
           // Add a small delay between batches to avoid overwhelming the database
@@ -758,7 +725,7 @@ class BatchService {
         }
       }
       
-      this.logDebug(`✅ Saved ${savedCount} out of ${batches.length} batches to database`);
+      console.log(`✅ Saved ${savedCount} out of ${batches.length} batches to database`);
       
       // Update SyncStatus table with last sync date
       await pool.request()
@@ -771,7 +738,7 @@ class BatchService {
       
       return savedCount;
     } catch (error) {
-      this.logDebug('Error saving batches to database: ' + error.message);
+      console.error('Error saving batches to database:', error.message);
       throw error;
     }
   }
@@ -786,7 +753,7 @@ class BatchService {
       const result = await pool.request().query('SELECT COUNT(*) as count FROM Batches');
       return result.recordset[0].count;
     } catch (error) {
-      this.logDebug('Error getting batch count from database: ' + error.message);
+      console.error('Error getting batch count from database:', error.message);
       return 0;
     }
   }
@@ -810,7 +777,7 @@ class BatchService {
       
       return null;
     } catch (error) {
-      this.logDebug('Error getting last sync date for batches: ' + error.message);
+      console.error('Error getting last sync date for batches:', error.message);
       return null;
     }
   }
@@ -818,18 +785,27 @@ class BatchService {
   /**
    * Sync batches from Picqer to database
    * @param {boolean} fullSync - Whether to perform a full sync
+   * @param {number|null} days - Optional number of days to limit sync to
    * @returns {Promise<Object>} - Sync results
    */
-  async syncBatches(fullSync = false) {
+  async syncBatches(fullSync = false, days = null) {
     try {
-      this.logDebug(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
+      // If days parameter is provided, log it
+      if (days !== null) {
+        console.log(`Starting batch sync for the last ${days} days...`);
+      } else {
+        console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
+      }
       
       // Create or get sync progress record
       const syncProgress = await this.createOrGetSyncProgress('batches', fullSync);
       
       let batches = [];
       
-      if (fullSync) {
+      // If days parameter is provided, use it regardless of fullSync setting
+      if (days !== null) {
+        batches = await this.getBatchesFromLastDays(days);
+      } else if (fullSync) {
         // Full sync: Get all batches
         batches = await this.getAllBatches(null, syncProgress);
       } else {
@@ -837,15 +813,15 @@ class BatchService {
         const lastSyncDate = await this.getLastSyncDate();
         
         if (lastSyncDate) {
-          this.logDebug(`Last sync date: ${lastSyncDate.toISOString()}`);
+          console.log(`Last sync date: ${lastSyncDate.toISOString()}`);
           batches = await this.getBatchesUpdatedSince(lastSyncDate, syncProgress);
         } else {
-          this.logDebug('No last sync date found, performing full sync');
+          console.log('No last sync date found, performing full sync');
           batches = await this.getAllBatches(null, syncProgress);
         }
       }
       
-      this.logDebug(`Retrieved ${batches.length} batches from Picqer`);
+      console.log(`Retrieved ${batches.length} batches from Picqer`);
       
       // Save batches to database
       const savedCount = await this.saveBatchesToDatabase(batches, syncProgress);
@@ -853,7 +829,7 @@ class BatchService {
       // Complete sync progress
       await this.completeSyncProgress(syncProgress, true);
       
-      this.logDebug(`✅ Batch sync completed: ${savedCount} batches saved`);
+      console.log(`✅ Batch sync completed: ${savedCount} batches saved`);
       
       return {
         success: true,
@@ -861,7 +837,7 @@ class BatchService {
         savedBatches: savedCount
       };
     } catch (error) {
-      this.logDebug('❌ Error in batch sync: ' + error.message);
+      console.error('❌ Error in batch sync:', error.message);
       
       // Update sync progress with failure status
       if (syncProgress) {
@@ -883,7 +859,7 @@ class BatchService {
    */
   async updateSyncStatus(entityType, count) {
     try {
-      this.logDebug(`Updating sync status for ${entityType}...`);
+      console.log(`Updating sync status for ${entityType}...`);
       
       const pool = await sql.connect(this.sqlConfig);
       const now = new Date().toISOString();
@@ -919,10 +895,10 @@ class BatchService {
           `);
       }
       
-      this.logDebug(`✅ Updated sync status for ${entityType}`);
+      console.log(`✅ Updated sync status for ${entityType}`);
       return true;
     } catch (error) {
-      this.logDebug(`Error updating sync status for ${entityType}: ${error.message}`);
+      console.error(`Error updating sync status for ${entityType}:`, error.message);
       return false;
     }
   }
