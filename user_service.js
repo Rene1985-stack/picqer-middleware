@@ -140,6 +140,45 @@ class UserService {
   }
 
   /**
+   * Get user count from database
+   * @returns {Promise<number>} - Number of users in database
+   */
+  async getUserCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Users');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting user count from database:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for users
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'users'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error getting last sync date for users:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Create or get sync progress record
    * @param {string} entityType - Entity type (e.g., 'users')
    * @param {boolean} isFullSync - Whether this is a full sync
@@ -452,482 +491,260 @@ class UserService {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
     // Use the more recent date between the provided date and 30 days ago
-    const effectiveDate = date > thirtyDaysAgo ? date : thirtyDaysAgo;
+    const effectiveDate = date && date > thirtyDaysAgo ? date : thirtyDaysAgo;
     
-    console.log(`Using 30-day rolling window for incremental sync. Effective date: ${effectiveDate.toISOString()}`);
+    console.log(`Getting users updated since ${effectiveDate.toISOString()}`);
     return this.getAllUsers(effectiveDate);
   }
 
   /**
-   * Get the last sync date for users
-   * @returns {Promise<Date|null>} - Last sync date or null if not found
+   * Save users to database
+   * @param {Array} users - Array of users to save
+   * @param {Object|null} syncProgress - Sync progress record for tracking
+   * @returns {Promise<Object>} - Results of save operation
    */
-  async getLastUsersSyncDate() {
+  async saveUsersToDB(users, syncProgress = null) {
     try {
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
-      
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
-      
-      if (syncTableExists) {
-        // Check if entity_type column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-        `);
-        
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityTypeColumnExists) {
-          // Get last sync date by entity_type
-          const result = await pool.request().query(`
-            SELECT last_sync_date 
-            FROM SyncStatus 
-            WHERE entity_type = 'users'
-          `);
-          
-          if (result.recordset.length > 0) {
-            return new Date(result.recordset[0].last_sync_date);
-          }
-        }
+      if (!users || users.length === 0) {
+        console.log('No users to save');
+        return { savedUsers: 0, savedRights: 0 };
       }
       
-      // Default to January 1, 2025 if no sync date found
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.log(`Saving ${users.length} users to database...`);
+      
+      const pool = await sql.connect(this.sqlConfig);
+      let savedUsers = 0;
+      let savedRights = 0;
+      let batchNumber = 0;
+      
+      // Process users in batches for better performance
+      for (let i = 0; i < users.length; i += this.batchSize) {
+        batchNumber++;
+        const batch = users.slice(i, i + this.batchSize);
+        console.log(`Processing batch ${batchNumber} with ${batch.length} users...`);
+        
+        // Update sync progress if provided
+        if (syncProgress) {
+          await this.updateSyncProgress(syncProgress, {
+            batch_number: batchNumber,
+            items_processed: i
+          });
+        }
+        
+        // Process each user in the batch
+        for (const user of batch) {
+          try {
+            // Get user details including rights
+            const userDetails = await this.getUserDetails(user.iduser);
+            
+            if (!userDetails) {
+              console.warn(`Could not get details for user ${user.iduser}, skipping`);
+              continue;
+            }
+            
+            // Save user to database
+            await this.saveUserToDB(userDetails);
+            savedUsers++;
+            
+            // Save user rights to database if available
+            if (userDetails.rights && Array.isArray(userDetails.rights)) {
+              await this.saveUserRightsToDB(userDetails.iduser, userDetails.rights);
+              savedRights += userDetails.rights.length;
+            }
+          } catch (userError) {
+            console.error(`Error saving user ${user.iduser}:`, userError.message);
+            // Continue with next user
+          }
+        }
+        
+        console.log(`Completed batch ${batchNumber}, saved ${savedUsers} users so far`);
+        
+        // Add a small delay between batches to avoid database overload
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // Update sync status
+      await this.updateSyncStatus(users.length);
+      
+      console.log(`✅ Saved ${savedUsers} users and ${savedRights} user rights to database`);
+      return { savedUsers, savedRights };
     } catch (error) {
-      console.error('Error getting last users sync date:', error.message);
-      // Default to January 1, 2025 if error occurs
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.error('Error saving users to database:', error.message);
+      throw error;
     }
   }
 
   /**
-   * Update the last sync date for users
-   * @param {Date} date - The new sync date
-   * @param {number} count - The number of users synced
+   * Save a single user to database
+   * @param {Object} user - User to save
    * @returns {Promise<boolean>} - Success status
    */
-  async updateLastUsersSyncDate(date = new Date(), count = 0) {
+  async saveUserToDB(user) {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
+      // Check if user already exists
+      const checkResult = await pool.request()
+        .input('iduser', sql.Int, user.iduser)
+        .query('SELECT id FROM Users WHERE iduser = @iduser');
       
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      const userExists = checkResult.recordset.length > 0;
       
-      if (syncTableExists) {
-        // Check if entity_type column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-        `);
-        
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityTypeColumnExists) {
-          // Check if users record exists
-          const recordResult = await pool.request().query(`
-            SELECT COUNT(*) AS recordExists 
-            FROM SyncStatus 
-            WHERE entity_type = 'users'
+      if (userExists) {
+        // Update existing user
+        await pool.request()
+          .input('iduser', sql.Int, user.iduser)
+          .input('name', sql.NVarChar, user.name || '')
+          .input('email', sql.NVarChar, user.email || '')
+          .input('active', sql.Bit, user.active ? 1 : 0)
+          .input('last_login_at', sql.DateTime, user.last_login_at ? new Date(user.last_login_at) : null)
+          .input('last_sync_date', sql.DateTime, new Date())
+          .query(`
+            UPDATE Users 
+            SET 
+              name = @name,
+              email = @email,
+              active = @active,
+              last_login_at = @last_login_at,
+              last_sync_date = @last_sync_date
+            WHERE iduser = @iduser
           `);
-          
-          const recordExists = recordResult.recordset[0].recordExists > 0;
-          
-          if (recordExists) {
-            // Update existing record
-            await pool.request()
-              .input('lastSyncDate', sql.DateTime, date)
-              .input('lastSyncCount', sql.Int, count)
-              .query(`
-                UPDATE SyncStatus 
-                SET last_sync_date = @lastSyncDate, 
-                    last_sync_count = @lastSyncCount,
-                    entity_name = 'users'
-                WHERE entity_type = 'users'
-              `);
-          } else {
-            // Insert new record
-            await pool.request()
-              .input('lastSyncDate', sql.DateTime, date)
-              .input('lastSyncCount', sql.Int, count)
-              .query(`
-                INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count)
-                VALUES ('users', 'users', @lastSyncDate, @lastSyncCount)
-              `);
-          }
-        }
+      } else {
+        // Insert new user
+        await pool.request()
+          .input('iduser', sql.Int, user.iduser)
+          .input('name', sql.NVarChar, user.name || '')
+          .input('email', sql.NVarChar, user.email || '')
+          .input('active', sql.Bit, user.active ? 1 : 0)
+          .input('last_login_at', sql.DateTime, user.last_login_at ? new Date(user.last_login_at) : null)
+          .input('last_sync_date', sql.DateTime, new Date())
+          .query(`
+            INSERT INTO Users (
+              iduser, name, email, active, last_login_at, last_sync_date
+            )
+            VALUES (
+              @iduser, @name, @email, @active, @last_login_at, @last_sync_date
+            )
+          `);
       }
       
       return true;
     } catch (error) {
-      console.error('Error updating last users sync date:', error.message);
+      console.error(`Error saving user ${user.iduser} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save user rights to database
+   * @param {number} iduser - User ID
+   * @param {Array} rights - Array of user rights
+   * @returns {Promise<boolean>} - Success status
+   */
+  async saveUserRightsToDB(iduser, rights) {
+    try {
+      if (!rights || rights.length === 0) {
+        return true;
+      }
+      
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Delete existing rights for this user
+      await pool.request()
+        .input('iduser', sql.Int, iduser)
+        .query('DELETE FROM UserRights WHERE iduser = @iduser');
+      
+      // Insert new rights
+      for (const right of rights) {
+        await pool.request()
+          .input('iduser', sql.Int, iduser)
+          .input('right_name', sql.NVarChar, right.name || '')
+          .input('right_value', sql.NVarChar, right.value || '')
+          .query(`
+            INSERT INTO UserRights (
+              iduser, right_name, right_value
+            )
+            VALUES (
+              @iduser, @right_name, @right_value
+            )
+          `);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error saving rights for user ${iduser} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Update sync status in SyncStatus table
+   * @param {number} syncCount - Number of items synced
+   * @returns {Promise<boolean>} - Success status
+   */
+  async updateSyncStatus(syncCount) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Update SyncStatus record for users
+      await pool.request()
+        .input('entityType', sql.NVarChar, 'users')
+        .input('lastSyncDate', sql.DateTime, new Date())
+        .input('lastSyncCount', sql.Int, syncCount)
+        .query(`
+          UPDATE SyncStatus 
+          SET 
+            last_sync_date = @lastSyncDate,
+            last_sync_count = @lastSyncCount
+          WHERE entity_type = @entityType
+        `);
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating sync status:', error.message);
       return false;
     }
   }
 
   /**
-   * Get the count of users in the database
-   * @returns {Promise<number>} - User count
+   * Sync users from Picqer to database
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Results of sync operation
    */
-  async getUserCountFromDatabase() {
+  async syncUsers(fullSync = false) {
     try {
-      const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Users');
-      return result.recordset[0].count;
-    } catch (error) {
-      console.error('Error getting user count:', error.message);
-      return 0;
-    }
-  }
-
-  /**
-   * Save users to database with optimized batch processing
-   * @param {Array} users - Array of users to save
-   * @param {Object|null} syncProgress - Sync progress record for resumable sync
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async saveUsersToDatabase(users, syncProgress = null) {
-    try {
-      console.log(`Saving ${users.length} users to database...`);
-      
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Calculate number of batches
-      const totalBatches = Math.ceil(users.length / this.batchSize);
-      console.log(`Processing users in ${totalBatches} batches of ${this.batchSize}`);
-      
-      // Update sync progress with total batches if provided
-      if (syncProgress) {
-        await this.updateSyncProgress(syncProgress, {
-          total_batches: totalBatches
-        });
-      }
-      
-      // Start from the batch number in sync progress if resuming
-      const startBatch = syncProgress ? syncProgress.batch_number : 0;
-      let savedCount = syncProgress ? syncProgress.items_processed : 0;
-      let errorCount = 0;
-      
-      // Process users in batches
-      for (let batchNum = startBatch; batchNum < totalBatches; batchNum++) {
-        console.log(`Processing batch ${batchNum + 1} of ${totalBatches}...`);
-        
-        // Update sync progress if provided
-        if (syncProgress) {
-          await this.updateSyncProgress(syncProgress, {
-            batch_number: batchNum
-          });
-        }
-        
-        const batchStart = batchNum * this.batchSize;
-        const batchEnd = Math.min(batchStart + this.batchSize, users.length);
-        const batch = users.slice(batchStart, batchEnd);
-        
-        // Process each user in the batch
-        const transaction = new sql.Transaction(pool);
-        
-        try {
-          await transaction.begin();
-          
-          for (const user of batch) {
-            try {
-              // Check if user already exists
-              const checkResult = await new sql.Request(transaction)
-                .input('iduser', sql.Int, user.iduser)
-                .query('SELECT id FROM Users WHERE iduser = @iduser');
-              
-              const userExists = checkResult.recordset.length > 0;
-              
-              // Prepare request for insert/update
-              const request = new sql.Request(transaction);
-              
-              // Add standard fields
-              request.input('iduser', sql.Int, user.iduser);
-              request.input('idpacking_station', sql.Int, user.idpacking_station || null);
-              request.input('username', sql.NVarChar, user.username || '');
-              request.input('firstname', sql.NVarChar, user.firstname || null);
-              request.input('lastname', sql.NVarChar, user.lastname || null);
-              request.input('first_name', sql.NVarChar, user.first_name || null);
-              request.input('last_name', sql.NVarChar, user.last_name || null);
-              request.input('emailaddress', sql.NVarChar, user.emailaddress || null);
-              request.input('language', sql.NVarChar, user.language || null);
-              request.input('admin', sql.Bit, user.admin ? 1 : 0);
-              request.input('active', sql.Bit, user.active ? 1 : 0);
-              request.input('last_login_at', sql.DateTime, user.last_login_at ? new Date(user.last_login_at) : null);
-              request.input('created_at', sql.DateTime, user.created_at ? new Date(user.created_at) : null);
-              request.input('updated_at', sql.DateTime, user.updated_at ? new Date(user.updated_at) : null);
-              request.input('lastSyncDate', sql.DateTime, new Date());
-              
-              if (userExists) {
-                // Update existing user
-                await request.query(`
-                  UPDATE Users 
-                  SET idpacking_station = @idpacking_station,
-                      username = @username,
-                      firstname = @firstname,
-                      lastname = @lastname,
-                      first_name = @first_name,
-                      last_name = @last_name,
-                      emailaddress = @emailaddress,
-                      language = @language,
-                      admin = @admin,
-                      active = @active,
-                      last_login_at = @last_login_at,
-                      created_at = @created_at,
-                      updated_at = @updated_at,
-                      last_sync_date = @lastSyncDate
-                  WHERE iduser = @iduser
-                `);
-              } else {
-                // Insert new user
-                await request.query(`
-                  INSERT INTO Users (
-                    iduser, idpacking_station, username, firstname, lastname,
-                    first_name, last_name, emailaddress, language, admin,
-                    active, last_login_at, created_at, updated_at, last_sync_date
-                  )
-                  VALUES (
-                    @iduser, @idpacking_station, @username, @firstname, @lastname,
-                    @first_name, @last_name, @emailaddress, @language, @admin,
-                    @active, @last_login_at, @created_at, @updated_at, @lastSyncDate
-                  )
-                `);
-              }
-              
-              // Fetch and save user rights if available
-              if (!user.rights) {
-                // Get detailed user info including rights
-                const userDetails = await this.getUserDetails(user.iduser);
-                if (userDetails && userDetails.rights) {
-                  user.rights = userDetails.rights;
-                }
-              }
-              
-              if (user.rights && Array.isArray(user.rights)) {
-                // Delete existing rights for this user
-                await new sql.Request(transaction)
-                  .input('iduser', sql.Int, user.iduser)
-                  .query('DELETE FROM UserRights WHERE iduser = @iduser');
-                
-                // Insert new rights
-                for (const right of user.rights) {
-                  const rightRequest = new sql.Request(transaction);
-                  rightRequest.input('iduser', sql.Int, user.iduser);
-                  rightRequest.input('right_name', sql.NVarChar, right.right || '');
-                  rightRequest.input('granted', sql.Bit, right.granted ? 1 : 0);
-                  rightRequest.input('lastSyncDate', sql.DateTime, new Date());
-                  
-                  await rightRequest.query(`
-                    INSERT INTO UserRights (
-                      iduser, right_name, granted, last_sync_date
-                    )
-                    VALUES (
-                      @iduser, @right_name, @granted, @lastSyncDate
-                    )
-                  `);
-                }
-                
-                console.log(`Saved ${user.rights.length} rights for user ${user.iduser}`);
-              }
-              
-              savedCount++;
-            } catch (userError) {
-              console.error(`Error saving user ${user.iduser}:`, userError.message);
-              errorCount++;
-            }
-          }
-          
-          await transaction.commit();
-          
-          // Update sync progress if provided
-          if (syncProgress) {
-            await this.updateSyncProgress(syncProgress, {
-              items_processed: savedCount
-            });
-          }
-        } catch (batchError) {
-          console.error(`Error processing batch ${batchNum + 1}:`, batchError.message);
-          await transaction.rollback();
-          errorCount += batch.length;
-        }
-      }
-      
-      console.log(`✅ Saved ${savedCount} users to database (${errorCount} errors)`);
-      
-      // Complete sync progress if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, true);
-      }
-      
-      return {
-        success: true,
-        savedCount,
-        errorCount,
-        message: `Saved ${savedCount} users to database (${errorCount} errors)`
-      };
-    } catch (error) {
-      console.error('Error saving users to database:', error.message);
-      
-      // Complete sync progress with failure if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, false);
-      }
-      
-      return {
-        success: false,
-        savedCount: 0,
-        errorCount: users.length,
-        message: `Error saving users to database: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform a full sync of all users
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performFullUsersSync() {
-    try {
-      console.log('Starting full users sync...');
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} user sync...`);
       
       // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('users', true);
+      const syncProgress = await this.createOrGetSyncProgress('users', fullSync);
       
-      // Get all users from Picqer
-      const users = await this.getAllUsers(null, syncProgress);
-      console.log(`Retrieved ${users.length} users from Picqer`);
-      
-      // Save users to database
-      const result = await this.saveUsersToDatabase(users, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastUsersSyncDate(new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing full users sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing full users sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform an incremental sync of users updated since last sync
-   * Uses 30-day rolling window for better performance
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performIncrementalUsersSync() {
-    try {
-      console.log('Starting incremental users sync...');
-      
-      // Get last sync date
-      const lastSyncDate = await this.getLastUsersSyncDate();
-      console.log('Last users sync date:', lastSyncDate.toISOString());
-      
-      // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('users', false);
-      
-      // Get users updated since last sync (with 30-day rolling window)
-      const users = await this.getUsersUpdatedSince(lastSyncDate, syncProgress);
-      console.log(`Retrieved ${users.length} updated users from Picqer`);
-      
-      // Save users to database
-      const result = await this.saveUsersToDatabase(users, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastUsersSyncDate(new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing incremental users sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing incremental users sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Retry a failed users sync
-   * @param {string} syncId - The ID of the failed sync to retry
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async retryFailedUsersSync(syncId) {
-    try {
-      console.log(`Retrying failed users sync with ID: ${syncId}`);
-      
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Get the failed sync record
-      const syncResult = await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .query(`
-          SELECT * FROM SyncProgress 
-          WHERE sync_id = @syncId AND entity_type = 'users'
-        `);
-      
-      if (syncResult.recordset.length === 0) {
-        return {
-          success: false,
-          message: `No users sync record found with ID: ${syncId}`
-        };
+      let users;
+      if (fullSync) {
+        // Full sync: get all users
+        users = await this.getAllUsers(null, syncProgress);
+      } else {
+        // Incremental sync: get users updated since last sync
+        const lastSyncDate = await this.getLastSyncDate();
+        users = await this.getUsersUpdatedSince(lastSyncDate);
       }
       
-      const syncRecord = syncResult.recordset[0];
-      
-      // Reset sync status to in_progress
-      await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .input('now', sql.DateTime, new Date().toISOString())
-        .query(`
-          UPDATE SyncProgress 
-          SET status = 'in_progress', 
-              last_updated = @now,
-              completed_at = NULL
-          WHERE sync_id = @syncId
-        `);
-      
-      // Get last sync date
-      const lastSyncDate = await this.getLastUsersSyncDate();
-      
-      // Get users updated since last sync
-      const users = await this.getAllUsers(lastSyncDate, syncRecord);
-      
       // Save users to database
-      const result = await this.saveUsersToDatabase(users, syncRecord);
+      const result = await this.saveUsersToDB(users, syncProgress);
       
-      // Update last sync date
-      await this.updateLastUsersSyncDate(new Date(), result.savedCount);
+      // Complete sync progress
+      await this.completeSyncProgress(syncProgress, true);
       
+      console.log(`✅ User sync completed: ${result.savedUsers} users saved`);
       return {
         success: true,
-        savedCount: result.savedCount,
-        message: `Successfully retried users sync: ${result.message}`
+        savedUsers: result.savedUsers,
+        savedRights: result.savedRights
       };
     } catch (error) {
-      console.error(`Error retrying users sync ${syncId}:`, error.message);
+      console.error('Error in user sync:', error.message);
       return {
         success: false,
-        savedCount: 0,
-        message: `Error retrying users sync: ${error.message}`
+        error: error.message
       };
     }
   }
