@@ -1,6 +1,7 @@
 /**
  * Picqer Batch Service - Strictly following Picqer API documentation
  * Handles synchronization of picklist batches between Picqer and SQL database
+ * All non-Picqer API fields removed for strict compliance
  */
 const axios = require('axios');
 const sql = require('mssql');
@@ -132,7 +133,7 @@ class SimpleBatchService {
       }
       
       // Create SyncProgress table if it doesn't exist
-      // Modified to make batch_number nullable to avoid errors
+      // Removed batch_number field for strict Picqer API compliance
       await pool.request().query(`
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress')
         BEGIN
@@ -141,10 +142,8 @@ class SimpleBatchService {
             entity_type NVARCHAR(100) NOT NULL,
             sync_id NVARCHAR(100) NOT NULL,
             current_offset INT DEFAULT 0,
-            batch_number INT NULL,
             items_processed INT DEFAULT 0,
             total_items INT,
-            total_batches INT,
             status NVARCHAR(50) DEFAULT 'in_progress',
             started_at DATETIME,
             last_updated DATETIME,
@@ -153,17 +152,16 @@ class SimpleBatchService {
         END
         ELSE
         BEGIN
-          -- Check if batch_number column exists and is not nullable
+          -- Check if batch_number column exists and remove it
           IF EXISTS (
             SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
             WHERE TABLE_NAME = 'SyncProgress' 
-            AND COLUMN_NAME = 'batch_number' 
-            AND IS_NULLABLE = 'NO'
+            AND COLUMN_NAME = 'batch_number'
           )
           BEGIN
-            -- Alter column to allow NULL values
-            ALTER TABLE SyncProgress ALTER COLUMN batch_number INT NULL;
-            PRINT 'Modified batch_number column to allow NULL values';
+            -- Drop the batch_number column
+            ALTER TABLE SyncProgress DROP COLUMN batch_number;
+            PRINT 'Removed batch_number column from SyncProgress table';
           END
         END
       `);
