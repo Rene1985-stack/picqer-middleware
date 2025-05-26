@@ -61,6 +61,45 @@ class WarehouseService {
   }
 
   /**
+   * Get warehouse count from database
+   * @returns {Promise<number>} - Number of warehouses in database
+   */
+  async getWarehouseCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Warehouses');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting warehouse count from database:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for warehouses
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'warehouses'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error getting last sync date for warehouses:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Initialize the database with warehouses schema and sync progress tracking
    * @returns {Promise<boolean>} - Success status
    */
@@ -444,478 +483,334 @@ class WarehouseService {
    * @returns {Promise<Array>} - Array of updated warehouses
    */
   async getWarehousesUpdatedSince(date) {
-    // For incremental syncs, use a 30-day rolling window
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    // Use the more recent date between the provided date and 30 days ago
-    const effectiveDate = date > thirtyDaysAgo ? date : thirtyDaysAgo;
-    
-    console.log(`Using 30-day rolling window for incremental sync. Effective date: ${effectiveDate.toISOString()}`);
-    return this.getAllWarehouses(effectiveDate);
-  }
-
-  /**
-   * Get the last sync date for warehouses
-   * @returns {Promise<Date|null>} - Last sync date or null if not found
-   */
-  async getLastWarehousesSyncDate() {
     try {
-      const pool = await sql.connect(this.sqlConfig);
+      // For incremental syncs, use a 30-day rolling window
+      // This ensures we don't miss any updates due to timezone differences
+      const thirtyDaysAgo = new Date(date.getTime() - (30 * 24 * 60 * 60 * 1000));
       
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
-      
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
-      
-      if (syncTableExists) {
-        // Check if entity_type column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-        `);
-        
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityTypeColumnExists) {
-          // Get last sync date by entity_type
-          const result = await pool.request().query(`
-            SELECT last_sync_date 
-            FROM SyncStatus 
-            WHERE entity_type = 'warehouses'
-          `);
-          
-          if (result.recordset.length > 0) {
-            return new Date(result.recordset[0].last_sync_date);
-          }
-        }
-      }
-      
-      // Default to January 1, 2025 if no sync date found
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.log(`Using 30-day rolling window for incremental sync: ${thirtyDaysAgo.toISOString()}`);
+      return this.getAllWarehouses(thirtyDaysAgo);
     } catch (error) {
-      console.error('Error getting last warehouses sync date:', error.message);
-      // Default to January 1, 2025 if error occurs
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.error('Error getting warehouses updated since date:', error.message);
+      throw error;
     }
   }
 
   /**
-   * Update the last sync date for warehouses
-   * @param {Date} date - The new sync date
-   * @param {number} count - The number of warehouses synced
+   * Save warehouse to database
+   * @param {Object} warehouse - Warehouse details from Picqer API
    * @returns {Promise<boolean>} - Success status
    */
-  async updateLastWarehousesSyncDate(date = new Date(), count = 0) {
+  async saveWarehouseToDB(warehouse) {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
+      // Check if warehouse already exists
+      const checkResult = await pool.request()
+        .input('idwarehouse', sql.Int, warehouse.idwarehouse)
+        .query('SELECT id FROM Warehouses WHERE idwarehouse = @idwarehouse');
       
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      const warehouseExists = checkResult.recordset.length > 0;
       
-      if (syncTableExists) {
-        // Check if entity_type column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
+      // Prepare request with all possible parameters
+      const request = new sql.Request(pool);
+      
+      // Add parameters with proper null handling
+      request.input('idwarehouse', sql.Int, warehouse.idwarehouse);
+      request.input('name', sql.NVarChar, warehouse.name || '');
+      request.input('code', sql.NVarChar, warehouse.code || '');
+      request.input('priority', sql.Int, warehouse.priority || null);
+      request.input('address', sql.NVarChar, warehouse.address || null);
+      request.input('address2', sql.NVarChar, warehouse.address2 || null);
+      request.input('zipcode', sql.NVarChar, warehouse.zipcode || null);
+      request.input('city', sql.NVarChar, warehouse.city || null);
+      request.input('region', sql.NVarChar, warehouse.region || null);
+      request.input('country', sql.NVarChar, warehouse.country || null);
+      request.input('telephone', sql.NVarChar, warehouse.telephone || null);
+      request.input('email', sql.NVarChar, warehouse.email || null);
+      request.input('last_sync_date', sql.DateTime, new Date());
+      
+      if (warehouseExists) {
+        // Update existing warehouse
+        await request.query(`
+          UPDATE Warehouses 
+          SET 
+            name = @name,
+            code = @code,
+            priority = @priority,
+            address = @address,
+            address2 = @address2,
+            zipcode = @zipcode,
+            city = @city,
+            region = @region,
+            country = @country,
+            telephone = @telephone,
+            email = @email,
+            last_sync_date = @last_sync_date
+          WHERE idwarehouse = @idwarehouse
         `);
-        
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityTypeColumnExists) {
-          // Check if warehouses record exists
-          const recordResult = await pool.request().query(`
-            SELECT COUNT(*) AS recordExists 
-            FROM SyncStatus 
-            WHERE entity_type = 'warehouses'
-          `);
-          
-          const recordExists = recordResult.recordset[0].recordExists > 0;
-          
-          if (recordExists) {
-            // Update existing record
-            await pool.request()
-              .input('lastSyncDate', sql.DateTime, date)
-              .input('lastSyncCount', sql.Int, count)
-              .query(`
-                UPDATE SyncStatus 
-                SET last_sync_date = @lastSyncDate, 
-                    last_sync_count = @lastSyncCount,
-                    entity_name = 'warehouses'
-                WHERE entity_type = 'warehouses'
-              `);
-          } else {
-            // Insert new record
-            await pool.request()
-              .input('lastSyncDate', sql.DateTime, date)
-              .input('lastSyncCount', sql.Int, count)
-              .query(`
-                INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count)
-                VALUES ('warehouses', 'warehouses', @lastSyncDate, @lastSyncCount)
-              `);
-          }
-        }
+      } else {
+        // Insert new warehouse
+        await request.query(`
+          INSERT INTO Warehouses (
+            idwarehouse, name, code, priority, address, address2,
+            zipcode, city, region, country, telephone, email, last_sync_date
+          )
+          VALUES (
+            @idwarehouse, @name, @code, @priority, @address, @address2,
+            @zipcode, @city, @region, @country, @telephone, @email, @last_sync_date
+          )
+        `);
       }
       
       return true;
     } catch (error) {
-      console.error('Error updating last warehouses sync date:', error.message);
+      console.error(`Error saving warehouse ${warehouse.idwarehouse} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save warehouse stock to database
+   * @param {number} idwarehouse - Warehouse ID
+   * @param {Array} stock - Array of warehouse stock items
+   * @returns {Promise<boolean>} - Success status
+   */
+  async saveWarehouseStockToDB(idwarehouse, stock) {
+    try {
+      if (!stock || stock.length === 0) {
+        return true;
+      }
+      
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Delete existing stock for this warehouse
+      await pool.request()
+        .input('idwarehouse', sql.Int, idwarehouse)
+        .query('DELETE FROM WarehouseStock WHERE idwarehouse = @idwarehouse');
+      
+      // Use table-valued parameter for bulk insert
+      // First, create a temporary table
+      await pool.request().query(`
+        CREATE TABLE #TempWarehouseStock (
+          idwarehouse INT NOT NULL,
+          idproduct INT NOT NULL,
+          productcode NVARCHAR(255) NULL,
+          name NVARCHAR(255) NULL,
+          stock INT NULL,
+          free_stock INT NULL,
+          reserved_stock INT NULL,
+          last_sync_date DATETIME NOT NULL
+        )
+      `);
+      
+      // Prepare batch insert
+      const batchSize = 1000;
+      let insertValues = [];
+      let insertCount = 0;
+      
+      for (const item of stock) {
+        // Skip invalid stock items
+        if (!item || !item.idproduct) {
+          console.warn('Invalid stock item, missing idproduct:', item);
+          continue;
+        }
+        
+        // Add to batch
+        insertValues.push(`(
+          ${idwarehouse},
+          ${item.idproduct},
+          N'${(item.productcode || '').replace(/'/g, "''")}',
+          N'${(item.name || '').replace(/'/g, "''")}',
+          ${item.stock || 0},
+          ${item.free_stock || 0},
+          ${item.reserved_stock || 0},
+          GETDATE()
+        )`);
+        
+        insertCount++;
+        
+        // Execute batch insert when batch size is reached
+        if (insertValues.length >= batchSize) {
+          await pool.request().query(`
+            INSERT INTO #TempWarehouseStock (
+              idwarehouse, idproduct, productcode, name,
+              stock, free_stock, reserved_stock, last_sync_date
+            )
+            VALUES ${insertValues.join(',')}
+          `);
+          
+          insertValues = [];
+        }
+      }
+      
+      // Insert any remaining items
+      if (insertValues.length > 0) {
+        await pool.request().query(`
+          INSERT INTO #TempWarehouseStock (
+            idwarehouse, idproduct, productcode, name,
+            stock, free_stock, reserved_stock, last_sync_date
+          )
+          VALUES ${insertValues.join(',')}
+        `);
+      }
+      
+      // Copy from temp table to actual table
+      await pool.request().query(`
+        INSERT INTO WarehouseStock (
+          idwarehouse, idproduct, productcode, name,
+          stock, free_stock, reserved_stock, last_sync_date
+        )
+        SELECT
+          idwarehouse, idproduct, productcode, name,
+          stock, free_stock, reserved_stock, last_sync_date
+        FROM #TempWarehouseStock
+      `);
+      
+      // Drop temp table
+      await pool.request().query('DROP TABLE #TempWarehouseStock');
+      
+      console.log(`Saved ${insertCount} stock items for warehouse ${idwarehouse}`);
+      return true;
+    } catch (error) {
+      console.error(`Error saving stock for warehouse ${idwarehouse} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Update sync status in SyncStatus table
+   * @param {number} syncCount - Number of items synced
+   * @returns {Promise<boolean>} - Success status
+   */
+  async updateSyncStatus(syncCount) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Get current total count
+      const countResult = await pool.request()
+        .query('SELECT COUNT(*) as count FROM Warehouses');
+      
+      const totalCount = countResult.recordset[0].count;
+      
+      // Update SyncStatus record for warehouses
+      await pool.request()
+        .input('entityType', sql.NVarChar, 'warehouses')
+        .input('lastSyncDate', sql.DateTime, new Date())
+        .input('lastSyncCount', sql.Int, syncCount)
+        .input('totalCount', sql.Int, totalCount)
+        .query(`
+          UPDATE SyncStatus 
+          SET 
+            last_sync_date = @lastSyncDate,
+            last_sync_count = @lastSyncCount,
+            total_count = @totalCount
+          WHERE entity_type = @entityType
+        `);
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating sync status:', error.message);
       return false;
     }
   }
 
   /**
-   * Get the count of warehouses in the database
-   * @returns {Promise<number>} - Warehouse count
+   * Sync warehouses from Picqer to database
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Results of sync operation
    */
-  async getWarehouseCountFromDatabase() {
+  async syncWarehouses(fullSync = false) {
     try {
-      const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Warehouses');
-      return result.recordset[0].count;
-    } catch (error) {
-      console.error('Error getting warehouse count:', error.message);
-      return 0;
-    }
-  }
-
-  /**
-   * Save warehouses to database with optimized batch processing
-   * @param {Array} warehouses - Array of warehouses to save
-   * @param {Object|null} syncProgress - Sync progress record for resumable sync
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async saveWarehousesToDatabase(warehouses, syncProgress = null) {
-    try {
-      console.log(`Saving ${warehouses.length} warehouses to database...`);
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} warehouse sync...`);
       
-      const pool = await sql.connect(this.sqlConfig);
+      // Create sync progress record
+      const syncProgress = await this.createOrGetSyncProgress('warehouses', fullSync);
       
-      // Calculate number of batches
-      const totalBatches = Math.ceil(warehouses.length / this.batchSize);
-      console.log(`Processing warehouses in ${totalBatches} batches of ${this.batchSize}`);
-      
-      // Update sync progress with total batches if provided
-      if (syncProgress) {
-        await this.updateSyncProgress(syncProgress, {
-          total_batches: totalBatches
-        });
+      let warehouses;
+      if (fullSync) {
+        // Full sync: get all warehouses
+        warehouses = await this.getAllWarehouses(null, syncProgress);
+      } else {
+        // Incremental sync: get warehouses updated since last sync
+        const lastSyncDate = await this.getLastSyncDate();
+        warehouses = await this.getWarehousesUpdatedSince(lastSyncDate);
       }
       
-      // Start from the batch number in sync progress if resuming
-      const startBatch = syncProgress ? syncProgress.batch_number : 0;
-      let savedCount = syncProgress ? syncProgress.items_processed : 0;
-      let errorCount = 0;
-      
-      // Process warehouses in batches
-      for (let batchNum = startBatch; batchNum < totalBatches; batchNum++) {
-        console.log(`Processing batch ${batchNum + 1} of ${totalBatches}...`);
+      if (!warehouses || warehouses.length === 0) {
+        console.log('No warehouses to sync');
         
-        // Update sync progress if provided
-        if (syncProgress) {
-          await this.updateSyncProgress(syncProgress, {
-            batch_number: batchNum
-          });
-        }
-        
-        const batchStart = batchNum * this.batchSize;
-        const batchEnd = Math.min(batchStart + this.batchSize, warehouses.length);
-        const batch = warehouses.slice(batchStart, batchEnd);
-        
-        // Process each warehouse in the batch
-        const transaction = new sql.Transaction(pool);
-        
-        try {
-          await transaction.begin();
-          
-          for (const warehouse of batch) {
-            try {
-              // Check if warehouse already exists
-              const checkResult = await new sql.Request(transaction)
-                .input('idwarehouse', sql.Int, warehouse.idwarehouse)
-                .query('SELECT id FROM Warehouses WHERE idwarehouse = @idwarehouse');
-              
-              const warehouseExists = checkResult.recordset.length > 0;
-              
-              // Prepare request for insert/update
-              const request = new sql.Request(transaction);
-              
-              // Add standard fields
-              request.input('idwarehouse', sql.Int, warehouse.idwarehouse);
-              request.input('name', sql.NVarChar, warehouse.name || '');
-              request.input('accept_orders', sql.Bit, warehouse.accept_orders ? 1 : 0);
-              request.input('counts_for_general_stock', sql.Bit, warehouse.counts_for_general_stock ? 1 : 0);
-              request.input('priority', sql.Int, warehouse.priority || 0);
-              request.input('active', sql.Bit, warehouse.active ? 1 : 0);
-              request.input('lastSyncDate', sql.DateTime, new Date());
-              
-              if (warehouseExists) {
-                // Update existing warehouse
-                await request.query(`
-                  UPDATE Warehouses 
-                  SET name = @name, 
-                      accept_orders = @accept_orders, 
-                      counts_for_general_stock = @counts_for_general_stock, 
-                      priority = @priority, 
-                      active = @active, 
-                      last_sync_date = @lastSyncDate 
-                  WHERE idwarehouse = @idwarehouse
-                `);
-              } else {
-                // Insert new warehouse
-                await request.query(`
-                  INSERT INTO Warehouses (
-                    idwarehouse, name, accept_orders, counts_for_general_stock, 
-                    priority, active, last_sync_date
-                  )
-                  VALUES (
-                    @idwarehouse, @name, @accept_orders, @counts_for_general_stock, 
-                    @priority, @active, @lastSyncDate
-                  )
-                `);
-              }
-              
-              // Fetch and save warehouse stock
-              try {
-                const stockItems = await this.getWarehouseStock(warehouse.idwarehouse);
-                
-                if (stockItems.length > 0) {
-                  // Delete existing stock for this warehouse
-                  await new sql.Request(transaction)
-                    .input('idwarehouse', sql.Int, warehouse.idwarehouse)
-                    .query('DELETE FROM WarehouseStock WHERE idwarehouse = @idwarehouse');
-                  
-                  // Insert new stock items
-                  for (const item of stockItems) {
-                    const stockRequest = new sql.Request(transaction);
-                    stockRequest.input('idwarehouse', sql.Int, warehouse.idwarehouse);
-                    stockRequest.input('idproduct', sql.Int, item.idproduct);
-                    stockRequest.input('productcode', sql.NVarChar, item.productcode || '');
-                    stockRequest.input('stock', sql.Int, item.stock?.stock || 0);
-                    stockRequest.input('reserved', sql.Int, item.stock?.reserved || 0);
-                    stockRequest.input('reservedbackorders', sql.Int, item.stock?.reservedbackorders || 0);
-                    stockRequest.input('reservedpicklists', sql.Int, item.stock?.reservedpicklists || 0);
-                    stockRequest.input('reservedallocations', sql.Int, item.stock?.reservedallocations || 0);
-                    stockRequest.input('freestock', sql.Int, item.stock?.freestock || 0);
-                    stockRequest.input('lastSyncDate', sql.DateTime, new Date());
-                    
-                    await stockRequest.query(`
-                      INSERT INTO WarehouseStock (
-                        idwarehouse, idproduct, productcode, stock, reserved, 
-                        reservedbackorders, reservedpicklists, reservedallocations, 
-                        freestock, last_sync_date
-                      )
-                      VALUES (
-                        @idwarehouse, @idproduct, @productcode, @stock, @reserved, 
-                        @reservedbackorders, @reservedpicklists, @reservedallocations, 
-                        @freestock, @lastSyncDate
-                      )
-                    `);
-                  }
-                  
-                  console.log(`Saved ${stockItems.length} stock items for warehouse ${warehouse.idwarehouse}`);
-                }
-              } catch (stockError) {
-                console.error(`Error saving stock for warehouse ${warehouse.idwarehouse}:`, stockError.message);
-                // Continue with other warehouses even if stock sync fails
-              }
-              
-              savedCount++;
-            } catch (warehouseError) {
-              console.error(`Error saving warehouse ${warehouse.idwarehouse}:`, warehouseError.message);
-              errorCount++;
-            }
-          }
-          
-          await transaction.commit();
-          
-          // Update sync progress if provided
-          if (syncProgress) {
-            await this.updateSyncProgress(syncProgress, {
-              items_processed: savedCount
-            });
-          }
-        } catch (batchError) {
-          console.error(`Error processing batch ${batchNum + 1}:`, batchError.message);
-          await transaction.rollback();
-          errorCount += batch.length;
-        }
-      }
-      
-      console.log(`✅ Saved ${savedCount} warehouses to database (${errorCount} errors)`);
-      
-      // Complete sync progress if provided
-      if (syncProgress) {
+        // Complete sync progress
         await this.completeSyncProgress(syncProgress, true);
-      }
-      
-      return {
-        success: true,
-        savedCount,
-        errorCount,
-        message: `Saved ${savedCount} warehouses to database (${errorCount} errors)`
-      };
-    } catch (error) {
-      console.error('Error saving warehouses to database:', error.message);
-      
-      // Complete sync progress with failure if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, false);
-      }
-      
-      return {
-        success: false,
-        savedCount: 0,
-        errorCount: warehouses.length,
-        message: `Error saving warehouses to database: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform a full sync of all warehouses
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performFullWarehousesSync() {
-    try {
-      console.log('Starting full warehouses sync...');
-      
-      // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('warehouses', true);
-      
-      // Get all warehouses from Picqer
-      const warehouses = await this.getAllWarehouses(null, syncProgress);
-      console.log(`Retrieved ${warehouses.length} warehouses from Picqer`);
-      
-      // Save warehouses to database
-      const result = await this.saveWarehousesToDatabase(warehouses, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastWarehousesSyncDate(new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing full warehouses sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing full warehouses sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform an incremental sync of warehouses updated since last sync
-   * Uses 30-day rolling window for better performance
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performIncrementalWarehousesSync() {
-    try {
-      console.log('Starting incremental warehouses sync...');
-      
-      // Get last sync date
-      const lastSyncDate = await this.getLastWarehousesSyncDate();
-      console.log('Last warehouses sync date:', lastSyncDate.toISOString());
-      
-      // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('warehouses', false);
-      
-      // Get warehouses updated since last sync (with 30-day rolling window)
-      const warehouses = await this.getWarehousesUpdatedSince(lastSyncDate, syncProgress);
-      console.log(`Retrieved ${warehouses.length} updated warehouses from Picqer`);
-      
-      // Save warehouses to database
-      const result = await this.saveWarehousesToDatabase(warehouses, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastWarehousesSyncDate(new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing incremental warehouses sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing incremental warehouses sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Retry a failed warehouses sync
-   * @param {string} syncId - The ID of the failed sync to retry
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async retryFailedWarehousesSync(syncId) {
-    try {
-      console.log(`Retrying failed warehouses sync with ID: ${syncId}`);
-      
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Get the failed sync record
-      const syncResult = await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .query(`
-          SELECT * FROM SyncProgress 
-          WHERE sync_id = @syncId AND entity_type = 'warehouses'
-        `);
-      
-      if (syncResult.recordset.length === 0) {
-        return {
-          success: false,
-          message: `No warehouses sync record found with ID: ${syncId}`
+        
+        return { 
+          success: true, 
+          savedWarehouses: 0, 
+          savedStockItems: 0 
         };
       }
       
-      const syncRecord = syncResult.recordset[0];
+      console.log(`Syncing ${warehouses.length} warehouses...`);
       
-      // Reset sync status to in_progress
-      await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .input('now', sql.DateTime, new Date().toISOString())
-        .query(`
-          UPDATE SyncProgress 
-          SET status = 'in_progress', 
-              last_updated = @now,
-              completed_at = NULL
-          WHERE sync_id = @syncId
-        `);
+      let savedWarehouses = 0;
+      let savedStockItems = 0;
+      let batchNumber = 0;
       
-      // Get last sync date
-      const lastSyncDate = await this.getLastWarehousesSyncDate();
+      // Process warehouses in batches for better performance
+      for (let i = 0; i < warehouses.length; i += this.batchSize) {
+        batchNumber++;
+        const warehouseGroup = warehouses.slice(i, i + this.batchSize);
+        console.log(`Processing warehouse group ${batchNumber} with ${warehouseGroup.length} warehouses...`);
+        
+        // Update sync progress
+        await this.updateSyncProgress(syncProgress, {
+          batch_number: batchNumber,
+          items_processed: i
+        });
+        
+        // Process each warehouse in the group
+        for (const warehouse of warehouseGroup) {
+          try {
+            // Save warehouse to database
+            await this.saveWarehouseToDB(warehouse);
+            savedWarehouses++;
+            
+            // Get and save warehouse stock
+            const stock = await this.getWarehouseStock(warehouse.idwarehouse);
+            
+            if (stock && stock.length > 0) {
+              await this.saveWarehouseStockToDB(warehouse.idwarehouse, stock);
+              savedStockItems += stock.length;
+            }
+          } catch (warehouseError) {
+            console.error(`Error saving warehouse ${warehouse.idwarehouse}:`, warehouseError.message);
+            // Continue with next warehouse
+          }
+        }
+        
+        console.log(`Completed warehouse group ${batchNumber}, saved ${savedWarehouses} warehouses so far`);
+        
+        // Add a small delay between warehouse groups to avoid database overload
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       
-      // Get warehouses updated since last sync
-      const warehouses = await this.getAllWarehouses(lastSyncDate, syncRecord);
+      // Update sync status
+      await this.updateSyncStatus(savedWarehouses);
       
-      // Save warehouses to database
-      const result = await this.saveWarehousesToDatabase(warehouses, syncRecord);
+      // Complete sync progress
+      await this.completeSyncProgress(syncProgress, true);
       
-      // Update last sync date
-      await this.updateLastWarehousesSyncDate(new Date(), result.savedCount);
-      
+      console.log(`✅ Warehouse sync completed: ${savedWarehouses} warehouses and ${savedStockItems} stock items saved`);
       return {
         success: true,
-        savedCount: result.savedCount,
-        message: `Successfully retried warehouses sync: ${result.message}`
+        savedWarehouses,
+        savedStockItems
       };
     } catch (error) {
-      console.error(`Error retrying warehouses sync ${syncId}:`, error.message);
+      console.error('Error in warehouse sync:', error.message);
       return {
         success: false,
-        savedCount: 0,
-        message: `Error retrying warehouses sync: ${error.message}`
+        error: error.message
       };
     }
   }
