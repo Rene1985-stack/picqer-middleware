@@ -64,6 +64,45 @@ class PicqerService {
   }
 
   /**
+   * Get product count from database
+   * @returns {Promise<number>} - Number of products in database
+   */
+  async getProductCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Products');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting product count from database:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for products
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'products'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error getting last sync date for products:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Initialize the database with expanded product schema and sync progress tracking
    * @returns {Promise<boolean>} - Success status
    */
@@ -481,22 +520,6 @@ class PicqerService {
   }
 
   /**
-   * Test connection to Picqer API
-   * @returns {Promise<boolean>} - Success status
-   */
-  async testConnection() {
-    try {
-      console.log('Testing connection to Picqer API...');
-      const response = await this.client.get('/products', { params: { limit: 1 } });
-      console.log('Connection test successful!');
-      return true;
-    } catch (error) {
-      console.error('Connection test failed:', error.message);
-      throw error;
-    }
-  }
-
-  /**
    * Get all products from Picqer API with pagination
    * @param {Date|null} updatedSince - Only get products updated since this date
    * @param {Object|null} syncProgress - Sync progress record for resumable sync
@@ -572,7 +595,7 @@ class PicqerService {
         return dateB - dateA; // Descending order (newest first)
       });
       
-      console.log('Sorted products with newest first for priority processing');
+      console.log('Sorted products with most recently updated first for priority processing');
       console.log(`✅ Retrieved ${allProducts.length} unique products from Picqer`);
       
       // Update sync progress with total items if provided
@@ -602,28 +625,6 @@ class PicqerService {
   }
 
   /**
-   * Get a single product by its product code
-   * @param {string} productCode - The product code to look up
-   * @returns {Promise<Object>} - Product data
-   */
-  async getProductByCode(productCode) {
-    try {
-      const response = await this.client.get('/products', { 
-        params: { productcode: productCode }
-      });
-      
-      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        return response.data[0];
-      }
-      
-      return null;
-    } catch (error) {
-      console.error(`Error fetching product with code ${productCode}:`, error.message);
-      throw error;
-    }
-  }
-
-  /**
    * Get products updated since a specific date
    * For incremental syncs, use a 30-day rolling window
    * @param {Date} date - The date to check updates from
@@ -635,559 +636,277 @@ class PicqerService {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
     // Use the more recent date between the provided date and 30 days ago
-    const effectiveDate = date > thirtyDaysAgo ? date : thirtyDaysAgo;
+    const effectiveDate = date && date > thirtyDaysAgo ? date : thirtyDaysAgo;
     
-    console.log(`Using 30-day rolling window for incremental sync. Effective date: ${effectiveDate.toISOString()}`);
+    console.log(`Getting products updated since ${effectiveDate.toISOString()}`);
     return this.getAllProducts(effectiveDate);
   }
 
   /**
-   * Get the last sync date for a specific entity
-   * @param {string} entityName - The entity name (e.g., 'products')
-   * @returns {Promise<Date|null>} - Last sync date or null if not found
+   * Save products to database
+   * @param {Array} products - Array of products to save
+   * @param {Object|null} syncProgress - Sync progress record for tracking
+   * @returns {Promise<Object>} - Results of save operation
    */
-  async getLastSyncDate(entityName = 'products') {
+  async saveProductsToDB(products, syncProgress = null) {
     try {
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
-      
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
-      
-      if (syncTableExists) {
-        // Check if entity_name column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_name'
-        `);
-        
-        const entityNameColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityNameColumnExists) {
-          // Get last sync date by entity_name
-          const result = await pool.request()
-            .input('entityName', sql.NVarChar, entityName)
-            .query(`
-              SELECT last_sync_date 
-              FROM SyncStatus 
-              WHERE entity_name = @entityName
-            `);
-          
-          if (result.recordset.length > 0) {
-            return new Date(result.recordset[0].last_sync_date);
-          }
-        } else {
-          // Get last sync date from first record (legacy behavior)
-          const result = await pool.request().query(`
-            SELECT TOP 1 last_sync_date 
-            FROM SyncStatus
-          `);
-          
-          if (result.recordset.length > 0) {
-            return new Date(result.recordset[0].last_sync_date);
-          }
-        }
+      if (!products || products.length === 0) {
+        console.log('No products to save');
+        return { savedProducts: 0 };
       }
       
-      // Default to January 1, 2025 if no sync date found
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.log(`Saving ${products.length} products to database...`);
+      
+      const pool = await sql.connect(this.sqlConfig);
+      let savedProducts = 0;
+      let batchNumber = 0;
+      
+      // Process products in batches for better performance
+      for (let i = 0; i < products.length; i += this.batchSize) {
+        batchNumber++;
+        const batch = products.slice(i, i + this.batchSize);
+        console.log(`Processing batch ${batchNumber} with ${batch.length} products...`);
+        
+        // Update sync progress if provided
+        if (syncProgress) {
+          await this.updateSyncProgress(syncProgress, {
+            batch_number: batchNumber,
+            items_processed: i
+          });
+        }
+        
+        // Process each product in the batch
+        for (const product of batch) {
+          try {
+            // Save product to database
+            await this.saveProductToDB(product);
+            savedProducts++;
+          } catch (productError) {
+            console.error(`Error saving product ${product.idproduct}:`, productError.message);
+            // Continue with next product
+          }
+        }
+        
+        console.log(`Completed batch ${batchNumber}, saved ${savedProducts} products so far`);
+        
+        // Add a small delay between batches to avoid database overload
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // Update sync status
+      await this.updateSyncStatus(products.length);
+      
+      console.log(`✅ Saved ${savedProducts} products to database`);
+      return { savedProducts };
     } catch (error) {
-      console.error('Error getting last sync date:', error.message);
-      // Default to January 1, 2025 if error occurs
-      return new Date('2025-01-01T00:00:00.000Z');
+      console.error('Error saving products to database:', error.message);
+      throw error;
     }
   }
 
   /**
-   * Update the last sync date for a specific entity
-   * @param {string} entityName - The entity name (e.g., 'products')
-   * @param {Date} date - The new sync date
-   * @param {number} count - The number of items synced
+   * Save a single product to database
+   * @param {Object} product - Product to save
    * @returns {Promise<boolean>} - Success status
    */
-  async updateLastSyncDate(entityName = 'products', date = new Date(), count = 0) {
+  async saveProductToDB(product) {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
+      // Check if product already exists
+      const checkResult = await pool.request()
+        .input('idproduct', sql.Int, product.idproduct)
+        .query('SELECT id FROM Products WHERE idproduct = @idproduct');
       
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      const productExists = checkResult.recordset.length > 0;
       
-      if (syncTableExists) {
-        // Check if entity_name column exists
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_name'
+      // Prepare request with all possible parameters
+      const request = new sql.Request(pool);
+      
+      // Add parameters with proper null handling
+      request.input('idproduct', sql.Int, product.idproduct);
+      request.input('productcode', sql.NVarChar, product.productcode || '');
+      request.input('name', sql.NVarChar, product.name || '');
+      request.input('price', sql.Decimal(18, 2), product.price || null);
+      request.input('stock', sql.Int, product.stock || null);
+      request.input('created', sql.DateTime, product.created ? new Date(product.created) : null);
+      request.input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null);
+      request.input('last_sync_date', sql.DateTime, new Date());
+      
+      // Add expanded product fields
+      request.input('idvatgroup', sql.Int, product.idvatgroup || null);
+      request.input('fixedstockprice', sql.Decimal(18, 2), product.fixedstockprice || null);
+      request.input('idsupplier', sql.Int, product.idsupplier || null);
+      request.input('productcode_supplier', sql.NVarChar, product.productcode_supplier || null);
+      request.input('deliverytime', sql.Int, product.deliverytime || null);
+      request.input('description', sql.NVarChar, product.description || null);
+      request.input('barcode', sql.NVarChar, product.barcode || null);
+      request.input('type', sql.NVarChar, product.type || null);
+      request.input('unlimitedstock', sql.Bit, product.unlimitedstock ? 1 : 0);
+      request.input('weight', sql.Int, product.weight || null);
+      request.input('length', sql.Int, product.length || null);
+      request.input('width', sql.Int, product.width || null);
+      request.input('height', sql.Int, product.height || null);
+      request.input('minimum_purchase_quantity', sql.Int, product.minimum_purchase_quantity || null);
+      request.input('purchase_in_quantities_of', sql.Int, product.purchase_in_quantities_of || null);
+      request.input('hs_code', sql.NVarChar, product.hs_code || null);
+      request.input('country_of_origin', sql.NVarChar, product.country_of_origin || null);
+      request.input('active', sql.Bit, product.active ? 1 : 0);
+      request.input('idfulfilment_customer', sql.Int, product.idfulfilment_customer || null);
+      
+      // Handle complex fields as JSON strings
+      request.input('pricelists', sql.NVarChar, product.pricelists ? JSON.stringify(product.pricelists) : null);
+      request.input('tags', sql.NVarChar, product.tags ? JSON.stringify(product.tags) : null);
+      request.input('productfields', sql.NVarChar, product.productfields ? JSON.stringify(product.productfields) : null);
+      request.input('images', sql.NVarChar, product.images ? JSON.stringify(product.images) : null);
+      
+      // Handle analysis fields
+      request.input('analysis_pick_amount_per_day', sql.Float, product.analysis_pick_amount_per_day || null);
+      request.input('analysis_abc_classification', sql.NVarChar, product.analysis_abc_classification || null);
+      
+      if (productExists) {
+        // Update existing product
+        await request.query(`
+          UPDATE Products 
+          SET 
+            productcode = @productcode,
+            name = @name,
+            price = @price,
+            stock = @stock,
+            created = @created,
+            updated = @updated,
+            last_sync_date = @last_sync_date,
+            idvatgroup = @idvatgroup,
+            fixedstockprice = @fixedstockprice,
+            idsupplier = @idsupplier,
+            productcode_supplier = @productcode_supplier,
+            deliverytime = @deliverytime,
+            description = @description,
+            barcode = @barcode,
+            type = @type,
+            unlimitedstock = @unlimitedstock,
+            weight = @weight,
+            length = @length,
+            width = @width,
+            height = @height,
+            minimum_purchase_quantity = @minimum_purchase_quantity,
+            purchase_in_quantities_of = @purchase_in_quantities_of,
+            hs_code = @hs_code,
+            country_of_origin = @country_of_origin,
+            active = @active,
+            idfulfilment_customer = @idfulfilment_customer,
+            pricelists = @pricelists,
+            tags = @tags,
+            productfields = @productfields,
+            images = @images,
+            analysis_pick_amount_per_day = @analysis_pick_amount_per_day,
+            analysis_abc_classification = @analysis_abc_classification
+          WHERE idproduct = @idproduct
         `);
-        
-        const entityNameColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityNameColumnExists) {
-          // Check if entity_type column exists
-          const entityTypeResult = await pool.request().query(`
-            SELECT COUNT(*) AS columnExists 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-          `);
-          
-          const entityTypeColumnExists = entityTypeResult.recordset[0].columnExists > 0;
-          
-          // Check if record exists
-          const recordResult = await pool.request()
-            .input('entityName', sql.NVarChar, entityName)
-            .query(`
-              SELECT COUNT(*) AS recordExists 
-              FROM SyncStatus 
-              WHERE entity_name = @entityName
-            `);
-          
-          const recordExists = recordResult.recordset[0].recordExists > 0;
-          
-          if (recordExists) {
-            // Update existing record
-            if (entityTypeColumnExists) {
-              await pool.request()
-                .input('entityName', sql.NVarChar, entityName)
-                .input('entityType', sql.NVarChar, entityName)
-                .input('lastSyncDate', sql.DateTime, date)
-                .input('lastSyncCount', sql.Int, count)
-                .query(`
-                  UPDATE SyncStatus 
-                  SET last_sync_date = @lastSyncDate, 
-                      last_sync_count = @lastSyncCount 
-                  WHERE entity_name = @entityName
-                `);
-            } else {
-              await pool.request()
-                .input('entityName', sql.NVarChar, entityName)
-                .input('lastSyncDate', sql.DateTime, date)
-                .input('lastSyncCount', sql.Int, count)
-                .query(`
-                  UPDATE SyncStatus 
-                  SET last_sync_date = @lastSyncDate, 
-                      last_sync_count = @lastSyncCount 
-                  WHERE entity_name = @entityName
-                `);
-            }
-          } else {
-            // Insert new record
-            if (entityTypeColumnExists) {
-              await pool.request()
-                .input('entityName', sql.NVarChar, entityName)
-                .input('entityType', sql.NVarChar, entityName)
-                .input('lastSyncDate', sql.DateTime, date)
-                .input('lastSyncCount', sql.Int, count)
-                .query(`
-                  INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count)
-                  VALUES (@entityName, @entityType, @lastSyncDate, @lastSyncCount)
-                `);
-            } else {
-              await pool.request()
-                .input('entityName', sql.NVarChar, entityName)
-                .input('lastSyncDate', sql.DateTime, date)
-                .input('lastSyncCount', sql.Int, count)
-                .query(`
-                  INSERT INTO SyncStatus (entity_name, last_sync_date, last_sync_count)
-                  VALUES (@entityName, @lastSyncDate, @lastSyncCount)
-                `);
-            }
-          }
-        } else {
-          // Legacy behavior: update first record
-          await pool.request()
-            .input('lastSyncDate', sql.DateTime, date)
-            .input('lastSyncCount', sql.Int, count)
-            .query(`
-              UPDATE TOP (1) SyncStatus 
-              SET last_sync_date = @lastSyncDate, 
-                  last_sync_count = @lastSyncCount
-            `);
-        }
+      } else {
+        // Insert new product
+        await request.query(`
+          INSERT INTO Products (
+            idproduct, productcode, name, price, stock, created, updated, last_sync_date,
+            idvatgroup, fixedstockprice, idsupplier, productcode_supplier, deliverytime,
+            description, barcode, type, unlimitedstock, weight, length, width, height,
+            minimum_purchase_quantity, purchase_in_quantities_of, hs_code, country_of_origin,
+            active, idfulfilment_customer, pricelists, tags, productfields, images,
+            analysis_pick_amount_per_day, analysis_abc_classification
+          )
+          VALUES (
+            @idproduct, @productcode, @name, @price, @stock, @created, @updated, @last_sync_date,
+            @idvatgroup, @fixedstockprice, @idsupplier, @productcode_supplier, @deliverytime,
+            @description, @barcode, @type, @unlimitedstock, @weight, @length, @width, @height,
+            @minimum_purchase_quantity, @purchase_in_quantities_of, @hs_code, @country_of_origin,
+            @active, @idfulfilment_customer, @pricelists, @tags, @productfields, @images,
+            @analysis_pick_amount_per_day, @analysis_abc_classification
+          )
+        `);
       }
       
       return true;
     } catch (error) {
-      console.error('Error updating last sync date:', error.message);
+      console.error(`Error saving product ${product.idproduct} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Update sync status in SyncStatus table
+   * @param {number} syncCount - Number of items synced
+   * @returns {Promise<boolean>} - Success status
+   */
+  async updateSyncStatus(syncCount) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Get current total count
+      const countResult = await pool.request()
+        .query('SELECT COUNT(*) as count FROM Products');
+      
+      const totalCount = countResult.recordset[0].count;
+      
+      // Update SyncStatus record for products
+      await pool.request()
+        .input('entityType', sql.NVarChar, 'products')
+        .input('lastSyncDate', sql.DateTime, new Date())
+        .input('lastSyncCount', sql.Int, syncCount)
+        .input('totalCount', sql.Int, totalCount)
+        .query(`
+          UPDATE SyncStatus 
+          SET 
+            last_sync_date = @lastSyncDate,
+            last_sync_count = @lastSyncCount,
+            total_count = @totalCount
+          WHERE entity_type = @entityType
+        `);
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating sync status:', error.message);
       return false;
     }
   }
 
   /**
-   * Get the count of products in the database
-   * @returns {Promise<number>} - Product count
+   * Sync products from Picqer to database
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Results of sync operation
    */
-  async getProductCountFromDatabase() {
+  async syncProducts(fullSync = false) {
     try {
-      const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query('SELECT COUNT(*) AS count FROM Products');
-      return result.recordset[0].count;
-    } catch (error) {
-      console.error('Error getting product count:', error.message);
-      return 0;
-    }
-  }
-
-  /**
-   * Save products to database with optimized batch processing
-   * @param {Array} products - Array of products to save
-   * @param {Object|null} syncProgress - Sync progress record for resumable sync
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async saveProductsToDatabase(products, syncProgress = null) {
-    try {
-      console.log(`Saving ${products.length} products to database...`);
-      
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Get available columns in Products table
-      const columnsResult = await pool.request().query(`
-        SELECT COLUMN_NAME 
-        FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_NAME = 'Products'
-      `);
-      
-      const availableColumns = columnsResult.recordset.map(row => row.COLUMN_NAME.toLowerCase());
-      console.log(`Available columns in Products table: ${availableColumns.length}`);
-      
-      // Calculate number of batches
-      const totalBatches = Math.ceil(products.length / this.batchSize);
-      console.log(`Processing products in ${totalBatches} batches of ${this.batchSize}`);
-      
-      // Update sync progress with total batches if provided
-      if (syncProgress) {
-        await this.updateSyncProgress(syncProgress, {
-          total_batches: totalBatches
-        });
-      }
-      
-      // Start from the batch number in sync progress if resuming
-      const startBatch = syncProgress ? syncProgress.batch_number : 0;
-      let savedCount = syncProgress ? syncProgress.items_processed : 0;
-      let errorCount = 0;
-      
-      // Process products in batches
-      for (let batchNum = startBatch; batchNum < totalBatches; batchNum++) {
-        console.log(`Processing batch ${batchNum + 1} of ${totalBatches}...`);
-        
-        // Update sync progress if provided
-        if (syncProgress) {
-          await this.updateSyncProgress(syncProgress, {
-            batch_number: batchNum
-          });
-        }
-        
-        const batchStart = batchNum * this.batchSize;
-        const batchEnd = Math.min(batchStart + this.batchSize, products.length);
-        const batch = products.slice(batchStart, batchEnd);
-        
-        // Process each product in the batch
-        const transaction = new sql.Transaction(pool);
-        
-        try {
-          await transaction.begin();
-          
-          for (const product of batch) {
-            try {
-              // Check if product already exists
-              const checkResult = await new sql.Request(transaction)
-                .input('idproduct', sql.Int, product.idproduct)
-                .query('SELECT id FROM Products WHERE idproduct = @idproduct');
-              
-              const productExists = checkResult.recordset.length > 0;
-              
-              // Prepare common fields for insert/update
-              const request = new sql.Request(transaction);
-              
-              // Add standard fields
-              request.input('idproduct', sql.Int, product.idproduct);
-              request.input('productcode', sql.NVarChar, product.productcode || '');
-              request.input('name', sql.NVarChar, product.name || '');
-              request.input('price', sql.Decimal, product.price || 0);
-              request.input('stock', sql.Int, product.stock || 0);
-              request.input('created', sql.DateTime, product.created ? new Date(product.created) : null);
-              request.input('updated', sql.DateTime, product.updated ? new Date(product.updated) : null);
-              request.input('lastSyncDate', sql.DateTime, new Date());
-              
-              // Add expanded fields if they exist in the table
-              for (const column of [
-                'idvatgroup', 'fixedstockprice', 'idsupplier', 'productcode_supplier',
-                'deliverytime', 'barcode', 'type', 'unlimitedstock', 'weight',
-                'length', 'width', 'height', 'minimum_purchase_quantity',
-                'purchase_in_quantities_of', 'hs_code', 'country_of_origin',
-                'active', 'idfulfilment_customer', 'analysis_pick_amount_per_day',
-                'analysis_abc_classification'
-              ]) {
-                if (availableColumns.includes(column.toLowerCase()) && product[column] !== undefined) {
-                  request.input(column, product[column]);
-                }
-              }
-              
-              // Handle text fields that might be JSON objects
-              for (const jsonField of ['description', 'pricelists', 'tags', 'productfields', 'images']) {
-                if (availableColumns.includes(jsonField.toLowerCase())) {
-                  let fieldValue = product[jsonField];
-                  
-                  // Convert objects to JSON strings
-                  if (fieldValue && typeof fieldValue === 'object') {
-                    fieldValue = JSON.stringify(fieldValue);
-                  }
-                  
-                  request.input(jsonField, sql.NVarChar, fieldValue || null);
-                }
-              }
-              
-              if (productExists) {
-                // Build update query dynamically based on available columns
-                const updateFields = ['productcode', 'name', 'price', 'stock', 'created', 'updated', 'last_sync_date']
-                  .filter(field => availableColumns.includes(field.toLowerCase()))
-                  .map(field => `${field} = @${field === 'last_sync_date' ? 'lastSyncDate' : field}`);
-                
-                // Add expanded fields to update query
-                for (const column of [
-                  'idvatgroup', 'fixedstockprice', 'idsupplier', 'productcode_supplier',
-                  'deliverytime', 'description', 'barcode', 'type', 'unlimitedstock', 'weight',
-                  'length', 'width', 'height', 'minimum_purchase_quantity',
-                  'purchase_in_quantities_of', 'hs_code', 'country_of_origin',
-                  'active', 'idfulfilment_customer', 'analysis_pick_amount_per_day',
-                  'analysis_abc_classification', 'pricelists', 'tags', 'productfields', 'images'
-                ]) {
-                  if (availableColumns.includes(column.toLowerCase()) && product[column] !== undefined) {
-                    updateFields.push(`${column} = @${column}`);
-                  }
-                }
-                
-                // Execute update query
-                await request.query(`
-                  UPDATE Products 
-                  SET ${updateFields.join(', ')} 
-                  WHERE idproduct = @idproduct
-                `);
-              } else {
-                // Build insert query dynamically based on available columns
-                const insertColumns = ['idproduct', 'productcode', 'name', 'price', 'stock', 'created', 'updated', 'last_sync_date']
-                  .filter(field => availableColumns.includes(field.toLowerCase()))
-                  .map(field => field === 'last_sync_date' ? 'last_sync_date' : field);
-                
-                const insertParams = insertColumns.map(field => `@${field === 'last_sync_date' ? 'lastSyncDate' : field}`);
-                
-                // Add expanded fields to insert query
-                for (const column of [
-                  'idvatgroup', 'fixedstockprice', 'idsupplier', 'productcode_supplier',
-                  'deliverytime', 'description', 'barcode', 'type', 'unlimitedstock', 'weight',
-                  'length', 'width', 'height', 'minimum_purchase_quantity',
-                  'purchase_in_quantities_of', 'hs_code', 'country_of_origin',
-                  'active', 'idfulfilment_customer', 'analysis_pick_amount_per_day',
-                  'analysis_abc_classification', 'pricelists', 'tags', 'productfields', 'images'
-                ]) {
-                  if (availableColumns.includes(column.toLowerCase()) && product[column] !== undefined) {
-                    insertColumns.push(column);
-                    insertParams.push(`@${column}`);
-                  }
-                }
-                
-                // Execute insert query
-                await request.query(`
-                  INSERT INTO Products (${insertColumns.join(', ')})
-                  VALUES (${insertParams.join(', ')})
-                `);
-              }
-              
-              savedCount++;
-            } catch (productError) {
-              console.error(`Error saving product ${product.idproduct}: ${productError.message}`);
-              errorCount++;
-            }
-          }
-          
-          await transaction.commit();
-          
-          // Update sync progress if provided
-          if (syncProgress) {
-            await this.updateSyncProgress(syncProgress, {
-              items_processed: savedCount
-            });
-          }
-        } catch (batchError) {
-          console.error(`Error processing batch ${batchNum + 1}: ${batchError.message}`);
-          await transaction.rollback();
-          errorCount += batch.length;
-        }
-      }
-      
-      console.log(`✅ Saved ${savedCount} products to database (${errorCount} errors)`);
-      
-      // Complete sync progress if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, true);
-      }
-      
-      return {
-        success: true,
-        savedCount,
-        errorCount,
-        message: `Saved ${savedCount} products to database (${errorCount} errors)`
-      };
-    } catch (error) {
-      console.error('Error saving products to database:', error.message);
-      
-      // Complete sync progress with failure if provided
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, false);
-      }
-      
-      return {
-        success: false,
-        savedCount: 0,
-        errorCount: products.length,
-        message: `Error saving products to database: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform a full sync of all products
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performFullSync() {
-    try {
-      console.log('Starting full sync...');
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} product sync...`);
       
       // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('products', true);
+      const syncProgress = await this.createOrGetSyncProgress('products', fullSync);
       
-      // Get all products from Picqer
-      const products = await this.getAllProducts(null, syncProgress);
-      console.log(`Retrieved ${products.length} products from Picqer`);
-      
-      // Save products to database
-      const result = await this.saveProductsToDatabase(products, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastSyncDate('products', new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing full sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing full sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Perform an incremental sync of products updated since last sync
-   * Uses 30-day rolling window for better performance
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async performIncrementalSync() {
-    try {
-      console.log('Starting incremental sync...');
-      
-      // Get last sync date
-      const lastSyncDate = await this.getLastSyncDate('products');
-      console.log('Last sync date:', lastSyncDate.toISOString());
-      
-      // Create sync progress record
-      const syncProgress = await this.createOrGetSyncProgress('products', false);
-      
-      // Get products updated since last sync (with 30-day rolling window)
-      const products = await this.getProductsUpdatedSince(lastSyncDate, syncProgress);
-      console.log(`Retrieved ${products.length} updated products from Picqer`);
-      
-      // Save products to database
-      const result = await this.saveProductsToDatabase(products, syncProgress);
-      
-      // Update last sync date
-      await this.updateLastSyncDate('products', new Date(), result.savedCount);
-      
-      return result;
-    } catch (error) {
-      console.error('Error performing incremental sync:', error.message);
-      return {
-        success: false,
-        savedCount: 0,
-        message: `Error performing incremental sync: ${error.message}`
-      };
-    }
-  }
-
-  /**
-   * Retry a failed sync
-   * @param {string} syncId - The ID of the failed sync to retry
-   * @returns {Promise<Object>} - Result with success status and count
-   */
-  async retryFailedSync(syncId) {
-    try {
-      console.log(`Retrying failed sync with ID: ${syncId}`);
-      
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Get the failed sync record
-      const syncResult = await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .query(`
-          SELECT * FROM SyncProgress 
-          WHERE sync_id = @syncId AND entity_type = 'products'
-        `);
-      
-      if (syncResult.recordset.length === 0) {
-        return {
-          success: false,
-          message: `No sync record found with ID: ${syncId}`
-        };
+      let products;
+      if (fullSync) {
+        // Full sync: get all products
+        products = await this.getAllProducts(null, syncProgress);
+      } else {
+        // Incremental sync: get products updated since last sync
+        const lastSyncDate = await this.getLastSyncDate();
+        products = await this.getProductsUpdatedSince(lastSyncDate);
       }
       
-      const syncRecord = syncResult.recordset[0];
-      
-      // Reset sync status to in_progress
-      await pool.request()
-        .input('syncId', sql.NVarChar, syncId)
-        .input('now', sql.DateTime, new Date().toISOString())
-        .query(`
-          UPDATE SyncProgress 
-          SET status = 'in_progress', 
-              last_updated = @now,
-              completed_at = NULL
-          WHERE sync_id = @syncId
-        `);
-      
-      // Get last sync date
-      const lastSyncDate = await this.getLastSyncDate('products');
-      
-      // Get products updated since last sync
-      const products = await this.getAllProducts(lastSyncDate, syncRecord);
-      
       // Save products to database
-      const result = await this.saveProductsToDatabase(products, syncRecord);
+      const result = await this.saveProductsToDB(products, syncProgress);
       
-      // Update last sync date
-      await this.updateLastSyncDate('products', new Date(), result.savedCount);
+      // Complete sync progress
+      await this.completeSyncProgress(syncProgress, true);
       
+      console.log(`✅ Product sync completed: ${result.savedProducts} products saved`);
       return {
         success: true,
-        savedCount: result.savedCount,
-        message: `Successfully retried sync: ${result.message}`
+        savedProducts: result.savedProducts
       };
     } catch (error) {
-      console.error(`Error retrying sync ${syncId}:`, error.message);
+      console.error('Error in product sync:', error.message);
       return {
         success: false,
-        savedCount: 0,
-        message: `Error retrying sync: ${error.message}`
+        error: error.message
       };
     }
   }
