@@ -8,7 +8,7 @@
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const batchesSchema = require('./comprehensive_batches_schema');
+const batchesSchema = require('./batches_schema');
 
 class SimpleBatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
