@@ -53,6 +53,52 @@ class PicklistService {
   }
 
   /**
+   * Get picklist count from database
+   * @returns {Promise<number>} - Number of picklists in database
+   */
+  async getPicklistCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Picklists');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting picklist count from database:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for picklists
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDate() {
+    try {
+      console.log('getLastSyncDate method called, using getLastPicklistsSyncDate instead');
+      // If the service already has a getLastPicklistsSyncDate method, use that
+      if (typeof this.getLastPicklistsSyncDate === 'function') {
+        return this.getLastPicklistsSyncDate();
+      }
+      
+      // Otherwise, implement the standard method
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'picklists'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error getting last sync date for picklists:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Initialize the database with picklists schema
    * @returns {Promise<boolean>} - Success status
    */
@@ -428,342 +474,367 @@ class PicklistService {
       return true;
     } catch (error) {
       console.error('Error updating picklists sync status:', error.message);
-      // Continue even if update fails
       return false;
     }
   }
 
   /**
-   * Get the count of picklists in the database
-   * @returns {Promise<number>} - Picklist count
+   * Get picklist details from Picqer
+   * @param {number} idpicklist - Picklist ID
+   * @returns {Promise<Object>} - Picklist details
    */
-  async getPicklistCountFromDatabase() {
+  async getPicklistDetails(idpicklist) {
     try {
-      const pool = await sql.connect(this.sqlConfig);
+      console.log(`Fetching details for picklist ${idpicklist}...`);
       
-      const result = await pool.request()
-        .query('SELECT COUNT(*) AS count FROM Picklists');
+      const response = await this.client.get(`/picklists/${idpicklist}`);
       
-      return result.recordset[0].count;
+      if (response.data) {
+        console.log(`Retrieved details for picklist ${idpicklist}`);
+        return response.data;
+      }
+      
+      return null;
     } catch (error) {
-      console.error('Error getting picklist count from database:', error.message);
-      return 0;
+      console.error(`Error fetching details for picklist ${idpicklist}:`, error.message);
+      
+      // Handle rate limiting (429 Too Many Requests)
+      if (error.response && error.response.status === 429) {
+        console.log('Rate limit hit, waiting before retrying...');
+        
+        // Wait for 20 seconds before retrying
+        await new Promise(resolve => setTimeout(resolve, 20000));
+        
+        // Retry the request
+        return this.getPicklistDetails(idpicklist);
+      }
+      
+      // Return null on error to continue with other picklists
+      return null;
     }
   }
 
   /**
-   * Save picklists to the database
-   * @param {Array} picklists - Array of picklists from Picqer API
-   * @returns {Promise<number>} - Number of picklists saved
+   * Get picklist products from Picqer
+   * @param {number} idpicklist - Picklist ID
+   * @returns {Promise<Array>} - Array of picklist products
    */
-  async savePicklistsToDatabase(picklists) {
-    if (!picklists || picklists.length === 0) {
-      console.log('No picklists to save.');
-      return 0;
+  async getPicklistProducts(idpicklist) {
+    try {
+      console.log(`Fetching products for picklist ${idpicklist}...`);
+      
+      const response = await this.client.get(`/picklists/${idpicklist}/products`);
+      
+      if (response.data && Array.isArray(response.data)) {
+        console.log(`Retrieved ${response.data.length} products for picklist ${idpicklist}`);
+        return response.data;
+      }
+      
+      return [];
+    } catch (error) {
+      console.error(`Error fetching products for picklist ${idpicklist}:`, error.message);
+      
+      // Handle rate limiting (429 Too Many Requests)
+      if (error.response && error.response.status === 429) {
+        console.log('Rate limit hit, waiting before retrying...');
+        
+        // Wait for 20 seconds before retrying
+        await new Promise(resolve => setTimeout(resolve, 20000));
+        
+        // Retry the request
+        return this.getPicklistProducts(idpicklist);
+      }
+      
+      // Return empty array on error to continue with other picklists
+      return [];
     }
-    
-    console.log(`Saving ${picklists.length} picklists to database...`);
-    let savedCount = 0;
-    
+  }
+
+  /**
+   * Save picklist to database
+   * @param {Object} picklist - Picklist to save
+   * @returns {Promise<boolean>} - Success status
+   */
+  async savePicklistToDB(picklist) {
     try {
       const pool = await sql.connect(this.sqlConfig);
       
-      // Process picklists in batches of 20 for better performance
-      const batchSize = 20;
-      for (let i = 0; i < picklists.length; i += batchSize) {
-        const batch = picklists.slice(i, i + batchSize);
-        console.log(`Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(picklists.length / batchSize)}...`);
-        
-        // Process each picklist in the batch
-        for (const picklist of batch) {
-          try {
-            // Begin transaction
-            const transaction = new sql.Transaction(pool);
-            await transaction.begin();
-            
-            try {
-              // Check if picklist already exists
-              const checkResult = await new sql.Request(transaction)
-                .input('idpicklist', sql.Int, picklist.idpicklist)
-                .query('SELECT COUNT(*) AS count FROM Picklists WHERE idpicklist = @idpicklist');
-              
-              const exists = checkResult.recordset[0].count > 0;
-              
-              // Prepare picklist data
-              const request = new sql.Request(transaction)
-                .input('idpicklist', sql.Int, picklist.idpicklist)
-                .input('picklistid', sql.NVarChar, picklist.picklistid || '')
-                .input('idcustomer', sql.Int, picklist.idcustomer || null)
-                .input('idorder', sql.Int, picklist.idorder || null)
-                .input('idreturn', sql.Int, picklist.idreturn || null)
-                .input('idwarehouse', sql.Int, picklist.idwarehouse || null)
-                .input('idtemplate', sql.Int, picklist.idtemplate || null)
-                .input('idpicklist_batch', sql.Int, picklist.idpicklist_batch || null)
-                .input('idshippingprovider_profile', sql.Int, picklist.idshippingprovider_profile || null)
-                .input('deliveryname', sql.NVarChar, picklist.deliveryname || null)
-                .input('deliverycontact', sql.NVarChar, picklist.deliverycontact || null)
-                .input('deliveryaddress', sql.NVarChar, picklist.deliveryaddress || null)
-                .input('deliveryaddress2', sql.NVarChar, picklist.deliveryaddress2 || null)
-                .input('deliveryzipcode', sql.NVarChar, picklist.deliveryzipcode || null)
-                .input('deliverycity', sql.NVarChar, picklist.deliverycity || null)
-                .input('deliveryregion', sql.NVarChar, picklist.deliveryregion || null)
-                .input('deliverycountry', sql.NVarChar, picklist.deliverycountry || null)
-                .input('telephone', sql.NVarChar, picklist.telephone || null)
-                .input('emailaddress', sql.NVarChar, picklist.emailaddress || null)
-                .input('reference', sql.NVarChar, picklist.reference || null)
-                .input('assigned_to_iduser', sql.Int, picklist.assigned_to_iduser || null)
-                .input('invoiced', sql.Bit, picklist.invoiced ? 1 : 0)
-                .input('urgent', sql.Bit, picklist.urgent ? 1 : 0)
-                .input('preferred_delivery_date', sql.Date, picklist.preferred_delivery_date ? new Date(picklist.preferred_delivery_date) : null)
-                .input('status', sql.NVarChar, picklist.status || null)
-                .input('totalproducts', sql.Int, picklist.totalproducts || 0)
-                .input('totalpicked', sql.Int, picklist.totalpicked || 0)
-                .input('weight', sql.Int, picklist.weight || 0)
-                .input('snoozed_until', sql.DateTime, picklist.snoozed_until ? new Date(picklist.snoozed_until) : null)
-                .input('closed_by_iduser', sql.Int, picklist.closed_by_iduser || null)
-                .input('closed_at', sql.DateTime, picklist.closed_at ? new Date(picklist.closed_at) : null)
-                .input('created', sql.DateTime, picklist.created ? new Date(picklist.created) : null)
-                .input('updated', sql.DateTime, picklist.updated ? new Date(picklist.updated) : null)
-                .input('idfulfilment_customer', sql.Int, picklist.idfulfilment_customer || null)
-                .input('last_sync_date', sql.DateTime, new Date());
-              
-              // Execute query based on whether picklist exists
-              let picklistId;
-              if (exists) {
-                // Update existing picklist
-                await request.query(`
-                  UPDATE Picklists SET
-                    picklistid = @picklistid,
-                    idcustomer = @idcustomer,
-                    idorder = @idorder,
-                    idreturn = @idreturn,
-                    idwarehouse = @idwarehouse,
-                    idtemplate = @idtemplate,
-                    idpicklist_batch = @idpicklist_batch,
-                    idshippingprovider_profile = @idshippingprovider_profile,
-                    deliveryname = @deliveryname,
-                    deliverycontact = @deliverycontact,
-                    deliveryaddress = @deliveryaddress,
-                    deliveryaddress2 = @deliveryaddress2,
-                    deliveryzipcode = @deliveryzipcode,
-                    deliverycity = @deliverycity,
-                    deliveryregion = @deliveryregion,
-                    deliverycountry = @deliverycountry,
-                    telephone = @telephone,
-                    emailaddress = @emailaddress,
-                    reference = @reference,
-                    assigned_to_iduser = @assigned_to_iduser,
-                    invoiced = @invoiced,
-                    urgent = @urgent,
-                    preferred_delivery_date = @preferred_delivery_date,
-                    status = @status,
-                    totalproducts = @totalproducts,
-                    totalpicked = @totalpicked,
-                    weight = @weight,
-                    snoozed_until = @snoozed_until,
-                    closed_by_iduser = @closed_by_iduser,
-                    closed_at = @closed_at,
-                    created = @created,
-                    updated = @updated,
-                    idfulfilment_customer = @idfulfilment_customer,
-                    last_sync_date = @last_sync_date
-                  WHERE idpicklist = @idpicklist
-                `);
-                
-                // Get the ID of the updated picklist
-                const idResult = await new sql.Request(transaction)
-                  .input('idpicklist', sql.Int, picklist.idpicklist)
-                  .query('SELECT id FROM Picklists WHERE idpicklist = @idpicklist');
-                
-                picklistId = idResult.recordset[0].id;
-              } else {
-                // Insert new picklist
-                const insertResult = await request.query(`
-                  INSERT INTO Picklists (
-                    idpicklist, picklistid, idcustomer, idorder, idreturn, idwarehouse, idtemplate,
-                    idpicklist_batch, idshippingprovider_profile, deliveryname, deliverycontact,
-                    deliveryaddress, deliveryaddress2, deliveryzipcode, deliverycity, deliveryregion,
-                    deliverycountry, telephone, emailaddress, reference, assigned_to_iduser,
-                    invoiced, urgent, preferred_delivery_date, status, totalproducts, totalpicked,
-                    weight, snoozed_until, closed_by_iduser, closed_at, created, updated,
-                    idfulfilment_customer, last_sync_date
-                  )
-                  VALUES (
-                    @idpicklist, @picklistid, @idcustomer, @idorder, @idreturn, @idwarehouse, @idtemplate,
-                    @idpicklist_batch, @idshippingprovider_profile, @deliveryname, @deliverycontact,
-                    @deliveryaddress, @deliveryaddress2, @deliveryzipcode, @deliverycity, @deliveryregion,
-                    @deliverycountry, @telephone, @emailaddress, @reference, @assigned_to_iduser,
-                    @invoiced, @urgent, @preferred_delivery_date, @status, @totalproducts, @totalpicked,
-                    @weight, @snoozed_until, @closed_by_iduser, @closed_at, @created, @updated,
-                    @idfulfilment_customer, @last_sync_date
-                  );
-                  SELECT SCOPE_IDENTITY() AS id;
-                `);
-                
-                picklistId = insertResult.recordset[0].id;
-              }
-              
-              // Delete existing picklist products and locations
-              await new sql.Request(transaction)
-                .input('idpicklist', sql.Int, picklist.idpicklist)
-                .query('DELETE FROM PicklistProductLocations WHERE idpicklist_product IN (SELECT idpicklist_product FROM PicklistProducts WHERE idpicklist = @idpicklist)');
-              
-              await new sql.Request(transaction)
-                .input('idpicklist', sql.Int, picklist.idpicklist)
-                .query('DELETE FROM PicklistProducts WHERE idpicklist = @idpicklist');
-              
-              // Save picklist products
-              if (picklist.products && Array.isArray(picklist.products)) {
-                for (const product of picklist.products) {
-                  // Insert picklist product
-                  const productRequest = new sql.Request(transaction)
-                    .input('idpicklist_product', sql.Int, product.idpicklist_product || 0)
-                    .input('idpicklist', sql.Int, picklist.idpicklist)
-                    .input('idproduct', sql.Int, product.idproduct || 0)
-                    .input('idorder_product', sql.Int, product.idorder_product || null)
-                    .input('idreturn_product_replacement', sql.Int, product.idreturn_product_replacement || null)
-                    .input('idvatgroup', sql.Int, product.idvatgroup || null)
-                    .input('productcode', sql.NVarChar, product.productcode || null)
-                    .input('name', sql.NVarChar, product.name || null)
-                    .input('remarks', sql.NVarChar, product.remarks || null)
-                    .input('amount', sql.Int, product.amount || 0)
-                    .input('amount_picked', sql.Int, product.amount_picked || 0)
-                    .input('price', sql.Decimal(18, 2), product.price || 0)
-                    .input('weight', sql.Int, product.weight || 0)
-                    .input('stocklocation', sql.NVarChar, product.stocklocation || null)
-                    .input('partof_idpicklist_product', sql.Int, product.partof_idpicklist_product || null)
-                    .input('has_parts', sql.Bit, product.has_parts ? 1 : 0)
-                    .input('last_sync_date', sql.DateTime, new Date());
-                  
-                  const productResult = await productRequest.query(`
-                    INSERT INTO PicklistProducts (
-                      idpicklist_product, idpicklist, idproduct, idorder_product, idreturn_product_replacement,
-                      idvatgroup, productcode, name, remarks, amount, amount_picked, price, weight,
-                      stocklocation, partof_idpicklist_product, has_parts, last_sync_date
-                    )
-                    VALUES (
-                      @idpicklist_product, @idpicklist, @idproduct, @idorder_product, @idreturn_product_replacement,
-                      @idvatgroup, @productcode, @name, @remarks, @amount, @amount_picked, @price, @weight,
-                      @stocklocation, @partof_idpicklist_product, @has_parts, @last_sync_date
-                    );
-                    SELECT SCOPE_IDENTITY() AS id;
-                  `);
-                  
-                  // Save pick locations for this product
-                  if (product.pick_locations && Array.isArray(product.pick_locations)) {
-                    for (const location of product.pick_locations) {
-                      await new sql.Request(transaction)
-                        .input('idpicklist_product', sql.Int, product.idpicklist_product)
-                        .input('idlocation', sql.Int, location.idlocation || 0)
-                        .input('name', sql.NVarChar, location.name || null)
-                        .input('amount', sql.Int, location.amount || 0)
-                        .input('last_sync_date', sql.DateTime, new Date())
-                        .query(`
-                          INSERT INTO PicklistProductLocations (
-                            idpicklist_product, idlocation, name, amount, last_sync_date
-                          )
-                          VALUES (
-                            @idpicklist_product, @idlocation, @name, @amount, @last_sync_date
-                          )
-                        `);
-                    }
-                  }
-                }
-              }
-              
-              // Commit transaction
-              await transaction.commit();
-              savedCount++;
-            } catch (transactionError) {
-              // Rollback transaction on error
-              await transaction.rollback();
-              console.error(`Error saving picklist ${picklist.idpicklist}:`, transactionError.message);
-            }
-          } catch (picklistError) {
-            console.error(`Error processing picklist ${picklist.idpicklist}:`, picklistError.message);
-            // Continue with next picklist even if this one fails
-          }
-        }
+      // Check if picklist already exists
+      const checkResult = await pool.request()
+        .input('idpicklist', sql.Int, picklist.idpicklist)
+        .query('SELECT id FROM Picklists WHERE idpicklist = @idpicklist');
+      
+      const picklistExists = checkResult.recordset.length > 0;
+      
+      // Prepare request with all possible parameters
+      const request = new sql.Request(pool);
+      
+      // Add parameters with proper null handling
+      request.input('idpicklist', sql.Int, picklist.idpicklist);
+      request.input('picklistid', sql.NVarChar, picklist.picklistid || '');
+      request.input('idcustomer', sql.Int, picklist.idcustomer || null);
+      request.input('idorder', sql.Int, picklist.idorder || null);
+      request.input('idwarehouse', sql.Int, picklist.idwarehouse || null);
+      request.input('idtemplate', sql.Int, picklist.idtemplate || null);
+      request.input('idfulfilment', sql.Int, picklist.idfulfilment || null);
+      request.input('idfulfilment_customer', sql.Int, picklist.idfulfilment_customer || null);
+      request.input('iduser_assigned', sql.Int, picklist.iduser_assigned || null);
+      request.input('iduser_processed', sql.Int, picklist.iduser_processed || null);
+      request.input('iduser_cancelled', sql.Int, picklist.iduser_cancelled || null);
+      request.input('status', sql.NVarChar, picklist.status || '');
+      request.input('deliveryname', sql.NVarChar, picklist.deliveryname || '');
+      request.input('deliverycontact', sql.NVarChar, picklist.deliverycontact || null);
+      request.input('deliveryaddress', sql.NVarChar, picklist.deliveryaddress || null);
+      request.input('deliveryaddress2', sql.NVarChar, picklist.deliveryaddress2 || null);
+      request.input('deliveryzipcode', sql.NVarChar, picklist.deliveryzipcode || null);
+      request.input('deliverycity', sql.NVarChar, picklist.deliverycity || null);
+      request.input('deliveryregion', sql.NVarChar, picklist.deliveryregion || null);
+      request.input('deliverycountry', sql.NVarChar, picklist.deliverycountry || null);
+      request.input('deliveryphone', sql.NVarChar, picklist.deliveryphone || null);
+      request.input('deliveryemail', sql.NVarChar, picklist.deliveryemail || null);
+      request.input('reference', sql.NVarChar, picklist.reference || null);
+      request.input('notes', sql.NVarChar, picklist.notes || null);
+      request.input('created', sql.DateTime, picklist.created ? new Date(picklist.created) : null);
+      request.input('updated', sql.DateTime, picklist.updated ? new Date(picklist.updated) : null);
+      request.input('processed', sql.DateTime, picklist.processed ? new Date(picklist.processed) : null);
+      request.input('cancelled', sql.DateTime, picklist.cancelled ? new Date(picklist.cancelled) : null);
+      request.input('assigned', sql.DateTime, picklist.assigned ? new Date(picklist.assigned) : null);
+      request.input('last_sync_date', sql.DateTime, new Date());
+      
+      if (picklistExists) {
+        // Update existing picklist
+        await request.query(`
+          UPDATE Picklists 
+          SET 
+            picklistid = @picklistid,
+            idcustomer = @idcustomer,
+            idorder = @idorder,
+            idwarehouse = @idwarehouse,
+            idtemplate = @idtemplate,
+            idfulfilment = @idfulfilment,
+            idfulfilment_customer = @idfulfilment_customer,
+            iduser_assigned = @iduser_assigned,
+            iduser_processed = @iduser_processed,
+            iduser_cancelled = @iduser_cancelled,
+            status = @status,
+            deliveryname = @deliveryname,
+            deliverycontact = @deliverycontact,
+            deliveryaddress = @deliveryaddress,
+            deliveryaddress2 = @deliveryaddress2,
+            deliveryzipcode = @deliveryzipcode,
+            deliverycity = @deliverycity,
+            deliveryregion = @deliveryregion,
+            deliverycountry = @deliverycountry,
+            deliveryphone = @deliveryphone,
+            deliveryemail = @deliveryemail,
+            reference = @reference,
+            notes = @notes,
+            created = @created,
+            updated = @updated,
+            processed = @processed,
+            cancelled = @cancelled,
+            assigned = @assigned,
+            last_sync_date = @last_sync_date
+          WHERE idpicklist = @idpicklist
+        `);
+      } else {
+        // Insert new picklist
+        await request.query(`
+          INSERT INTO Picklists (
+            idpicklist, picklistid, idcustomer, idorder, idwarehouse, idtemplate,
+            idfulfilment, idfulfilment_customer, iduser_assigned, iduser_processed,
+            iduser_cancelled, status, deliveryname, deliverycontact, deliveryaddress,
+            deliveryaddress2, deliveryzipcode, deliverycity, deliveryregion,
+            deliverycountry, deliveryphone, deliveryemail, reference, notes,
+            created, updated, processed, cancelled, assigned, last_sync_date
+          )
+          VALUES (
+            @idpicklist, @picklistid, @idcustomer, @idorder, @idwarehouse, @idtemplate,
+            @idfulfilment, @idfulfilment_customer, @iduser_assigned, @iduser_processed,
+            @iduser_cancelled, @status, @deliveryname, @deliverycontact, @deliveryaddress,
+            @deliveryaddress2, @deliveryzipcode, @deliverycity, @deliveryregion,
+            @deliverycountry, @deliveryphone, @deliveryemail, @reference, @notes,
+            @created, @updated, @processed, @cancelled, @assigned, @last_sync_date
+          )
+        `);
       }
       
-      console.log(`✅ Saved ${savedCount} picklists to database`);
-      return savedCount;
+      return true;
     } catch (error) {
-      console.error('❌ Error saving picklists to database:', error.message);
+      console.error(`Error saving picklist ${picklist.idpicklist} to database:`, error.message);
       throw error;
     }
   }
 
   /**
-   * Perform a full sync of all picklists
-   * @returns {Promise<Object>} - Sync result
+   * Save picklist products to database
+   * @param {number} idpicklist - Picklist ID
+   * @param {Array} products - Array of picklist products
+   * @returns {Promise<boolean>} - Success status
    */
-  async performFullPicklistsSync() {
+  async savePicklistProductsToDB(idpicklist, products) {
     try {
-      console.log('Starting full picklists sync...');
+      if (!products || products.length === 0) {
+        return true;
+      }
       
-      // Get all picklists from Picqer
-      const picklists = await this.getAllPicklists();
-      console.log(`Retrieved ${picklists.length} picklists from Picqer`);
+      const pool = await sql.connect(this.sqlConfig);
       
-      // Save picklists to database
-      const savedCount = await this.savePicklistsToDatabase(picklists);
+      // Delete existing products for this picklist
+      await pool.request()
+        .input('idpicklist', sql.Int, idpicklist)
+        .query('DELETE FROM PicklistProducts WHERE idpicklist = @idpicklist');
       
-      // Update sync status
-      const totalCount = await this.getPicklistCountFromDatabase();
-      await this.updatePicklistsSyncStatus(new Date().toISOString(), totalCount, savedCount);
+      // Delete existing product locations for this picklist
+      await pool.request()
+        .input('idpicklist', sql.Int, idpicklist)
+        .query('DELETE FROM PicklistProductLocations WHERE idpicklist = @idpicklist');
       
-      console.log('✅ Full picklists sync completed successfully');
-      return {
-        success: true,
-        message: `Full picklists sync completed successfully. Saved ${savedCount} picklists.`,
-        totalCount,
-        savedCount
-      };
+      // Insert new products
+      for (const product of products) {
+        // Skip invalid products
+        if (!product || !product.idproduct) {
+          console.warn('Invalid product data, missing idproduct:', product);
+          continue;
+        }
+        
+        const request = new sql.Request(pool);
+        
+        // Add parameters with proper null handling
+        request.input('idpicklist', sql.Int, idpicklist);
+        request.input('idpicklistproduct', sql.Int, product.idpicklistproduct || null);
+        request.input('idproduct', sql.Int, product.idproduct);
+        request.input('productcode', sql.NVarChar, product.productcode || '');
+        request.input('name', sql.NVarChar, product.name || '');
+        request.input('amount', sql.Int, product.amount || 0);
+        request.input('amount_processed', sql.Int, product.amount_processed || 0);
+        request.input('amount_cancelled', sql.Int, product.amount_cancelled || 0);
+        request.input('last_sync_date', sql.DateTime, new Date());
+        
+        // Insert picklist product
+        await request.query(`
+          INSERT INTO PicklistProducts (
+            idpicklist, idpicklistproduct, idproduct, productcode, name,
+            amount, amount_processed, amount_cancelled, last_sync_date
+          )
+          VALUES (
+            @idpicklist, @idpicklistproduct, @idproduct, @productcode, @name,
+            @amount, @amount_processed, @amount_cancelled, @last_sync_date
+          )
+        `);
+        
+        // Insert product locations if available
+        if (product.locations && Array.isArray(product.locations)) {
+          for (const location of product.locations) {
+            const locationRequest = new sql.Request(pool);
+            
+            locationRequest.input('idpicklist', sql.Int, idpicklist);
+            locationRequest.input('idpicklistproduct', sql.Int, product.idpicklistproduct || null);
+            locationRequest.input('idproduct', sql.Int, product.idproduct);
+            locationRequest.input('idlocation', sql.Int, location.idlocation || null);
+            locationRequest.input('location', sql.NVarChar, location.location || '');
+            locationRequest.input('amount', sql.Int, location.amount || 0);
+            locationRequest.input('amount_processed', sql.Int, location.amount_processed || 0);
+            locationRequest.input('amount_cancelled', sql.Int, location.amount_cancelled || 0);
+            locationRequest.input('last_sync_date', sql.DateTime, new Date());
+            
+            await locationRequest.query(`
+              INSERT INTO PicklistProductLocations (
+                idpicklist, idpicklistproduct, idproduct, idlocation, location,
+                amount, amount_processed, amount_cancelled, last_sync_date
+              )
+              VALUES (
+                @idpicklist, @idpicklistproduct, @idproduct, @idlocation, @location,
+                @amount, @amount_processed, @amount_cancelled, @last_sync_date
+              )
+            `);
+          }
+        }
+      }
+      
+      return true;
     } catch (error) {
-      console.error('❌ Picklists sync failed:', error.message);
-      return {
-        success: false,
-        message: `Picklists sync failed: ${error.message}`
-      };
+      console.error(`Error saving products for picklist ${idpicklist} to database:`, error.message);
+      throw error;
     }
   }
 
   /**
-   * Perform an incremental sync of picklists updated since last sync
-   * @returns {Promise<Object>} - Sync result
+   * Sync picklists from Picqer to database
+   * @param {boolean} fullSync - Whether to perform a full sync
+   * @returns {Promise<Object>} - Results of sync operation
    */
-  async performIncrementalPicklistsSync() {
+  async syncPicklists(fullSync = false) {
     try {
-      console.log('Starting incremental picklists sync...');
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} picklist sync...`);
       
-      // Get last sync date
-      const lastSyncDate = await this.getLastPicklistsSyncDate();
-      console.log(`Last picklists sync date: ${lastSyncDate.toISOString()}`);
+      let picklists;
+      if (fullSync) {
+        // Full sync: get all picklists
+        picklists = await this.getAllPicklists();
+      } else {
+        // Incremental sync: get picklists updated since last sync
+        const lastSyncDate = await this.getLastPicklistsSyncDate();
+        picklists = await this.getPicklistsUpdatedSince(lastSyncDate);
+      }
       
-      // Get picklists updated since last sync
-      const picklists = await this.getPicklistsUpdatedSince(lastSyncDate);
-      console.log(`Retrieved ${picklists.length} updated picklists from Picqer`);
+      if (!picklists || picklists.length === 0) {
+        console.log('No picklists to sync');
+        return { success: true, savedPicklists: 0, savedProducts: 0 };
+      }
       
-      // Save picklists to database
-      const savedCount = await this.savePicklistsToDatabase(picklists);
+      console.log(`Syncing ${picklists.length} picklists...`);
+      
+      let savedPicklists = 0;
+      let savedProducts = 0;
+      
+      // Process each picklist
+      for (const picklist of picklists) {
+        try {
+          // Get picklist details
+          const picklistDetails = await this.getPicklistDetails(picklist.idpicklist);
+          
+          if (!picklistDetails) {
+            console.warn(`Could not get details for picklist ${picklist.idpicklist}, skipping`);
+            continue;
+          }
+          
+          // Save picklist to database
+          await this.savePicklistToDB(picklistDetails);
+          savedPicklists++;
+          
+          // Get and save picklist products
+          const products = await this.getPicklistProducts(picklist.idpicklist);
+          
+          if (products && products.length > 0) {
+            await this.savePicklistProductsToDB(picklist.idpicklist, products);
+            savedProducts += products.length;
+          }
+        } catch (picklistError) {
+          console.error(`Error saving picklist ${picklist.idpicklist}:`, picklistError.message);
+          // Continue with next picklist
+        }
+      }
+      
+      // Get total count of picklists in database
+      const pool = await sql.connect(this.sqlConfig);
+      const countResult = await pool.request().query('SELECT COUNT(*) as count FROM Picklists');
+      const totalCount = countResult.recordset[0].count;
       
       // Update sync status
-      const totalCount = await this.getPicklistCountFromDatabase();
-      await this.updatePicklistsSyncStatus(new Date().toISOString(), totalCount, savedCount);
+      await this.updatePicklistsSyncStatus(new Date().toISOString(), totalCount, savedPicklists);
       
-      console.log('✅ Incremental picklists sync completed successfully');
+      console.log(`✅ Picklist sync completed: ${savedPicklists} picklists and ${savedProducts} products saved`);
       return {
         success: true,
-        message: `Incremental picklists sync completed successfully. Saved ${savedCount} picklists.`,
-        totalCount,
-        savedCount
+        savedPicklists,
+        savedProducts
       };
     } catch (error) {
-      console.error('❌ Picklists sync failed:', error.message);
+      console.error('Error in picklist sync:', error.message);
       return {
         success: false,
-        message: `Picklists sync failed: ${error.message}`
+        error: error.message
       };
     }
   }
