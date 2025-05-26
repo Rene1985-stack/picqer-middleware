@@ -1,28 +1,20 @@
 /**
- * Fixed Batch service for Picqer middleware with adaptive schema and proper JSON field handling
+ * Simplified Batch service for Picqer middleware with fixed schema
  * Handles synchronization of picklist batches between Picqer and SQL database
- * Automatically adapts to schema changes and prevents column name errors
+ * Uses a fixed schema approach for simplicity and reliability
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const adaptiveBatchesSchema = require('./batches_schema');
-const syncProgressSchema = require('./sync_progress_schema');
+const batchesSchema = require('./comprehensive_batches_schema');
 
-class BatchService {
+class SimpleBatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.sqlConfig = sqlConfig;
-    this.batchSize = 100; // Use larger batch size for better performance
-    this.fieldMap = new Map(); // Map of API field names to DB column names
     
-    // Initialize field map from schema
-    adaptiveBatchesSchema.knownBatchFields.forEach(field => {
-      this.fieldMap.set(field.apiField, field.dbColumn);
-    });
-    
-    console.log('Initializing BatchService with:');
+    console.log('Initializing SimpleBatchService with:');
     console.log('API Key (first 5 chars):', this.apiKey ? this.apiKey.substring(0, 5) + '...' : 'undefined');
     console.log('Base URL:', this.baseUrl);
     
@@ -70,6 +62,107 @@ class BatchService {
   }
 
   /**
+   * Initialize the database with batches schema
+   * Uses a fixed schema approach for simplicity
+   * @returns {Promise<boolean>} - Success status
+   */
+  async initializeBatchesDatabase() {
+    try {
+      console.log('Initializing database with fixed batches schema...');
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Create Batches table with fixed schema
+      await pool.request().query(batchesSchema.createBatchesTableSQL);
+      
+      // Create BatchProducts table with fixed schema
+      await pool.request().query(batchesSchema.createBatchProductsTableSQL);
+      
+      // Create BatchPicklists table with fixed schema
+      await pool.request().query(batchesSchema.createBatchPicklistsTableSQL);
+      
+      // Check if SyncStatus table exists
+      const tableResult = await pool.request().query(`
+        SELECT COUNT(*) AS tableExists 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = 'SyncStatus'
+      `);
+      
+      const syncTableExists = tableResult.recordset[0].tableExists > 0;
+      
+      if (syncTableExists) {
+        // Check if batches record exists
+        const recordResult = await pool.request().query(`
+          SELECT COUNT(*) AS recordExists 
+          FROM SyncStatus 
+          WHERE entity_type = 'batches'
+        `);
+        
+        const batchesRecordExists = recordResult.recordset[0].recordExists > 0;
+        
+        if (batchesRecordExists) {
+          // Update existing record
+          await pool.request().query(`
+            UPDATE SyncStatus 
+            SET entity_name = 'batches' 
+            WHERE entity_type = 'batches'
+          `);
+          console.log('Updated existing batches entity in SyncStatus');
+        } else {
+          // Insert new record
+          await pool.request().query(`
+            INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
+            VALUES ('batches', 'batches', '2025-01-01T00:00:00.000Z')
+          `);
+          console.log('Added batches record to SyncStatus table');
+        }
+      } else {
+        // Create SyncStatus table
+        await pool.request().query(`
+          CREATE TABLE SyncStatus (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            entity_name NVARCHAR(100) NOT NULL,
+            entity_type NVARCHAR(100) NOT NULL,
+            last_sync_date DATETIME,
+            total_count INT
+          );
+          
+          INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
+          VALUES ('batches', 'batches', '2025-01-01T00:00:00.000Z');
+        `);
+        console.log('Created SyncStatus table and added batches record');
+      }
+      
+      // Create SyncProgress table if it doesn't exist
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress')
+        BEGIN
+          CREATE TABLE SyncProgress (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            entity_type NVARCHAR(100) NOT NULL,
+            sync_id NVARCHAR(100) NOT NULL,
+            current_offset INT DEFAULT 0,
+            batch_number INT DEFAULT 0,
+            items_processed INT DEFAULT 0,
+            total_items INT,
+            total_batches INT,
+            status NVARCHAR(50) DEFAULT 'in_progress',
+            started_at DATETIME,
+            last_updated DATETIME,
+            completed_at DATETIME
+          );
+        END
+      `);
+      console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
+      
+      console.log('✅ Fixed batches database schema initialized successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Error initializing fixed batches database schema:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get batch count from database
    * @returns {Promise<number>} - Number of batches in database
    */
@@ -109,294 +202,6 @@ class BatchService {
   }
 
   /**
-   * Determine SQL type for a field based on its value and name
-   * @param {string} fieldName - Field name
-   * @param {any} value - Field value
-   * @returns {string} - SQL type
-   */
-  getSqlTypeForField(fieldName, value) {
-    // Check if field is likely to contain JSON data
-    const jsonLikeFields = ['products', 'picklists', 'barcodes', 'tags', 'items', 'data'];
-    const isJsonLikeField = jsonLikeFields.some(term => fieldName.toLowerCase().includes(term));
-    
-    // Check if value is an array or object
-    const isArrayOrObject = value && (Array.isArray(value) || typeof value === 'object');
-    
-    if (isJsonLikeField || isArrayOrObject) {
-      return 'NVARCHAR(MAX)';
-    }
-    
-    // Determine type based on value
-    if (value === null || value === undefined) {
-      return 'NVARCHAR(255)'; // Default for unknown types
-    }
-    
-    if (typeof value === 'number') {
-      // Check if it's an integer or float
-      return Number.isInteger(value) ? 'INT' : 'FLOAT';
-    }
-    
-    if (typeof value === 'boolean') {
-      return 'BIT';
-    }
-    
-    if (value instanceof Date || 
-        (typeof value === 'string' && !isNaN(Date.parse(value)) && 
-         (value.includes('T') || value.includes('-') || value.includes('/')))) {
-      return 'DATETIME';
-    }
-    
-    // Default to string
-    return 'NVARCHAR(255)';
-  }
-
-  /**
-   * Initialize the database with batches schema and sync progress tracking
-   * Automatically adds any missing columns to ensure schema compatibility
-   * @returns {Promise<boolean>} - Success status
-   */
-  async initializeBatchesDatabase() {
-    try {
-      console.log('Initializing database with adaptive batches schema...');
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Create Batches table with core fields
-      await pool.request().query(adaptiveBatchesSchema.createBatchesTableSQL);
-      
-      // Create BatchProducts table with core fields
-      await pool.request().query(adaptiveBatchesSchema.createBatchProductsTableSQL);
-      
-      // Create BatchPicklists table with core fields
-      await pool.request().query(adaptiveBatchesSchema.createBatchPicklistsTableSQL);
-      
-      // Fix any existing JSON-like columns that might be too small
-      await this.fixJsonColumns();
-      
-      // Ensure all known batch fields exist
-      console.log('Checking and adding any missing batch columns...');
-      await pool.request().query(adaptiveBatchesSchema.ensureBatchColumnsSQL);
-      
-      // Ensure all known batch product fields exist
-      console.log('Checking and adding any missing batch product columns...');
-      await pool.request().query(adaptiveBatchesSchema.ensureBatchProductColumnsSQL);
-      
-      // Ensure all known batch picklist fields exist
-      console.log('Checking and adding any missing batch picklist columns...');
-      await pool.request().query(adaptiveBatchesSchema.ensureBatchPicklistColumnsSQL);
-      
-      // Create SyncProgress table for resumable sync if it doesn't exist
-      await pool.request().query(syncProgressSchema.createSyncProgressTableSQL);
-      console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
-      
-      // Check if SyncStatus table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'SyncStatus'
-      `);
-      
-      const syncTableExists = tableResult.recordset[0].tableExists > 0;
-      
-      if (syncTableExists) {
-        // Check if entity_type column exists in SyncStatus
-        const columnResult = await pool.request().query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = 'SyncStatus' AND COLUMN_NAME = 'entity_type'
-        `);
-        
-        const entityTypeColumnExists = columnResult.recordset[0].columnExists > 0;
-        
-        if (entityTypeColumnExists) {
-          // Check if batches record exists
-          const recordResult = await pool.request().query(`
-            SELECT COUNT(*) AS recordExists 
-            FROM SyncStatus 
-            WHERE entity_type = 'batches'
-          `);
-          
-          const batchesRecordExists = recordResult.recordset[0].recordExists > 0;
-          
-          if (batchesRecordExists) {
-            // Update existing record
-            await pool.request().query(`
-              UPDATE SyncStatus 
-              SET entity_name = 'batches' 
-              WHERE entity_type = 'batches'
-            `);
-            console.log('Updated existing batches entity in SyncStatus');
-          } else {
-            // Insert new record
-            await pool.request().query(`
-              INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date)
-              VALUES ('batches', 'batches', '2025-01-01T00:00:00.000Z')
-            `);
-            console.log('Added batches record to SyncStatus table');
-          }
-        } else {
-          console.warn('entity_type column does not exist in SyncStatus table');
-        }
-      } else {
-        console.warn('SyncStatus table does not exist');
-      }
-      
-      console.log('✅ Adaptive batches database schema initialized successfully');
-      return true;
-    } catch (error) {
-      console.error('❌ Error initializing adaptive batches database schema:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Fix JSON columns that might be too small (NVARCHAR(255))
-   * @returns {Promise<boolean>} - Success status
-   */
-  async fixJsonColumns() {
-    try {
-      console.log('Checking for JSON columns that need to be expanded...');
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Check if Batches table exists
-      const tableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'Batches'
-      `);
-      
-      if (tableResult.recordset[0].tableExists === 0) {
-        console.log('Batches table does not exist yet, skipping JSON column fix');
-        return true;
-      }
-      
-      // Get all columns from Batches table
-      const columnsResult = await pool.request().query(`
-        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_NAME = 'Batches'
-      `);
-      
-      // JSON-like column names that should be NVARCHAR(MAX)
-      const jsonLikeColumns = ['products', 'picklists', 'barcodes', 'tags', 'items', 'data'];
-      
-      // Check each column
-      for (const column of columnsResult.recordset) {
-        const columnName = column.COLUMN_NAME;
-        const dataType = column.DATA_TYPE;
-        const maxLength = column.CHARACTER_MAXIMUM_LENGTH;
-        
-        // Check if this is a JSON-like column that's not already NVARCHAR(MAX)
-        const isJsonLike = jsonLikeColumns.some(term => columnName.toLowerCase().includes(term));
-        const needsExpansion = isJsonLike && dataType.toLowerCase() === 'nvarchar' && maxLength !== -1;
-        
-        if (needsExpansion) {
-          console.log(`Expanding column ${columnName} from NVARCHAR(${maxLength}) to NVARCHAR(MAX)...`);
-          
-          try {
-            // Alter the column to NVARCHAR(MAX)
-            await pool.request().query(`
-              ALTER TABLE Batches
-              ALTER COLUMN ${columnName} NVARCHAR(MAX)
-            `);
-            console.log(`✅ Successfully expanded column ${columnName} to NVARCHAR(MAX)`);
-          } catch (alterError) {
-            console.error(`Error expanding column ${columnName}:`, alterError.message);
-          }
-        }
-      }
-      
-      // Also check BatchProducts table
-      const bpTableResult = await pool.request().query(`
-        SELECT COUNT(*) AS tableExists 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_NAME = 'BatchProducts'
-      `);
-      
-      if (bpTableResult.recordset[0].tableExists > 0) {
-        // Get all columns from BatchProducts table
-        const bpColumnsResult = await pool.request().query(`
-          SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
-          FROM INFORMATION_SCHEMA.COLUMNS
-          WHERE TABLE_NAME = 'BatchProducts'
-        `);
-        
-        // Check each column
-        for (const column of bpColumnsResult.recordset) {
-          const columnName = column.COLUMN_NAME;
-          const dataType = column.DATA_TYPE;
-          const maxLength = column.CHARACTER_MAXIMUM_LENGTH;
-          
-          // Check if this is a JSON-like column that's not already NVARCHAR(MAX)
-          const isJsonLike = jsonLikeColumns.some(term => columnName.toLowerCase().includes(term));
-          const needsExpansion = isJsonLike && dataType.toLowerCase() === 'nvarchar' && maxLength !== -1;
-          
-          if (needsExpansion) {
-            console.log(`Expanding column ${columnName} in BatchProducts from NVARCHAR(${maxLength}) to NVARCHAR(MAX)...`);
-            
-            try {
-              // Alter the column to NVARCHAR(MAX)
-              await pool.request().query(`
-                ALTER TABLE BatchProducts
-                ALTER COLUMN ${columnName} NVARCHAR(MAX)
-              `);
-              console.log(`✅ Successfully expanded column ${columnName} in BatchProducts to NVARCHAR(MAX)`);
-            } catch (alterError) {
-              console.error(`Error expanding column ${columnName} in BatchProducts:`, alterError.message);
-            }
-          }
-        }
-      }
-      
-      console.log('✅ Completed JSON column expansion check');
-      return true;
-    } catch (error) {
-      console.error('Error fixing JSON columns:', error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Add missing column to database table
-   * @param {string} tableName - Table name
-   * @param {string} columnName - Column name
-   * @param {string} columnType - Column type (e.g., 'NVARCHAR(255)')
-   * @returns {Promise<boolean>} - Success status
-   */
-  async addMissingColumn(tableName, columnName, columnType) {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Check if column already exists
-      const result = await pool.request()
-        .input('tableName', sql.NVarChar, tableName)
-        .input('columnName', sql.NVarChar, columnName)
-        .query(`
-          SELECT COUNT(*) AS columnExists 
-          FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_NAME = @tableName AND COLUMN_NAME = @columnName
-        `);
-      
-      const columnExists = result.recordset[0].columnExists > 0;
-      
-      if (!columnExists) {
-        // Add column
-        await pool.request().query(`
-          ALTER TABLE ${tableName}
-          ADD ${columnName} ${columnType}
-        `);
-        
-        console.log(`Added new column ${columnName} (${columnType}) to ${tableName} table`);
-        return true;
-      }
-      
-      return false;
-    } catch (error) {
-      console.error(`Error adding column ${columnName} to ${tableName}:`, error.message);
-      return false;
-    }
-  }
-
-  /**
    * Create or get sync progress record
    * @param {string} entityType - Entity type (e.g., 'batches')
    * @param {boolean} isFullSync - Whether this is a full sync
@@ -427,7 +232,6 @@ class BatchService {
       const result = await pool.request()
         .input('entityType', sql.NVarChar, entityType)
         .input('syncId', sql.NVarChar, syncId)
-        .input('isFullSync', sql.Bit, isFullSync ? 1 : 0)
         .input('now', sql.DateTime, now)
         .query(`
           INSERT INTO SyncProgress (
@@ -768,10 +572,6 @@ class BatchService {
       
       if (response.data) {
         console.log(`Retrieved details for batch ${idpicklist_batch}`);
-        
-        // Check for new fields in API response and add them to database
-        await this.handleNewFields(response.data);
-        
         return response.data;
       }
       
@@ -792,50 +592,6 @@ class BatchService {
       
       // Return null on error to continue with other batches
       return null;
-    }
-  }
-
-  /**
-   * Handle new fields in API response
-   * @param {Object} batchData - Batch data from API
-   * @returns {Promise<boolean>} - Success status
-   */
-  async handleNewFields(batchData) {
-    try {
-      // Get known field names from field map
-      const knownFields = Array.from(this.fieldMap.keys());
-      
-      // Get field names from API response
-      const apiFields = Object.keys(batchData);
-      
-      // Find new fields
-      const newFields = apiFields.filter(field => !knownFields.includes(field));
-      
-      if (newFields.length > 0) {
-        console.log(`Discovered ${newFields.length} new fields in API response:`, JSON.stringify(newFields, null, 2));
-        
-        // Add new fields to database
-        for (const field of newFields) {
-          // Skip fields that are handled separately
-          if (field === 'products' || field === 'picklists') {
-            continue;
-          }
-          
-          // Determine SQL type for field
-          const sqlType = this.getSqlTypeForField(field, batchData[field]);
-          
-          // Add field to Batches table
-          await this.addMissingColumn('Batches', field, sqlType);
-          
-          // Add field to field map
-          this.fieldMap.set(field, field);
-        }
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('Error handling new fields:', error.message);
-      return false;
     }
   }
 
@@ -961,6 +717,8 @@ class BatchService {
       
       // Sanitize string fields
       const status = batchDetails.status ? String(batchDetails.status).trim() : null;
+      const assigned_to = batchDetails.assigned_to ? String(batchDetails.assigned_to).trim() : null;
+      const completed_by = batchDetails.completed_by ? String(batchDetails.completed_by).trim() : null;
       
       // Parse dates
       let created = null;
@@ -977,6 +735,7 @@ class BatchService {
       const iduser = batchDetails.iduser || null;
       const idwarehouse = batchDetails.idwarehouse || null;
       const idfulfilment_customer = batchDetails.idfulfilment_customer || null;
+      const comment_count = batchDetails.comment_count || 0;
       
       // Current timestamp for last_sync_date
       const last_sync_date = new Date();
@@ -984,11 +743,6 @@ class BatchService {
       // Handle products and picklists separately
       const products = batchDetails.products || [];
       const picklists = batchDetails.picklists || [];
-      
-      // Remove products and picklists from batchDetails to avoid saving them directly
-      const batchDetailsCopy = { ...batchDetails };
-      delete batchDetailsCopy.products;
-      delete batchDetailsCopy.picklists;
       
       if (batchExists) {
         // Update existing batch
@@ -1001,6 +755,9 @@ class BatchService {
           .input('iduser', sql.Int, iduser)
           .input('idwarehouse', sql.Int, idwarehouse)
           .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
+          .input('assigned_to', sql.NVarChar, assigned_to)
+          .input('completed_by', sql.NVarChar, completed_by)
+          .input('comment_count', sql.Int, comment_count)
           .input('last_sync_date', sql.DateTime, last_sync_date)
           .query(`
             UPDATE Batches 
@@ -1012,6 +769,9 @@ class BatchService {
               iduser = @iduser,
               idwarehouse = @idwarehouse,
               idfulfilment_customer = @idfulfilment_customer,
+              assigned_to = @assigned_to,
+              completed_by = @completed_by,
+              comment_count = @comment_count,
               last_sync_date = @last_sync_date
             WHERE idpicklist_batch = @idpicklist_batch
           `);
@@ -1028,15 +788,20 @@ class BatchService {
           .input('iduser', sql.Int, iduser)
           .input('idwarehouse', sql.Int, idwarehouse)
           .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
+          .input('assigned_to', sql.NVarChar, assigned_to)
+          .input('completed_by', sql.NVarChar, completed_by)
+          .input('comment_count', sql.Int, comment_count)
           .input('last_sync_date', sql.DateTime, last_sync_date)
           .query(`
             INSERT INTO Batches (
               idpicklist_batch, picklist_batchid, status, created_at, updated_at,
-              iduser, idwarehouse, idfulfilment_customer, last_sync_date
+              iduser, idwarehouse, idfulfilment_customer, assigned_to, completed_by,
+              comment_count, last_sync_date
             )
             VALUES (
               @idpicklist_batch, @picklist_batchid, @status, @created, @updated,
-              @iduser, @idwarehouse, @idfulfilment_customer, @last_sync_date
+              @iduser, @idwarehouse, @idfulfilment_customer, @assigned_to, @completed_by,
+              @comment_count, @last_sync_date
             )
           `);
         
@@ -1285,4 +1050,4 @@ class BatchService {
   }
 }
 
-module.exports = BatchService;
+module.exports = SimpleBatchService;
