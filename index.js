@@ -1,5 +1,5 @@
 /**
- * Updated index.js with BatchService integration
+ * Final Index.js with Integrated Data Sync Implementation
  * 
  * This file integrates the actual data sync implementation with the API adapter,
  * ensuring that when sync buttons are clicked in the dashboard, real data is
@@ -14,15 +14,18 @@ const sql = require('mssql');
 require('dotenv').config();
 
 // Import service classes
-const PicqerService = require('./picqer-service');
+const PicqerService = require('./product_service');
 const PicklistService = require('./picklist-service');
 const WarehouseService = require('./warehouse_service');
 const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
-const BatchService = require('./batch_service'); // Added BatchService import
+const BatchService = require('./batch_service');
+
+// Import sync implementation
+const SyncImplementation = require('./sync_implementation');
 
 // Import API adapter with actual data sync implementation
-const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
+const { router: apiAdapter, initializeServices, setSyncImplementation } = require('./data_sync_api_adapter');
 
 // Create Express app
 const app = express();
@@ -55,17 +58,26 @@ const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
 const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
 const userService = new UserService(apiKey, baseUrl, dbConfig);
 const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
-const batchService = new BatchService(apiKey, baseUrl, dbConfig); // Initialize BatchService
+const batchService = new BatchService(apiKey, baseUrl, dbConfig);
 
-// Initialize API adapter with service instances
-initializeServices({
+// Create service instances object
+const serviceInstances = {
   ProductService: picqerService,
   PicklistService: picklistService,
   WarehouseService: warehouseService,
   UserService: userService,
   SupplierService: supplierService,
-  BatchService: batchService // Add BatchService to services
-});
+  BatchService: batchService
+};
+
+// Initialize API adapter with service instances
+initializeServices(serviceInstances);
+
+// Initialize sync implementation with service instances
+const syncImpl = new SyncImplementation(serviceInstances);
+
+// Set sync implementation in API adapter
+setSyncImplementation(syncImpl);
 
 // API routes
 app.use('/api', apiAdapter);
