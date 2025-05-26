@@ -6,7 +6,7 @@
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const adaptiveBatchesSchema = require('./adaptive_batches_schema');
+const adaptiveBatchesSchema = require('./batches_schema');
 const syncProgressSchema = require('./sync_progress_schema');
 
 class AdaptiveBatchService {
