@@ -57,6 +57,45 @@ class BatchService {
   }
 
   /**
+   * Get batch count from database
+   * @returns {Promise<number>} - Number of batches in database
+   */
+  async getBatchCountFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query('SELECT COUNT(*) as count FROM Batches');
+      return result.recordset[0].count;
+    } catch (error) {
+      console.error('Error getting batch count from database:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get last sync date for batches
+   * @returns {Promise<Date|null>} - Last sync date or null if never synced
+   */
+  async getLastSyncDate() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT last_sync_date 
+        FROM SyncStatus 
+        WHERE entity_type = 'batches'
+      `);
+      
+      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
+        return new Date(result.recordset[0].last_sync_date);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error getting last sync date for batches:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Initialize the database with batches schema and sync progress tracking
    * @returns {Promise<boolean>} - Success status
    */
@@ -434,16 +473,27 @@ class BatchService {
    * Get batches updated since a specific date
    * For incremental syncs, use a 30-day rolling window
    * @param {Date} date - The date to check updates from
+   * @param {number} days - Optional number of days to look back
    * @returns {Promise<Array>} - Array of updated batches
    */
-  async getBatchesUpdatedSince(date) {
+  async getBatchesUpdatedSince(date, days = null) {
     try {
-      // For incremental syncs, use a 30-day rolling window
-      // This ensures we don't miss any updates due to timezone differences
-      const thirtyDaysAgo = new Date(date.getTime() - (30 * 24 * 60 * 60 * 1000));
+      let effectiveDate;
       
-      console.log(`Using 30-day rolling window for incremental sync: ${thirtyDaysAgo.toISOString()}`);
-      return this.getAllBatches(thirtyDaysAgo);
+      if (days) {
+        // If days parameter is provided, use that to calculate the date
+        const daysAgo = new Date();
+        daysAgo.setDate(daysAgo.getDate() - days);
+        effectiveDate = daysAgo;
+        console.log(`Using ${days}-day lookback window for sync: ${effectiveDate.toISOString()}`);
+      } else {
+        // Otherwise, use the 30-day rolling window from the provided date
+        const thirtyDaysAgo = new Date(date.getTime() - (30 * 24 * 60 * 60 * 1000));
+        effectiveDate = thirtyDaysAgo;
+        console.log(`Using 30-day rolling window for incremental sync: ${effectiveDate.toISOString()}`);
+      }
+      
+      return this.getAllBatches(effectiveDate);
     } catch (error) {
       console.error('Error getting batches updated since date:', error.message);
       throw error;
@@ -451,455 +501,349 @@ class BatchService {
   }
 
   /**
-   * Get batches updated in the last N days
-   * @param {number} days - Number of days to look back
-   * @returns {Promise<Array>} - Array of updated batches
+   * Save batch to database
+   * @param {Object} batchDetails - Batch details from Picqer API
+   * @returns {Promise<boolean>} - Success status
    */
-  async getBatchesFromLastDays(days) {
+  async saveBatchToDB(batchDetails) {
     try {
-      // Calculate date N days ago
-      const daysAgo = new Date();
-      daysAgo.setDate(daysAgo.getDate() - days);
+      const pool = await sql.connect(this.sqlConfig);
       
-      console.log(`Fetching batches from the last ${days} days (since ${daysAgo.toISOString()})`);
-      return this.getAllBatches(daysAgo);
+      // Check if batch already exists
+      const checkResult = await pool.request()
+        .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
+        .query('SELECT id FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
+      
+      const batchExists = checkResult.recordset.length > 0;
+      
+      // Prepare request with all possible parameters
+      const request = new sql.Request(pool);
+      
+      // Add parameters with proper null handling
+      request.input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch);
+      request.input('picklist_batchid', sql.NVarChar, batchDetails.picklist_batchid || `BATCH-${batchDetails.idpicklist_batch}`);
+      request.input('idwarehouse', sql.Int, batchDetails.idwarehouse || null);
+      request.input('iduser_created', sql.Int, batchDetails.iduser_created || null);
+      request.input('iduser_assigned', sql.Int, batchDetails.iduser_assigned || null);
+      request.input('iduser_processed', sql.Int, batchDetails.iduser_processed || null);
+      request.input('iduser_cancelled', sql.Int, batchDetails.iduser_cancelled || null);
+      request.input('status', sql.NVarChar, batchDetails.status || '');
+      request.input('created', sql.DateTime, batchDetails.created ? new Date(batchDetails.created) : null);
+      request.input('updated', sql.DateTime, batchDetails.updated ? new Date(batchDetails.updated) : null);
+      request.input('processed', sql.DateTime, batchDetails.processed ? new Date(batchDetails.processed) : null);
+      request.input('cancelled', sql.DateTime, batchDetails.cancelled ? new Date(batchDetails.cancelled) : null);
+      request.input('assigned', sql.DateTime, batchDetails.assigned ? new Date(batchDetails.assigned) : null);
+      request.input('last_sync_date', sql.DateTime, new Date());
+      
+      if (batchExists) {
+        // Update existing batch
+        await request.query(`
+          UPDATE Batches 
+          SET 
+            picklist_batchid = @picklist_batchid,
+            idwarehouse = @idwarehouse,
+            iduser_created = @iduser_created,
+            iduser_assigned = @iduser_assigned,
+            iduser_processed = @iduser_processed,
+            iduser_cancelled = @iduser_cancelled,
+            status = @status,
+            created = @created,
+            updated = @updated,
+            processed = @processed,
+            cancelled = @cancelled,
+            assigned = @assigned,
+            last_sync_date = @last_sync_date
+          WHERE idpicklist_batch = @idpicklist_batch
+        `);
+      } else {
+        // Insert new batch
+        await request.query(`
+          INSERT INTO Batches (
+            idpicklist_batch, picklist_batchid, idwarehouse, iduser_created,
+            iduser_assigned, iduser_processed, iduser_cancelled, status,
+            created, updated, processed, cancelled, assigned, last_sync_date
+          )
+          VALUES (
+            @idpicklist_batch, @picklist_batchid, @idwarehouse, @iduser_created,
+            @iduser_assigned, @iduser_processed, @iduser_cancelled, @status,
+            @created, @updated, @processed, @cancelled, @assigned, @last_sync_date
+          )
+        `);
+      }
+      
+      return true;
     } catch (error) {
-      console.error(`Error getting batches from last ${days} days:`, error.message);
+      console.error(`Error saving batch ${batchDetails.idpicklist_batch} to database:`, error.message);
       throw error;
     }
   }
 
   /**
-   * Save batches to database
-   * @param {Array} batches - Array of batches to save
-   * @param {Object|null} syncProgress - Sync progress record for tracking
-   * @returns {Promise<number>} - Number of batches saved
+   * Save batch products to database
+   * @param {number} idpicklist_batch - Batch ID
+   * @param {Array} products - Array of batch products
+   * @returns {Promise<boolean>} - Success status
    */
-  async saveBatchesToDatabase(batches, syncProgress = null) {
+  async saveBatchProductsToDB(idpicklist_batch, products) {
     try {
-      console.log(`Saving ${batches.length} batches to database...`);
-      const pool = await sql.connect(this.sqlConfig);
-      let savedCount = 0;
-      
-      // Process batches in chunks to avoid overwhelming the database
-      const chunkSize = 10;
-      for (let i = 0; i < batches.length; i += chunkSize) {
-        const chunk = batches.slice(i, i + chunkSize);
-        console.log(`Processing batch chunk ${i / chunkSize + 1} of ${Math.ceil(batches.length / chunkSize)}...`);
-        
-        // Update sync progress if provided
-        if (syncProgress) {
-          await this.updateSyncProgress(syncProgress, {
-            batch_number: Math.floor(i / chunkSize) + 1,
-            total_batches: Math.ceil(batches.length / chunkSize),
-            items_processed: i
-          });
-        }
-        
-        // Process each batch in the chunk
-        for (const batch of chunk) {
-          try {
-            // Get full batch details including products and picklists
-            const batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
-            
-            if (!batchDetails) {
-              console.warn(`Skipping batch ${batch.idpicklist_batch} due to missing details`);
-              continue;
-            }
-            
-            // Begin transaction
-            const transaction = new sql.Transaction(pool);
-            await transaction.begin();
-            
-            try {
-              // Check if batch already exists
-              const checkRequest = new sql.Request(transaction);
-              const checkResult = await checkRequest
-                .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-                .query('SELECT id FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
-              
-              const batchExists = checkResult.recordset.length > 0;
-              
-              // Prepare assigned_to and completed_by data
-              const assignedTo = batchDetails.assigned_to || {};
-              const completedBy = batchDetails.completed_by || {};
-              
-              // Handle picklist_batchid - CRITICAL FIX
-              // Check if picklist_batchid exists in the API response
-              let picklist_batchid = '';
-              
-              // Check for different field name variations
-              if ('picklist_batchid' in batchDetails) {
-                picklist_batchid = String(batchDetails.picklist_batchid || '');
-              } else if ('picklistbatchid' in batchDetails) {
-                // Check for camelCase variant
-                picklist_batchid = String(batchDetails.picklistbatchid || '');
-              } else if ('picklist_batch_id' in batchDetails) {
-                // Check for alternative naming
-                picklist_batchid = String(batchDetails.picklist_batch_id || '');
-              } else {
-                // If neither exists, use a fallback based on the ID
-                picklist_batchid = `BATCH-${batchDetails.idpicklist_batch}`;
-              }
-              
-              // Insert or update batch
-              const batchRequest = new sql.Request(transaction);
-              
-              if (batchExists) {
-                // Update existing batch
-                await batchRequest
-                  .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-                  .input('picklist_batchid', sql.NVarChar, picklist_batchid) // Use our fixed value
-                  .input('idwarehouse', sql.Int, batchDetails.idwarehouse || null)
-                  .input('type', sql.NVarChar, batchDetails.type || '')
-                  .input('status', sql.NVarChar, batchDetails.status || '')
-                  .input('assigned_to_iduser', sql.Int, assignedTo.iduser || null)
-                  .input('assigned_to_full_name', sql.NVarChar, assignedTo.full_name || '')
-                  .input('assigned_to_username', sql.NVarChar, assignedTo.username || '')
-                  .input('completed_by_iduser', sql.Int, completedBy.iduser || null)
-                  .input('completed_by_full_name', sql.NVarChar, completedBy.full_name || '')
-                  .input('completed_by_username', sql.NVarChar, completedBy.username || '')
-                  .input('total_products', sql.Int, batchDetails.total_products || 0)
-                  .input('total_picklists', sql.Int, batchDetails.total_picklists || 0)
-                  .input('completed_at', sql.DateTime, batchDetails.completed_at || null)
-                  .input('created_at', sql.DateTime, batchDetails.created_at || null)
-                  .input('updated_at', sql.DateTime, batchDetails.updated_at || null)
-                  .input('idfulfilment_customer', sql.Int, batchDetails.idfulfilment_customer || null)
-                  .input('last_sync_date', sql.DateTime, new Date().toISOString())
-                  .query(`
-                    UPDATE Batches SET
-                      picklist_batchid = @picklist_batchid,
-                      idwarehouse = @idwarehouse,
-                      type = @type,
-                      status = @status,
-                      assigned_to_iduser = @assigned_to_iduser,
-                      assigned_to_full_name = @assigned_to_full_name,
-                      assigned_to_username = @assigned_to_username,
-                      completed_by_iduser = @completed_by_iduser,
-                      completed_by_full_name = @completed_by_full_name,
-                      completed_by_username = @completed_by_username,
-                      total_products = @total_products,
-                      total_picklists = @total_picklists,
-                      completed_at = @completed_at,
-                      created_at = @created_at,
-                      updated_at = @updated_at,
-                      idfulfilment_customer = @idfulfilment_customer,
-                      last_sync_date = @last_sync_date
-                    WHERE idpicklist_batch = @idpicklist_batch
-                  `);
-              } else {
-                // Insert new batch
-                await batchRequest
-                  .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-                  .input('picklist_batchid', sql.NVarChar, picklist_batchid) // Use our fixed value
-                  .input('idwarehouse', sql.Int, batchDetails.idwarehouse || null)
-                  .input('type', sql.NVarChar, batchDetails.type || '')
-                  .input('status', sql.NVarChar, batchDetails.status || '')
-                  .input('assigned_to_iduser', sql.Int, assignedTo.iduser || null)
-                  .input('assigned_to_full_name', sql.NVarChar, assignedTo.full_name || '')
-                  .input('assigned_to_username', sql.NVarChar, assignedTo.username || '')
-                  .input('completed_by_iduser', sql.Int, completedBy.iduser || null)
-                  .input('completed_by_full_name', sql.NVarChar, completedBy.full_name || '')
-                  .input('completed_by_username', sql.NVarChar, completedBy.username || '')
-                  .input('total_products', sql.Int, batchDetails.total_products || 0)
-                  .input('total_picklists', sql.Int, batchDetails.total_picklists || 0)
-                  .input('completed_at', sql.DateTime, batchDetails.completed_at || null)
-                  .input('created_at', sql.DateTime, batchDetails.created_at || null)
-                  .input('updated_at', sql.DateTime, batchDetails.updated_at || null)
-                  .input('idfulfilment_customer', sql.Int, batchDetails.idfulfilment_customer || null)
-                  .input('last_sync_date', sql.DateTime, new Date().toISOString())
-                  .query(`
-                    INSERT INTO Batches (
-                      idpicklist_batch, picklist_batchid, idwarehouse, type, status,
-                      assigned_to_iduser, assigned_to_full_name, assigned_to_username,
-                      completed_by_iduser, completed_by_full_name, completed_by_username,
-                      total_products, total_picklists, completed_at, created_at, updated_at,
-                      idfulfilment_customer, last_sync_date
-                    ) VALUES (
-                      @idpicklist_batch, @picklist_batchid, @idwarehouse, @type, @status,
-                      @assigned_to_iduser, @assigned_to_full_name, @assigned_to_username,
-                      @completed_by_iduser, @completed_by_full_name, @completed_by_username,
-                      @total_products, @total_picklists, @completed_at, @created_at, @updated_at,
-                      @idfulfilment_customer, @last_sync_date
-                    )
-                  `);
-              }
-              
-              // Delete existing batch products and picklists for clean update
-              const deleteRequest = new sql.Request(transaction);
-              await deleteRequest
-                .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-                .query(`
-                  DELETE FROM BatchProducts WHERE idpicklist_batch = @idpicklist_batch;
-                  DELETE FROM BatchPicklists WHERE idpicklist_batch = @idpicklist_batch;
-                `);
-              
-              // Insert batch products if available
-              if (batchDetails.products && Array.isArray(batchDetails.products)) {
-                for (const product of batchDetails.products) {
-                  const productRequest = new sql.Request(transaction);
-                  await productRequest
-                    .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-                    .input('idproduct', sql.Int, product.idproduct || 0)
-                    .input('name', sql.NVarChar, product.name || '')
-                    .input('productcode', sql.NVarChar, product.productcode || '')
-                    .input('productcode_supplier', sql.NVarChar, product.productcode_supplier || '')
-                    .input('stock_location', sql.NVarChar, product.stock_location || '')
-                    .input('image', sql.NVarChar, product.image || '')
-                    .input('barcodes', sql.NVarChar, JSON.stringify(product.barcodes || []))
-                    .input('amount', sql.Int, product.amount || 0)
-                    .input('amount_picked', sql.Int, product.amount_picked || 0)
-                    .input('amount_collected', sql.Int, product.amount_collected || 0)
-                    .input('last_sync_date', sql.DateTime, new Date().toISOString())
-                    .query(`
-                      INSERT INTO BatchProducts (
-                        idpicklist_batch, idproduct, name, productcode, productcode_supplier,
-                        stock_location, image, barcodes, amount, amount_picked, amount_collected,
-                        last_sync_date
-                      ) VALUES (
-                        @idpicklist_batch, @idproduct, @name, @productcode, @productcode_supplier,
-                        @stock_location, @image, @barcodes, @amount, @amount_picked, @amount_collected,
-                        @last_sync_date
-                      )
-                    `);
-                }
-              }
-              
-              // Insert batch picklists if available
-              if (batchDetails.picklists && Array.isArray(batchDetails.picklists)) {
-                for (const picklist of batchDetails.picklists) {
-                  const picklistRequest = new sql.Request(transaction);
-                  await picklistRequest
-                    .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-                    .input('idpicklist', sql.Int, picklist.idpicklist || 0)
-                    .input('picklistid', sql.NVarChar, picklist.picklistid || '')
-                    .input('reference', sql.NVarChar, picklist.reference || '')
-                    .input('status', sql.NVarChar, picklist.status || '')
-                    .input('alias', sql.NVarChar, picklist.alias || '')
-                    .input('picking_container', sql.NVarChar, picklist.picking_container || '')
-                    .input('total_products', sql.Int, picklist.total_products || 0)
-                    .input('delivery_name', sql.NVarChar, picklist.delivery_name || '')
-                    .input('has_notes', sql.Bit, picklist.has_notes ? 1 : 0)
-                    .input('has_customer_remarks', sql.Bit, picklist.has_customer_remarks ? 1 : 0)
-                    .input('customer_remarks', sql.NVarChar, picklist.customer_remarks || '')
-                    .input('created_at', sql.DateTime, picklist.created_at || null)
-                    .input('last_sync_date', sql.DateTime, new Date().toISOString())
-                    .query(`
-                      INSERT INTO BatchPicklists (
-                        idpicklist_batch, idpicklist, picklistid, reference, status,
-                        alias, picking_container, total_products, delivery_name,
-                        has_notes, has_customer_remarks, customer_remarks, created_at,
-                        last_sync_date
-                      ) VALUES (
-                        @idpicklist_batch, @idpicklist, @picklistid, @reference, @status,
-                        @alias, @picking_container, @total_products, @delivery_name,
-                        @has_notes, @has_customer_remarks, @customer_remarks, @created_at,
-                        @last_sync_date
-                      )
-                    `);
-                }
-              }
-              
-              // Commit transaction
-              await transaction.commit();
-              savedCount++;
-              console.log(`✅ Saved batch ${batchDetails.idpicklist_batch} to database`);
-            } catch (error) {
-              // Rollback transaction on error
-              await transaction.rollback();
-              console.error(`Error saving batch ${batch.idpicklist_batch} to database:`, error.message);
-            }
-          } catch (error) {
-            console.error(`Error processing batch ${batch.idpicklist_batch}:`, error.message);
-          }
-          
-          // Add a small delay between batches to avoid overwhelming the database
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        
-        // Update sync progress after each chunk if provided
-        if (syncProgress) {
-          await this.updateSyncProgress(syncProgress, {
-            items_processed: Math.min(i + chunk.length, batches.length)
-          });
-        }
+      if (!products || products.length === 0) {
+        return true;
       }
       
-      console.log(`✅ Saved ${savedCount} out of ${batches.length} batches to database`);
+      const pool = await sql.connect(this.sqlConfig);
       
-      // Update SyncStatus table with last sync date
+      // Delete existing products for this batch
       await pool.request()
-        .input('lastSyncDate', sql.DateTime, new Date().toISOString())
+        .input('idpicklist_batch', sql.Int, idpicklist_batch)
+        .query('DELETE FROM BatchProducts WHERE idpicklist_batch = @idpicklist_batch');
+      
+      // Insert new products
+      for (const product of products) {
+        // Skip invalid products
+        if (!product || !product.idproduct) {
+          console.warn('Invalid product data, missing idproduct:', product);
+          continue;
+        }
+        
+        const request = new sql.Request(pool);
+        
+        // Add parameters with proper null handling
+        request.input('idpicklist_batch', sql.Int, idpicklist_batch);
+        request.input('idproduct', sql.Int, product.idproduct);
+        request.input('productcode', sql.NVarChar, product.productcode || '');
+        request.input('name', sql.NVarChar, product.name || '');
+        request.input('amount', sql.Int, product.amount || 0);
+        request.input('amount_processed', sql.Int, product.amount_processed || 0);
+        request.input('amount_cancelled', sql.Int, product.amount_cancelled || 0);
+        request.input('last_sync_date', sql.DateTime, new Date());
+        
+        await request.query(`
+          INSERT INTO BatchProducts (
+            idpicklist_batch, idproduct, productcode, name,
+            amount, amount_processed, amount_cancelled, last_sync_date
+          )
+          VALUES (
+            @idpicklist_batch, @idproduct, @productcode, @name,
+            @amount, @amount_processed, @amount_cancelled, @last_sync_date
+          )
+        `);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error saving products for batch ${idpicklist_batch} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Save batch picklists to database
+   * @param {number} idpicklist_batch - Batch ID
+   * @param {Array} picklists - Array of batch picklists
+   * @returns {Promise<boolean>} - Success status
+   */
+  async saveBatchPicklistsToDB(idpicklist_batch, picklists) {
+    try {
+      if (!picklists || picklists.length === 0) {
+        return true;
+      }
+      
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Delete existing picklists for this batch
+      await pool.request()
+        .input('idpicklist_batch', sql.Int, idpicklist_batch)
+        .query('DELETE FROM BatchPicklists WHERE idpicklist_batch = @idpicklist_batch');
+      
+      // Insert new picklists
+      for (const picklist of picklists) {
+        // Skip invalid picklists
+        if (!picklist || !picklist.idpicklist) {
+          console.warn('Invalid picklist data, missing idpicklist:', picklist);
+          continue;
+        }
+        
+        const request = new sql.Request(pool);
+        
+        // Add parameters with proper null handling
+        request.input('idpicklist_batch', sql.Int, idpicklist_batch);
+        request.input('idpicklist', sql.Int, picklist.idpicklist);
+        request.input('picklistid', sql.NVarChar, picklist.picklistid || '');
+        request.input('status', sql.NVarChar, picklist.status || '');
+        request.input('last_sync_date', sql.DateTime, new Date());
+        
+        await request.query(`
+          INSERT INTO BatchPicklists (
+            idpicklist_batch, idpicklist, picklistid, status, last_sync_date
+          )
+          VALUES (
+            @idpicklist_batch, @idpicklist, @picklistid, @status, @last_sync_date
+          )
+        `);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Error saving picklists for batch ${idpicklist_batch} to database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Update sync status in SyncStatus table
+   * @param {number} syncCount - Number of items synced
+   * @returns {Promise<boolean>} - Success status
+   */
+  async updateSyncStatus(syncCount) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Get current total count
+      const countResult = await pool.request()
+        .query('SELECT COUNT(*) as count FROM Batches');
+      
+      const totalCount = countResult.recordset[0].count;
+      
+      // Update SyncStatus record for batches
+      await pool.request()
+        .input('entityType', sql.NVarChar, 'batches')
+        .input('lastSyncDate', sql.DateTime, new Date())
+        .input('lastSyncCount', sql.Int, syncCount)
+        .input('totalCount', sql.Int, totalCount)
         .query(`
           UPDATE SyncStatus 
-          SET last_sync_date = @lastSyncDate 
-          WHERE entity_type = 'batches'
+          SET 
+            last_sync_date = @lastSyncDate,
+            last_sync_count = @lastSyncCount,
+            total_count = @totalCount
+          WHERE entity_type = @entityType
         `);
       
-      return savedCount;
+      return true;
     } catch (error) {
-      console.error('Error saving batches to database:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Get batch count from database
-   * @returns {Promise<number>} - Number of batches in database
-   */
-  async getBatchCountFromDatabase() {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query('SELECT COUNT(*) as count FROM Batches');
-      return result.recordset[0].count;
-    } catch (error) {
-      console.error('Error getting batch count from database:', error.message);
-      return 0;
-    }
-  }
-
-  /**
-   * Get last sync date for batches
-   * @returns {Promise<Date|null>} - Last sync date or null if never synced
-   */
-  async getLastSyncDate() {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      const result = await pool.request().query(`
-        SELECT last_sync_date 
-        FROM SyncStatus 
-        WHERE entity_type = 'batches'
-      `);
-      
-      if (result.recordset.length > 0 && result.recordset[0].last_sync_date) {
-        return new Date(result.recordset[0].last_sync_date);
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Error getting last sync date for batches:', error.message);
-      return null;
+      console.error('Error updating sync status:', error.message);
+      return false;
     }
   }
 
   /**
    * Sync batches from Picqer to database
    * @param {boolean} fullSync - Whether to perform a full sync
-   * @param {number|null} days - Optional number of days to limit sync to
-   * @returns {Promise<Object>} - Sync results
+   * @param {number} days - Optional number of days to look back
+   * @returns {Promise<Object>} - Results of sync operation
    */
   async syncBatches(fullSync = false, days = null) {
     try {
-      // If days parameter is provided, log it
-      if (days !== null) {
-        console.log(`Starting batch sync for the last ${days} days...`);
-      } else {
-        console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
-      }
+      console.log(`Starting ${fullSync ? 'full' : 'incremental'} batch sync...`);
       
-      // Create or get sync progress record
+      // Create sync progress record
       const syncProgress = await this.createOrGetSyncProgress('batches', fullSync);
       
-      let batches = [];
-      
-      // If days parameter is provided, use it regardless of fullSync setting
-      if (days !== null) {
-        batches = await this.getBatchesFromLastDays(days);
-      } else if (fullSync) {
-        // Full sync: Get all batches
+      let batches;
+      if (fullSync) {
+        // Full sync: get all batches
         batches = await this.getAllBatches(null, syncProgress);
       } else {
-        // Incremental sync: Get batches updated since last sync
+        // Incremental sync: get batches updated since last sync
         const lastSyncDate = await this.getLastSyncDate();
-        
-        if (lastSyncDate) {
-          console.log(`Last sync date: ${lastSyncDate.toISOString()}`);
-          batches = await this.getBatchesUpdatedSince(lastSyncDate, syncProgress);
-        } else {
-          console.log('No last sync date found, performing full sync');
-          batches = await this.getAllBatches(null, syncProgress);
-        }
+        batches = await this.getBatchesUpdatedSince(lastSyncDate, days);
       }
       
-      console.log(`Retrieved ${batches.length} batches from Picqer`);
+      if (!batches || batches.length === 0) {
+        console.log('No batches to sync');
+        
+        // Complete sync progress
+        await this.completeSyncProgress(syncProgress, true);
+        
+        return { 
+          success: true, 
+          savedBatches: 0, 
+          savedProducts: 0, 
+          savedPicklists: 0 
+        };
+      }
       
-      // Save batches to database
-      const savedCount = await this.saveBatchesToDatabase(batches, syncProgress);
+      console.log(`Syncing ${batches.length} batches...`);
+      
+      let savedBatches = 0;
+      let savedProducts = 0;
+      let savedPicklists = 0;
+      let batchNumber = 0;
+      
+      // Process batches in batches for better performance
+      for (let i = 0; i < batches.length; i += this.batchSize) {
+        batchNumber++;
+        const batchGroup = batches.slice(i, i + this.batchSize);
+        console.log(`Processing batch group ${batchNumber} with ${batchGroup.length} batches...`);
+        
+        // Update sync progress
+        await this.updateSyncProgress(syncProgress, {
+          batch_number: batchNumber,
+          items_processed: i
+        });
+        
+        // Process each batch in the group
+        for (const batch of batchGroup) {
+          try {
+            // Get batch details
+            const batchDetails = await this.getBatchDetails(batch.idpicklist_batch);
+            
+            if (!batchDetails) {
+              console.warn(`Could not get details for batch ${batch.idpicklist_batch}, skipping`);
+              continue;
+            }
+            
+            // Ensure picklist_batchid is a valid string
+            if (!batchDetails.picklist_batchid) {
+              batchDetails.picklist_batchid = `BATCH-${batchDetails.idpicklist_batch}`;
+            }
+            
+            // Save batch to database
+            await this.saveBatchToDB(batchDetails);
+            savedBatches++;
+            
+            // Save batch products if available
+            if (batchDetails.products && Array.isArray(batchDetails.products)) {
+              await this.saveBatchProductsToDB(batch.idpicklist_batch, batchDetails.products);
+              savedProducts += batchDetails.products.length;
+            }
+            
+            // Save batch picklists if available
+            if (batchDetails.picklists && Array.isArray(batchDetails.picklists)) {
+              await this.saveBatchPicklistsToDB(batch.idpicklist_batch, batchDetails.picklists);
+              savedPicklists += batchDetails.picklists.length;
+            }
+          } catch (batchError) {
+            console.error(`Error saving batch ${batch.idpicklist_batch}:`, batchError.message);
+            // Continue with next batch
+          }
+        }
+        
+        console.log(`Completed batch group ${batchNumber}, saved ${savedBatches} batches so far`);
+        
+        // Add a small delay between batch groups to avoid database overload
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // Update sync status
+      await this.updateSyncStatus(savedBatches);
       
       // Complete sync progress
       await this.completeSyncProgress(syncProgress, true);
       
-      console.log(`✅ Batch sync completed: ${savedCount} batches saved`);
-      
+      console.log(`✅ Batch sync completed: ${savedBatches} batches, ${savedProducts} products, and ${savedPicklists} picklists saved`);
       return {
         success: true,
-        totalBatches: batches.length,
-        savedBatches: savedCount
+        savedBatches,
+        savedProducts,
+        savedPicklists
       };
     } catch (error) {
-      console.error('❌ Error in batch sync:', error.message);
-      
-      // Update sync progress with failure status
-      if (syncProgress) {
-        await this.completeSyncProgress(syncProgress, false);
-      }
-      
+      console.error('Error in batch sync:', error.message);
       return {
         success: false,
         error: error.message
       };
-    }
-  }
-
-  /**
-   * Update sync status for batches
-   * @param {string} entityType - Entity type (e.g., 'batches')
-   * @param {number} count - Number of items synced
-   * @returns {Promise<boolean>} - Success status
-   */
-  async updateSyncStatus(entityType, count) {
-    try {
-      console.log(`Updating sync status for ${entityType}...`);
-      
-      const pool = await sql.connect(this.sqlConfig);
-      const now = new Date().toISOString();
-      
-      // Check if record exists
-      const checkResult = await pool.request()
-        .input('entityType', sql.NVarChar, entityType)
-        .query('SELECT COUNT(*) AS recordCount FROM SyncStatus WHERE entity_type = @entityType');
-      
-      const recordExists = checkResult.recordset[0].recordCount > 0;
-      
-      if (recordExists) {
-        // Update existing record
-        await pool.request()
-          .input('entityType', sql.NVarChar, entityType)
-          .input('now', sql.DateTime, now)
-          .input('count', sql.Int, count)
-          .query(`
-            UPDATE SyncStatus 
-            SET last_sync_date = @now, last_sync_count = @count 
-            WHERE entity_type = @entityType
-          `);
-      } else {
-        // Insert new record
-        await pool.request()
-          .input('entityType', sql.NVarChar, entityType)
-          .input('entityName', sql.NVarChar, entityType)
-          .input('now', sql.DateTime, now)
-          .input('count', sql.Int, count)
-          .query(`
-            INSERT INTO SyncStatus (entity_name, entity_type, last_sync_date, last_sync_count)
-            VALUES (@entityName, @entityType, @now, @count)
-          `);
-      }
-      
-      console.log(`✅ Updated sync status for ${entityType}`);
-      return true;
-    } catch (error) {
-      console.error(`Error updating sync status for ${entityType}:`, error.message);
-      return false;
     }
   }
 }
