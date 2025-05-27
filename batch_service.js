@@ -2,20 +2,20 @@
  * Picqer Batch Service - Strictly following Picqer API documentation
  * Handles synchronization of picklist batches between Picqer and SQL database
  * All non-Picqer API fields removed for strict compliance
- * SIMPLIFIED VERSION: Assumes batch_number column has already been removed
+ * Fixed version with proper identity column handling
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
 const batchesSchema = require('./batches_schema');
 
-class SimpleBatchService {
+class BatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.sqlConfig = sqlConfig;
     
-    console.log('Initializing SimpleBatchService with:');
+    console.log('Initializing BatchService with:');
     console.log('API Key (first 5 chars):', this.apiKey ? this.apiKey.substring(0, 5) + '...' : 'undefined');
     console.log('Base URL:', this.baseUrl);
     
@@ -72,14 +72,77 @@ class SimpleBatchService {
       console.log('Initializing database with fixed batches schema...');
       const pool = await sql.connect(this.sqlConfig);
       
-      // Create Batches table with fixed schema
-      await pool.request().query(batchesSchema.createBatchesTableSQL);
+      // Create Batches table with fixed schema and identity column for idbatch
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Batches')
+        BEGIN
+          CREATE TABLE Batches (
+            idbatch INT IDENTITY(1,1) PRIMARY KEY,
+            idpicklist_batch INT NOT NULL,
+            picklist_batchid NVARCHAR(255),
+            status NVARCHAR(50),
+            created_at DATETIME,
+            updated_at DATETIME,
+            iduser INT,
+            idwarehouse INT,
+            idfulfilment_customer INT,
+            assigned_to NVARCHAR(255),
+            completed_by NVARCHAR(255),
+            comment_count INT,
+            last_sync_date DATETIME
+          );
+          
+          CREATE UNIQUE INDEX idx_batches_idpicklist_batch ON Batches(idpicklist_batch);
+        END
+      `);
       
       // Create BatchProducts table with fixed schema
-      await pool.request().query(batchesSchema.createBatchProductsTableSQL);
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BatchProducts')
+        BEGIN
+          CREATE TABLE BatchProducts (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            idpicklist_batch INT NOT NULL,
+            idproduct INT,
+            name NVARCHAR(255),
+            productcode NVARCHAR(255),
+            productcode_supplier NVARCHAR(255),
+            stock_location NVARCHAR(255),
+            image NVARCHAR(MAX),
+            barcodes NVARCHAR(MAX),
+            amount INT,
+            amount_picked INT,
+            amount_collected INT,
+            last_sync_date DATETIME,
+            FOREIGN KEY (idpicklist_batch) REFERENCES Batches(idpicklist_batch)
+          );
+        END
+      `);
       
       // Create BatchPicklists table with fixed schema
-      await pool.request().query(batchesSchema.createBatchPicklistsTableSQL);
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BatchPicklists')
+        BEGIN
+          CREATE TABLE BatchPicklists (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            idpicklist_batch INT NOT NULL,
+            idpicklist INT,
+            picklistid NVARCHAR(255),
+            reference NVARCHAR(255),
+            status NVARCHAR(50),
+            alias NVARCHAR(255),
+            picking_container NVARCHAR(255),
+            total_products INT,
+            delivery_name NVARCHAR(255),
+            has_notes BIT,
+            has_customer_remarks BIT,
+            customer_remarks NVARCHAR(MAX),
+            created_at DATETIME,
+            last_sync_date DATETIME,
+            FOREIGN KEY (idpicklist_batch) REFERENCES Batches(idpicklist_batch)
+          );
+        END
+      `);
       
       // Check if SyncStatus table exists
       const tableResult = await pool.request().query(`
@@ -134,7 +197,6 @@ class SimpleBatchService {
       }
       
       // Create SyncProgress table if it doesn't exist
-      // Simplified version - no batch_number column
       await pool.request().query(`
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SyncProgress')
         BEGIN
@@ -730,7 +792,7 @@ class SimpleBatchService {
       // Check if batch already exists
       const checkResult = await pool.request()
         .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-        .query('SELECT id FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
+        .query('SELECT idbatch FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
       
       const batchExists = checkResult.recordset.length > 0;
       
@@ -807,7 +869,7 @@ class SimpleBatchService {
         
         console.log(`Updated existing batch ${batchDetails.idpicklist_batch}`);
       } else {
-        // Insert new batch
+        // Insert new batch - let the database generate the idbatch value
         await pool.request()
           .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
           .input('picklist_batchid', sql.NVarChar, picklist_batchid)
@@ -835,6 +897,16 @@ class SimpleBatchService {
           `);
         
         console.log(`Inserted new batch ${batchDetails.idpicklist_batch}`);
+      }
+      
+      // Get the batch ID for related records
+      const batchIdResult = await pool.request()
+        .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
+        .query('SELECT idpicklist_batch FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
+      
+      if (batchIdResult.recordset.length === 0) {
+        console.error(`Failed to retrieve batch ID for batch ${batchDetails.idpicklist_batch}`);
+        return false;
       }
       
       // Save batch products if available
@@ -1081,4 +1153,4 @@ class SimpleBatchService {
   }
 }
 
-module.exports = SimpleBatchService;
+module.exports = BatchService;
