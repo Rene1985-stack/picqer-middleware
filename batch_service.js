@@ -1,13 +1,12 @@
 /**
- * Picqer Batch Service - Strictly following Picqer API documentation
+ * Complete Batch Service - Strictly following Picqer API documentation
  * Handles synchronization of picklist batches between Picqer and SQL database
- * All non-Picqer API fields removed for strict compliance
- * Fixed version with proper identity column handling
+ * Captures ALL attributes from the Picqer API documentation
  */
 const axios = require('axios');
 const sql = require('mssql');
 const { v4: uuidv4 } = require('uuid');
-const batchesSchema = require('./batches_schema');
+const batchesSchema = require('./complete_batches_schema');
 
 class BatchService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -64,85 +63,22 @@ class BatchService {
 
   /**
    * Initialize the database with batches schema
-   * Uses a fixed schema approach for simplicity
+   * Uses a complete schema approach to capture all Picqer API fields
    * @returns {Promise<boolean>} - Success status
    */
   async initializeBatchesDatabase() {
     try {
-      console.log('Initializing database with fixed batches schema...');
+      console.log('Initializing database with complete batches schema...');
       const pool = await sql.connect(this.sqlConfig);
       
-      // Create Batches table with fixed schema and identity column for idbatch
-      await pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Batches')
-        BEGIN
-          CREATE TABLE Batches (
-            idbatch INT IDENTITY(1,1) PRIMARY KEY,
-            idpicklist_batch INT NOT NULL,
-            picklist_batchid NVARCHAR(255),
-            status NVARCHAR(50),
-            created_at DATETIME,
-            updated_at DATETIME,
-            iduser INT,
-            idwarehouse INT,
-            idfulfilment_customer INT,
-            assigned_to NVARCHAR(255),
-            completed_by NVARCHAR(255),
-            comment_count INT,
-            last_sync_date DATETIME
-          );
-          
-          CREATE UNIQUE INDEX idx_batches_idpicklist_batch ON Batches(idpicklist_batch);
-        END
-      `);
+      // Create Batches table with complete schema
+      await pool.request().query(batchesSchema.createBatchesTableSQL);
       
-      // Create BatchProducts table with fixed schema
-      await pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BatchProducts')
-        BEGIN
-          CREATE TABLE BatchProducts (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            idpicklist_batch INT NOT NULL,
-            idproduct INT,
-            name NVARCHAR(255),
-            productcode NVARCHAR(255),
-            productcode_supplier NVARCHAR(255),
-            stock_location NVARCHAR(255),
-            image NVARCHAR(MAX),
-            barcodes NVARCHAR(MAX),
-            amount INT,
-            amount_picked INT,
-            amount_collected INT,
-            last_sync_date DATETIME,
-            FOREIGN KEY (idpicklist_batch) REFERENCES Batches(idpicklist_batch)
-          );
-        END
-      `);
+      // Create BatchProducts table
+      await pool.request().query(batchesSchema.createBatchProductsTableSQL);
       
-      // Create BatchPicklists table with fixed schema
-      await pool.request().query(`
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BatchPicklists')
-        BEGIN
-          CREATE TABLE BatchPicklists (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            idpicklist_batch INT NOT NULL,
-            idpicklist INT,
-            picklistid NVARCHAR(255),
-            reference NVARCHAR(255),
-            status NVARCHAR(50),
-            alias NVARCHAR(255),
-            picking_container NVARCHAR(255),
-            total_products INT,
-            delivery_name NVARCHAR(255),
-            has_notes BIT,
-            has_customer_remarks BIT,
-            customer_remarks NVARCHAR(MAX),
-            created_at DATETIME,
-            last_sync_date DATETIME,
-            FOREIGN KEY (idpicklist_batch) REFERENCES Batches(idpicklist_batch)
-          );
-        END
-      `);
+      // Create BatchPicklists table
+      await pool.request().query(batchesSchema.createBatchPicklistsTableSQL);
       
       // Check if SyncStatus table exists
       const tableResult = await pool.request().query(`
@@ -216,10 +152,10 @@ class BatchService {
       `);
       console.log('✅ Created/verified SyncProgress table for resumable sync functionality');
       
-      console.log('✅ Fixed batches database schema initialized successfully');
+      console.log('✅ Complete batches database schema initialized successfully');
       return true;
     } catch (error) {
-      console.error('❌ Error initializing fixed batches database schema:', error.message);
+      console.error('❌ Error initializing complete batches database schema:', error.message);
       throw error;
     }
   }
@@ -808,18 +744,33 @@ class BatchService {
       
       // Sanitize string fields
       const status = batchDetails.status ? String(batchDetails.status).trim() : null;
-      const assigned_to = batchDetails.assigned_to ? String(batchDetails.assigned_to).trim() : null;
-      const completed_by = batchDetails.completed_by ? String(batchDetails.completed_by).trim() : null;
+      const type = batchDetails.type ? String(batchDetails.type).trim() : null;
       
-      // Parse dates
-      let created = null;
-      if (batchDetails.created_at) {
-        created = new Date(batchDetails.created_at);
+      // Handle assigned_to and completed_by as JSON strings (they are arrays in the API)
+      let assigned_to = null;
+      if (batchDetails.assigned_to) {
+        assigned_to = JSON.stringify(batchDetails.assigned_to);
       }
       
-      let updated = null;
+      let completed_by = null;
+      if (batchDetails.completed_by) {
+        completed_by = JSON.stringify(batchDetails.completed_by);
+      }
+      
+      // Parse dates
+      let created_at = null;
+      if (batchDetails.created_at) {
+        created_at = new Date(batchDetails.created_at);
+      }
+      
+      let updated_at = null;
       if (batchDetails.updated_at) {
-        updated = new Date(batchDetails.updated_at);
+        updated_at = new Date(batchDetails.updated_at);
+      }
+      
+      let completed_at = null;
+      if (batchDetails.completed_at) {
+        completed_at = new Date(batchDetails.completed_at);
       }
       
       // Sanitize numeric fields
@@ -827,6 +778,8 @@ class BatchService {
       const idwarehouse = batchDetails.idwarehouse || null;
       const idfulfilment_customer = batchDetails.idfulfilment_customer || null;
       const comment_count = batchDetails.comment_count || 0;
+      const total_products = batchDetails.total_products || 0;
+      const total_picklists = batchDetails.total_picklists || 0;
       
       // Current timestamp for last_sync_date
       const last_sync_date = new Date();
@@ -840,28 +793,36 @@ class BatchService {
         await pool.request()
           .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
           .input('picklist_batchid', sql.NVarChar, picklist_batchid)
+          .input('type', sql.NVarChar, type)
           .input('status', sql.NVarChar, status)
-          .input('created', sql.DateTime, created)
-          .input('updated', sql.DateTime, updated)
+          .input('assigned_to', sql.NVarChar, assigned_to)
+          .input('completed_by', sql.NVarChar, completed_by)
+          .input('total_products', sql.Int, total_products)
+          .input('total_picklists', sql.Int, total_picklists)
+          .input('completed_at', sql.DateTime, completed_at)
+          .input('created_at', sql.DateTime, created_at)
+          .input('updated_at', sql.DateTime, updated_at)
           .input('iduser', sql.Int, iduser)
           .input('idwarehouse', sql.Int, idwarehouse)
           .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
-          .input('assigned_to', sql.NVarChar, assigned_to)
-          .input('completed_by', sql.NVarChar, completed_by)
           .input('comment_count', sql.Int, comment_count)
           .input('last_sync_date', sql.DateTime, last_sync_date)
           .query(`
             UPDATE Batches 
             SET 
               picklist_batchid = @picklist_batchid,
+              type = @type,
               status = @status,
-              created_at = @created,
-              updated_at = @updated,
+              assigned_to = @assigned_to,
+              completed_by = @completed_by,
+              total_products = @total_products,
+              total_picklists = @total_picklists,
+              completed_at = @completed_at,
+              created_at = @created_at,
+              updated_at = @updated_at,
               iduser = @iduser,
               idwarehouse = @idwarehouse,
               idfulfilment_customer = @idfulfilment_customer,
-              assigned_to = @assigned_to,
-              completed_by = @completed_by,
               comment_count = @comment_count,
               last_sync_date = @last_sync_date
             WHERE idpicklist_batch = @idpicklist_batch
@@ -873,40 +834,36 @@ class BatchService {
         await pool.request()
           .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
           .input('picklist_batchid', sql.NVarChar, picklist_batchid)
+          .input('type', sql.NVarChar, type)
           .input('status', sql.NVarChar, status)
-          .input('created', sql.DateTime, created)
-          .input('updated', sql.DateTime, updated)
+          .input('assigned_to', sql.NVarChar, assigned_to)
+          .input('completed_by', sql.NVarChar, completed_by)
+          .input('total_products', sql.Int, total_products)
+          .input('total_picklists', sql.Int, total_picklists)
+          .input('completed_at', sql.DateTime, completed_at)
+          .input('created_at', sql.DateTime, created_at)
+          .input('updated_at', sql.DateTime, updated_at)
           .input('iduser', sql.Int, iduser)
           .input('idwarehouse', sql.Int, idwarehouse)
           .input('idfulfilment_customer', sql.Int, idfulfilment_customer)
-          .input('assigned_to', sql.NVarChar, assigned_to)
-          .input('completed_by', sql.NVarChar, completed_by)
           .input('comment_count', sql.Int, comment_count)
           .input('last_sync_date', sql.DateTime, last_sync_date)
           .query(`
             INSERT INTO Batches (
-              idpicklist_batch, picklist_batchid, status, created_at, updated_at,
-              iduser, idwarehouse, idfulfilment_customer, assigned_to, completed_by,
-              comment_count, last_sync_date
+              idpicklist_batch, picklist_batchid, type, status, 
+              assigned_to, completed_by, total_products, total_picklists,
+              completed_at, created_at, updated_at, iduser, idwarehouse, 
+              idfulfilment_customer, comment_count, last_sync_date
             )
             VALUES (
-              @idpicklist_batch, @picklist_batchid, @status, @created, @updated,
-              @iduser, @idwarehouse, @idfulfilment_customer, @assigned_to, @completed_by,
-              @comment_count, @last_sync_date
+              @idpicklist_batch, @picklist_batchid, @type, @status,
+              @assigned_to, @completed_by, @total_products, @total_picklists,
+              @completed_at, @created_at, @updated_at, @iduser, @idwarehouse,
+              @idfulfilment_customer, @comment_count, @last_sync_date
             )
           `);
         
         console.log(`Inserted new batch ${batchDetails.idpicklist_batch}`);
-      }
-      
-      // Get the batch ID for related records
-      const batchIdResult = await pool.request()
-        .input('idpicklist_batch', sql.Int, batchDetails.idpicklist_batch)
-        .query('SELECT idpicklist_batch FROM Batches WHERE idpicklist_batch = @idpicklist_batch');
-      
-      if (batchIdResult.recordset.length === 0) {
-        console.error(`Failed to retrieve batch ID for batch ${batchDetails.idpicklist_batch}`);
-        return false;
       }
       
       // Save batch products if available
