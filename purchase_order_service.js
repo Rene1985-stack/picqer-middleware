@@ -1,6 +1,7 @@
 /**
  * Purchase Order service for interacting with the Picqer API and syncing purchase orders to Azure SQL
  * Based on the Picqer API documentation: https://picqer.com/en/api/purchaseorders
+ * OPTIMIZED VERSION - Uses products data included in purchase orders response
  */
 const axios = require("axios");
 const sql = require("mssql");
@@ -111,7 +112,7 @@ class PurchaseOrderService {
       // Create PurchaseOrderProducts table if it doesn't exist
       await pool.request().query(purchaseOrdersSchema.createPurchaseOrderProductsTableSQL);
       
-      // Create PurchaseOrderComments table if it doesn't exist
+      // Create PurchaseOrderComments table if it doesn't exist (optional)
       await pool.request().query(purchaseOrdersSchema.createPurchaseOrderCommentsTableSQL);
       
       // Update PurchaseOrders table with any missing columns
@@ -190,7 +191,6 @@ class PurchaseOrderService {
       const pool = await sql.connect(this.sqlConfig);
       
       // For full sync or days parameter, always create a new sync progress record
-      // This ensures we start from offset 0
       if (isFullSync || usesDaysParam) {
         console.log(`Creating new sync progress for ${entityType} (${isFullSync ? 'full sync' : 'days parameter sync'})`);
         
@@ -299,14 +299,14 @@ class PurchaseOrderService {
   }
 
   /**
-   * Get all purchase orders from Picqer with pagination
+   * Get all purchase orders from Picqer with pagination (OPTIMIZED VERSION)
    * @param {Date} updatedSince - Only get purchase orders updated since this date
    * @param {Object} syncProgress - Sync progress object for resumable sync
    * @param {Date} cutoffDate - Cutoff date for days parameter filtering
-   * @returns {Promise<Array>} - Array of unique purchase orders
+   * @returns {Promise<Array>} - Array of unique purchase orders with products included
    */
   async getAllPurchaseOrders(updatedSince = null, syncProgress = null, cutoffDate = null) {
-    console.log("Fetching all purchase orders from Picqer...");
+    console.log("Fetching all purchase orders from Picqer (with products included)...");
     
     let allPurchaseOrders = [];
     let offset = syncProgress ? syncProgress.offset : 0;
@@ -333,7 +333,7 @@ class PurchaseOrderService {
           params.updated_after = formattedDate;
         }
         
-        // Make API request
+        // Make API request - this already includes products in the response!
         const response = await this.client.get("/purchaseorders", { params });
         
         // Check if we have data
@@ -389,7 +389,7 @@ class PurchaseOrderService {
           if (!foundOlderPurchaseOrder) {
             allPurchaseOrders = [...allPurchaseOrders, ...newPurchaseOrders];
             console.log(
-              `Retrieved ${newPurchaseOrders.length} new purchase orders (total unique: ${allPurchaseOrders.length})`
+              `Retrieved ${newPurchaseOrders.length} new purchase orders with products (total unique: ${allPurchaseOrders.length})`
             );
           }
           
@@ -398,549 +398,344 @@ class PurchaseOrderService {
             await this.updateSyncProgress(syncProgress.id, offset + limit);
           }
           
-          // Check if we have more purchase orders
-          hasMorePurchaseOrders = response.data.length === limit;
-          
-          // Increment offset for next page
-          offset += limit;
-          
-          // Add a small delay to avoid rate limiting
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          // Check if we have fewer purchase orders than the limit (last page)
+          if (response.data.length < limit) {
+            hasMorePurchaseOrders = false;
+            console.log("Reached last page of purchase orders");
+          } else {
+            // Move to next page
+            offset += limit;
+          }
         } else {
+          // No more purchase orders
           hasMorePurchaseOrders = false;
+          console.log("No more purchase orders to fetch");
         }
       }
       
-      // Mark sync progress as completed if provided
-      if (syncProgress && syncProgress.id) {
-        await this.updateSyncProgress(syncProgress.id, offset, 'completed');
-      }
-      
-      console.log(
-        `✅ Retrieved ${allPurchaseOrders.length} unique purchase orders from Picqer`
-      );
+      console.log(`✅ Fetched ${allPurchaseOrders.length} unique purchase orders with products included`);
       return allPurchaseOrders;
     } catch (error) {
-      console.error("Error fetching purchase orders from Picqer:", error.message);
-      
-      // Handle rate limiting (429 Too Many Requests)
-      if (error.response && error.response.status === 429) {
-        console.log("Rate limit hit, waiting before retrying...");
-        
-        // Wait for 20 seconds before retrying
-        await new Promise((resolve) => setTimeout(resolve, 20000));
-        
-        // Retry the request
-        return this.getAllPurchaseOrders(updatedSince, syncProgress, cutoffDate);
-      }
-      
+      console.error("❌ Error fetching purchase orders from Picqer:", error.message);
       throw error;
     }
   }
 
   /**
-   * Get purchase orders updated since a specific date
-   * @param {Date} date - The date to check updates from
-   * @param {Object} syncProgress - Sync progress object for resumable sync
-   * @param {Date} cutoffDate - Cutoff date for days parameter filtering
-   * @returns {Promise<Array>} - Array of updated purchase orders
-   */
-  async getPurchaseOrdersUpdatedSince(date, syncProgress = null, cutoffDate = null) {
-    return this.getAllPurchaseOrders(date, syncProgress, cutoffDate);
-  }
-
-  /**
-   * Update the sync status for purchase orders
-   * @param {string} lastSyncDate - ISO string of the last sync date
-   * @param {number} totalCount - Total count of purchase orders in database
-   * @param {number} lastSyncCount - Count of purchase orders in last sync
+   * Save purchase orders to database (OPTIMIZED VERSION)
+   * @param {Array} purchaseOrders - Array of purchase orders with products included
    * @returns {Promise<boolean>} - Success status
    */
-  async updatePurchaseOrdersSyncStatus(
-    lastSyncDate,
-    totalCount = null,
-    lastSyncCount = null
-  ) {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Check if purchase orders entity exists by entity_type
-      const entityTypeResult = await pool.request().query(`
-        SELECT COUNT(*) AS entityExists 
-        FROM SyncStatus 
-        WHERE entity_type = 'purchaseorders'
-      `);
-      
-      const entityTypeExists = entityTypeResult.recordset[0].entityExists > 0;
-      
-      if (entityTypeExists) {
-        // Update existing record by entity_type
-        await pool
-          .request()
-          .input("lastSyncDate", sql.DateTime, new Date(lastSyncDate))
-          .input("totalCount", sql.Int, totalCount)
-          .input("lastSyncCount", sql.Int, lastSyncCount)
-          .query(`
-            UPDATE SyncStatus SET
-              entity_name = 'purchaseorders',
-              last_sync_date = @lastSyncDate,
-              total_count = @totalCount,
-              last_sync_count = @lastSyncCount
-            WHERE entity_type = 'purchaseorders'
-          `);
-        return true;
-      } else {
-        // Insert new record if it doesn't exist
-        await pool
-          .request()
-          .input("entityName", sql.NVarChar, "purchaseorders")
-          .input("entityType", sql.NVarChar, "purchaseorders")
-          .input("lastSyncDate", sql.DateTime, new Date(lastSyncDate))
-          .input("totalCount", sql.Int, totalCount)
-          .input("lastSyncCount", sql.Int, lastSyncCount)
-          .query(`
-            INSERT INTO SyncStatus (
-              entity_name, entity_type, last_sync_date, total_count, last_sync_count
-            )
-            VALUES (
-              @entityName, @entityType, @lastSyncDate, @totalCount, @lastSyncCount
-            )
-          `);
-        return true;
-      }
-    } catch (error) {
-      console.error("Error updating purchase orders sync status:", error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Get purchase order details from Picqer API
-   * @param {number} idpurchaseorder - Purchase Order ID
-   * @returns {Promise<Object|null>} - Purchase order details or null if not found
-   */
-  async getPurchaseOrderDetails(idpurchaseorder) {
-    try {
-      console.log(`Fetching details for purchase order ${idpurchaseorder}...`);
-      
-      const response = await this.client.get(`/purchaseorders/${idpurchaseorder}`);
-      
-      if (response.data) {
-        console.log(`Retrieved details for purchase order ${idpurchaseorder}`);
-        return response.data;
-      }
-      
-      return null;
-    } catch (error) {
-      console.error(
-        `Error fetching details for purchase order ${idpurchaseorder}:`,
-        error.message
-      );
-      
-      // Handle rate limiting (429 Too Many Requests)
-      if (error.response && error.response.status === 429) {
-        console.log("Rate limit hit, waiting before retrying...");
-        
-        // Wait for 20 seconds before retrying
-        await new Promise((resolve) => setTimeout(resolve, 20000));
-        
-        // Retry the request
-        return this.getPurchaseOrderDetails(idpurchaseorder);
-      }
-      
-      // Return null on error to continue with other purchase orders
-      return null;
-    }
-  }
-
-  /**
-   * Get purchase order comments from Picqer
-   * @param {number} idpurchaseorder - Purchase Order ID
-   * @returns {Promise<Array>} - Array of purchase order comments
-   */
-  async getPurchaseOrderComments(idpurchaseorder) {
-    try {
-      console.log(`Fetching comments for purchase order ${idpurchaseorder}...`);
-      
-      const response = await this.client.get(`/purchaseorders/${idpurchaseorder}/comments`);
-      
-      if (response.data && Array.isArray(response.data)) {
-        console.log(
-          `Retrieved ${response.data.length} comments for purchase order ${idpurchaseorder}`
-        );
-        return response.data;
-      }
-      
-      return [];
-    } catch (error) {
-      console.error(
-        `Error fetching comments for purchase order ${idpurchaseorder}:`,
-        error.message
-      );
-      
-      // Handle rate limiting (429 Too Many Requests)
-      if (error.response && error.response.status === 429) {
-        console.log("Rate limit hit, waiting before retrying...");
-        
-        // Wait for 20 seconds before retrying
-        await new Promise((resolve) => setTimeout(resolve, 20000));
-        
-        // Retry the request
-        return this.getPurchaseOrderComments(idpurchaseorder);
-      }
-      
-      // Return empty array on error to continue with other purchase orders
-      return [];
-    }
-  }
-
-  /**
-   * Save purchase order to database
-   * @param {Object} purchaseOrder - Purchase order to save
-   * @returns {Promise<boolean>} - Success status
-   */
-  async savePurchaseOrderToDB(purchaseOrder) {
-    try {
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Check if purchase order already exists
-      const checkResult = await pool
-        .request()
-        .input("idpurchaseorder", sql.Int, purchaseOrder.idpurchaseorder)
-        .query("SELECT id FROM PurchaseOrders WHERE idpurchaseorder = @idpurchaseorder");
-      
-      const purchaseOrderExists = checkResult.recordset.length > 0;
-      
-      // Prepare request with all possible parameters
-      const request = new sql.Request(pool);
-      
-      // Add parameters with proper null handling
-      request.input("idpurchaseorder", sql.Int, purchaseOrder.idpurchaseorder);
-      request.input("idsupplier", sql.Int, purchaseOrder.idsupplier || null);
-      request.input("idtemplate", sql.Int, purchaseOrder.idtemplate || null);
-      request.input("idwarehouse", sql.Int, purchaseOrder.idwarehouse || null);
-      request.input("idfulfilment_customer", sql.Int, purchaseOrder.idfulfilment_customer || null);
-      request.input("purchaseorderid", sql.NVarChar, purchaseOrder.purchaseorderid || "");
-      request.input("supplier_name", sql.NVarChar, purchaseOrder.supplier_name || null);
-      request.input("supplier_orderid", sql.NVarChar, purchaseOrder.supplier_orderid || null);
-      request.input("status", sql.NVarChar, purchaseOrder.status || "");
-      request.input("remarks", sql.NVarChar, purchaseOrder.remarks || null);
-      request.input("delivery_date", sql.Date, purchaseOrder.delivery_date ? new Date(purchaseOrder.delivery_date) : null);
-      request.input("language", sql.NVarChar, purchaseOrder.language || null);
-      request.input("created", sql.DateTime, purchaseOrder.created ? new Date(purchaseOrder.created) : null);
-      request.input("updated", sql.DateTime, purchaseOrder.updated ? new Date(purchaseOrder.updated) : null);
-      request.input("last_sync_date", sql.DateTime, new Date());
-      
-      if (purchaseOrderExists) {
-        // Update existing purchase order
-        await request.query(`
-          UPDATE PurchaseOrders 
-          SET 
-            idsupplier = @idsupplier,
-            idtemplate = @idtemplate,
-            idwarehouse = @idwarehouse,
-            idfulfilment_customer = @idfulfilment_customer,
-            purchaseorderid = @purchaseorderid,
-            supplier_name = @supplier_name,
-            supplier_orderid = @supplier_orderid,
-            status = @status,
-            remarks = @remarks,
-            delivery_date = @delivery_date,
-            language = @language,
-            created = @created,
-            updated = @updated,
-            last_sync_date = @last_sync_date
-          WHERE idpurchaseorder = @idpurchaseorder
-        `);
-      } else {
-        // Insert new purchase order
-        await request.query(`
-          INSERT INTO PurchaseOrders (
-            idpurchaseorder, idsupplier, idtemplate, idwarehouse, idfulfilment_customer,
-            purchaseorderid, supplier_name, supplier_orderid, status, remarks,
-            delivery_date, language, created, updated, last_sync_date
-          )
-          VALUES (
-            @idpurchaseorder, @idsupplier, @idtemplate, @idwarehouse, @idfulfilment_customer,
-            @purchaseorderid, @supplier_name, @supplier_orderid, @status, @remarks,
-            @delivery_date, @language, @created, @updated, @last_sync_date
-          )
-        `);
-      }
-      
+  async savePurchaseOrdersToDatabase(purchaseOrders) {
+    if (!purchaseOrders || purchaseOrders.length === 0) {
+      console.log("No purchase orders to save");
       return true;
-    } catch (error) {
-      console.error(
-        `Error saving purchase order ${purchaseOrder.idpurchaseorder} to database:`,
-        error.message
-      );
-      throw error;
     }
-  }
 
-  /**
-   * Save purchase order products to database
-   * @param {number} idpurchaseorder - Purchase Order ID
-   * @param {Array} products - Array of purchase order products
-   * @returns {Promise<boolean>} - Success status
-   */
-  async savePurchaseOrderProductsToDB(idpurchaseorder, products) {
+    console.log(`Saving ${purchaseOrders.length} purchase orders to database...`);
+
     try {
-      if (!products || products.length === 0) {
-        return true;
-      }
-      
       const pool = await sql.connect(this.sqlConfig);
-      
-      // Delete existing products for this purchase order
-      await pool
-        .request()
-        .input("idpurchaseorder", sql.Int, idpurchaseorder)
-        .query("DELETE FROM PurchaseOrderProducts WHERE idpurchaseorder = @idpurchaseorder");
-      
-      // Insert new products
-      for (const product of products) {
-        // Skip invalid products
-        if (!product || !product.idproduct) {
-          console.warn("Invalid product data, missing idproduct:", product);
-          continue;
+      let savedPurchaseOrders = 0;
+      let savedProducts = 0;
+
+      for (const purchaseOrder of purchaseOrders) {
+        try {
+          // Save purchase order
+          await pool
+            .request()
+            .input("idpurchaseorder", sql.Int, purchaseOrder.idpurchaseorder)
+            .input("idsupplier", sql.Int, purchaseOrder.idsupplier || null)
+            .input("idtemplate", sql.Int, purchaseOrder.idtemplate || null)
+            .input("idwarehouse", sql.Int, purchaseOrder.idwarehouse || null)
+            .input("idfulfillment_customer", sql.Int, purchaseOrder.idfulfillment_customer || null)
+            .input("purchaseorderid", sql.NVarChar, purchaseOrder.purchaseorderid || null)
+            .input("supplier_name", sql.NVarChar, purchaseOrder.supplier_name || null)
+            .input("supplier_orderid", sql.NVarChar, purchaseOrder.supplier_orderid || null)
+            .input("status", sql.NVarChar, purchaseOrder.status || null)
+            .input("remarks", sql.NVarChar, purchaseOrder.remarks || null)
+            .input("delivery_date", sql.DateTime, purchaseOrder.delivery_date ? new Date(purchaseOrder.delivery_date) : null)
+            .input("language", sql.NVarChar, purchaseOrder.language || null)
+            .input("created", sql.DateTime, purchaseOrder.created ? new Date(purchaseOrder.created) : null)
+            .input("updated", sql.DateTime, purchaseOrder.updated ? new Date(purchaseOrder.updated) : null)
+            .input("last_sync_date", sql.DateTime, new Date())
+            .input("product_count", sql.Int, purchaseOrder.products ? purchaseOrder.products.length : 0)
+            .input("comment_count", sql.Int, 0) // We're not fetching comments anymore
+            .query(`
+              MERGE PurchaseOrders AS target
+              USING (SELECT @idpurchaseorder AS idpurchaseorder) AS source
+              ON target.idpurchaseorder = source.idpurchaseorder
+              WHEN MATCHED THEN
+                UPDATE SET
+                  idsupplier = @idsupplier,
+                  idtemplate = @idtemplate,
+                  idwarehouse = @idwarehouse,
+                  idfulfillment_customer = @idfulfillment_customer,
+                  purchaseorderid = @purchaseorderid,
+                  supplier_name = @supplier_name,
+                  supplier_orderid = @supplier_orderid,
+                  status = @status,
+                  remarks = @remarks,
+                  delivery_date = @delivery_date,
+                  language = @language,
+                  created = @created,
+                  updated = @updated,
+                  last_sync_date = @last_sync_date,
+                  product_count = @product_count,
+                  comment_count = @comment_count
+              WHEN NOT MATCHED THEN
+                INSERT (idpurchaseorder, idsupplier, idtemplate, idwarehouse, idfulfillment_customer, 
+                       purchaseorderid, supplier_name, supplier_orderid, status, remarks, delivery_date, 
+                       language, created, updated, last_sync_date, product_count, comment_count)
+                VALUES (@idpurchaseorder, @idsupplier, @idtemplate, @idwarehouse, @idfulfillment_customer,
+                       @purchaseorderid, @supplier_name, @supplier_orderid, @status, @remarks, @delivery_date,
+                       @language, @created, @updated, @last_sync_date, @product_count, @comment_count);
+            `);
+
+          savedPurchaseOrders++;
+
+          // Save products directly from the purchase order response (OPTIMIZED!)
+          if (purchaseOrder.products && Array.isArray(purchaseOrder.products)) {
+            for (const product of purchaseOrder.products) {
+              try {
+                await pool
+                  .request()
+                  .input("idpurchaseorder", sql.Int, purchaseOrder.idpurchaseorder)
+                  .input("idproduct", sql.Int, product.idproduct || null)
+                  .input("idvatgroup", sql.Int, product.idvatgroup || null)
+                  .input("productcode", sql.NVarChar, product.productcode || null)
+                  .input("productcode_supplier", sql.NVarChar, product.productcode_supplier || null)
+                  .input("name", sql.NVarChar, product.name || null)
+                  .input("price", sql.Decimal(10, 2), product.price || null)
+                  .input("amount", sql.Int, product.amount || null)
+                  .input("amountreceived", sql.Int, product.amountreceived || null)
+                  .input("weight", sql.Int, product.weight || null)
+                  .input("last_sync_date", sql.DateTime, new Date())
+                  .query(`
+                    MERGE PurchaseOrderProducts AS target
+                    USING (SELECT @idpurchaseorder AS idpurchaseorder, @idproduct AS idproduct) AS source
+                    ON target.idpurchaseorder = source.idpurchaseorder AND target.idproduct = source.idproduct
+                    WHEN MATCHED THEN
+                      UPDATE SET
+                        idvatgroup = @idvatgroup,
+                        productcode = @productcode,
+                        productcode_supplier = @productcode_supplier,
+                        name = @name,
+                        price = @price,
+                        amount = @amount,
+                        amountreceived = @amountreceived,
+                        weight = @weight,
+                        last_sync_date = @last_sync_date
+                    WHEN NOT MATCHED THEN
+                      INSERT (idpurchaseorder, idproduct, idvatgroup, productcode, productcode_supplier, 
+                             name, price, amount, amountreceived, weight, last_sync_date)
+                      VALUES (@idpurchaseorder, @idproduct, @idvatgroup, @productcode, @productcode_supplier,
+                             @name, @price, @amount, @amountreceived, @weight, @last_sync_date);
+                  `);
+
+                savedProducts++;
+              } catch (productError) {
+                console.error(`Error saving product ${product.idproduct} for purchase order ${purchaseOrder.idpurchaseorder}:`, productError.message);
+              }
+            }
+          }
+        } catch (purchaseOrderError) {
+          console.error(`Error saving purchase order ${purchaseOrder.idpurchaseorder}:`, purchaseOrderError.message);
         }
-        
-        const request = new sql.Request(pool);
-        
-        // Add parameters with proper null handling
-        request.input("idpurchaseorder", sql.Int, idpurchaseorder);
-        request.input("idpurchaseorder_product", sql.Int, product.idpurchaseorder_product || null);
-        request.input("idproduct", sql.Int, product.idproduct);
-        request.input("idvatgroup", sql.Int, product.idvatgroup || null);
-        request.input("productcode", sql.NVarChar, product.productcode || "");
-        request.input("productcode_supplier", sql.NVarChar, product.productcode_supplier || null);
-        request.input("name", sql.NVarChar, product.name || "");
-        request.input("price", sql.Decimal(18, 2), product.price || null);
-        request.input("amount", sql.Int, product.amount || 0);
-        request.input("amountreceived", sql.Int, product.amountreceived || 0);
-        request.input("delivery_date", sql.Date, product.delivery_date ? new Date(product.delivery_date) : null);
-        request.input("weight", sql.Int, product.weight || null);
-        request.input("last_sync_date", sql.DateTime, new Date());
-        
-        // Insert purchase order product
-        await request.query(`
-          INSERT INTO PurchaseOrderProducts (
-            idpurchaseorder, idpurchaseorder_product, idproduct, idvatgroup,
-            productcode, productcode_supplier, name, price, amount, amountreceived,
-            delivery_date, weight, last_sync_date
-          )
-          VALUES (
-            @idpurchaseorder, @idpurchaseorder_product, @idproduct, @idvatgroup,
-            @productcode, @productcode_supplier, @name, @price, @amount, @amountreceived,
-            @delivery_date, @weight, @last_sync_date
-          )
-        `);
       }
-      
+
+      console.log(`✅ Saved ${savedPurchaseOrders} purchase orders and ${savedProducts} products to database`);
       return true;
     } catch (error) {
-      console.error(
-        `Error saving products for purchase order ${idpurchaseorder} to database:`,
-        error.message
-      );
+      console.error("❌ Error saving purchase orders to database:", error.message);
       throw error;
     }
   }
 
   /**
-   * Save purchase order comments to database
-   * @param {number} idpurchaseorder - Purchase Order ID
-   * @param {Array} comments - Array of purchase order comments
-   * @returns {Promise<boolean>} - Success status
-   */
-  async savePurchaseOrderCommentsToDB(idpurchaseorder, comments) {
-    try {
-      if (!comments || comments.length === 0) {
-        return true;
-      }
-      
-      const pool = await sql.connect(this.sqlConfig);
-      
-      // Delete existing comments for this purchase order
-      await pool
-        .request()
-        .input("idpurchaseorder", sql.Int, idpurchaseorder)
-        .query("DELETE FROM PurchaseOrderComments WHERE idpurchaseorder = @idpurchaseorder");
-      
-      // Insert new comments
-      for (const comment of comments) {
-        // Skip invalid comments
-        if (!comment || !comment.idpurchaseorder_comment) {
-          console.warn("Invalid comment data, missing idpurchaseorder_comment:", comment);
-          continue;
-        }
-        
-        const request = new sql.Request(pool);
-        
-        // Add parameters with proper null handling
-        request.input("idpurchaseorder", sql.Int, idpurchaseorder);
-        request.input("idpurchaseorder_comment", sql.Int, comment.idpurchaseorder_comment);
-        request.input("iduser", sql.Int, comment.iduser || null);
-        request.input("user_fullname", sql.NVarChar, comment.user_fullname || null);
-        request.input("comment", sql.NVarChar, comment.comment || null);
-        request.input("created", sql.DateTime, comment.created ? new Date(comment.created) : null);
-        request.input("last_sync_date", sql.DateTime, new Date());
-        
-        // Insert purchase order comment
-        await request.query(`
-          INSERT INTO PurchaseOrderComments (
-            idpurchaseorder, idpurchaseorder_comment, iduser, user_fullname,
-            comment, created, last_sync_date
-          )
-          VALUES (
-            @idpurchaseorder, @idpurchaseorder_comment, @iduser, @user_fullname,
-            @comment, @created, @last_sync_date
-          )
-        `);
-      }
-      
-      return true;
-    } catch (error) {
-      console.error(
-        `Error saving comments for purchase order ${idpurchaseorder} to database:`,
-        error.message
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * Sync purchase orders from Picqer to database
-   * @param {boolean} fullSync - Whether to perform a full sync
+   * Sync purchase orders incrementally (OPTIMIZED VERSION)
    * @param {number} days - Number of days to sync (optional)
-   * @returns {Promise<Object>} - Results of sync operation
+   * @param {boolean} full - Whether to do a full sync
+   * @returns {Promise<Object>} - Sync result
    */
-  async syncPurchaseOrders(fullSync = false, days = null) {
+  async syncPurchaseOrdersIncremental(days = null, full = false) {
+    console.log("Received request to incrementally sync purchase orders");
+    
     try {
-      // Determine if we're using the days parameter
-      const usesDaysParam = days !== null && !isNaN(days) && days > 0;
+      // Initialize database first
+      await this.initializePurchaseOrdersDatabase();
       
-      // Calculate cutoff date if days parameter is provided
+      let updatedSince = null;
       let cutoffDate = null;
-      if (usesDaysParam) {
+      let usesDaysParam = false;
+      
+      if (days && days > 0) {
+        // Use days parameter - sync purchase orders from the last X days
         cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - days);
-        cutoffDate.setHours(0, 0, 0, 0); // Start of the day
-        console.log(`Using cutoff date for optimization: ${cutoffDate.toISOString()}`);
-        console.log(`Syncing purchase orders from the last ${days} days using PurchaseOrderService directly`);
-      }
-      
-      console.log(`Starting ${fullSync ? "full" : "incremental"} purchase order sync...`);
-      
-      // Create or get sync progress for resumable sync
-      const syncProgress = await this.createOrGetSyncProgress('purchaseorders', fullSync, usesDaysParam);
-      
-      let purchaseOrders;
-      if (fullSync) {
-        // Full sync: get all purchase orders
-        purchaseOrders = await this.getAllPurchaseOrders(null, syncProgress, cutoffDate);
-      } else if (usesDaysParam) {
-        // Days parameter sync: get purchase orders updated since cutoff date
-        console.log(`Starting incremental purchase order sync for last ${days} days...`);
-        console.log(`Using custom date range: syncing purchase orders updated since ${cutoffDate.toISOString()}`);
-        purchaseOrders = await this.getAllPurchaseOrders(cutoffDate, syncProgress, cutoffDate);
-      } else {
-        // Incremental sync: get purchase orders updated since last sync
-        const lastSyncDate = await this.getLastSyncDate();
-        if (lastSyncDate) {
-          console.log(`Last sync date: ${lastSyncDate.toISOString()}`);
-          purchaseOrders = await this.getPurchaseOrdersUpdatedSince(lastSyncDate, syncProgress);
-        } else {
-          console.log("No last sync date found, performing full sync");
-          purchaseOrders = await this.getAllPurchaseOrders(null, syncProgress);
+        updatedSince = cutoffDate;
+        usesDaysParam = true;
+        console.log(`Syncing purchase orders from the last ${days} days (since ${cutoffDate.toISOString()})`);
+      } else if (!full) {
+        // Get last sync date for incremental sync
+        updatedSince = await this.getLastSyncDate();
+        if (!updatedSince) {
+          // If no last sync date, default to 1 day ago
+          updatedSince = new Date();
+          updatedSince.setDate(updatedSince.getDate() - 1);
         }
       }
       
-      if (!purchaseOrders || purchaseOrders.length === 0) {
+      console.log("Starting incremental purchase order sync...");
+      
+      // Create or get sync progress for resumable sync
+      const syncProgress = await this.createOrGetSyncProgress('purchaseorders', full, usesDaysParam);
+      console.log(`Last sync date: ${updatedSince ? updatedSince.toISOString() : 'Full sync'}`);
+      
+      // Get all purchase orders with products included (OPTIMIZED!)
+      const purchaseOrders = await this.getAllPurchaseOrders(updatedSince, syncProgress, cutoffDate);
+      
+      if (purchaseOrders.length === 0) {
         console.log("No purchase orders to sync");
-        return { success: true, savedPurchaseOrders: 0, savedProducts: 0, savedComments: 0 };
+        
+        // Mark sync as completed
+        if (syncProgress && syncProgress.id) {
+          await this.updateSyncProgress(syncProgress.id, 0, 'completed');
+        }
+        
+        return {
+          success: true,
+          message: "No purchase orders to sync",
+          details: {
+            purchaseOrdersProcessed: 0,
+            productsProcessed: 0,
+            commentsProcessed: 0, // Always 0 now
+            syncType: full ? 'full' : (days ? `${days} days` : 'incremental'),
+            lastSyncDate: updatedSince ? updatedSince.toISOString() : null
+          }
+        };
       }
       
       console.log(`Syncing ${purchaseOrders.length} purchase orders...`);
       
-      let savedPurchaseOrders = 0;
-      let savedProducts = 0;
-      let savedComments = 0;
+      // Save purchase orders with products to database (OPTIMIZED!)
+      await this.savePurchaseOrdersToDatabase(purchaseOrders);
       
-      // Process each purchase order
-      for (const purchaseOrder of purchaseOrders) {
-        try {
-          // Get purchase order details if products array is not included
-          let purchaseOrderDetails = purchaseOrder;
-          if (!purchaseOrder.products || !Array.isArray(purchaseOrder.products)) {
-            purchaseOrderDetails = await this.getPurchaseOrderDetails(purchaseOrder.idpurchaseorder);
-            
-            if (!purchaseOrderDetails) {
-              console.warn(
-                `Could not get details for purchase order ${purchaseOrder.idpurchaseorder}, skipping`
-              );
-              continue;
-            }
-          }
-          
-          // Save purchase order to database
-          await this.savePurchaseOrderToDB(purchaseOrderDetails);
-          savedPurchaseOrders++;
-          
-          // Save purchase order products
-          if (purchaseOrderDetails.products && purchaseOrderDetails.products.length > 0) {
-            await this.savePurchaseOrderProductsToDB(purchaseOrderDetails.idpurchaseorder, purchaseOrderDetails.products);
-            savedProducts += purchaseOrderDetails.products.length;
-          }
-          
-          // Get and save purchase order comments
-          const comments = await this.getPurchaseOrderComments(purchaseOrderDetails.idpurchaseorder);
-          
-          if (comments && comments.length > 0) {
-            await this.savePurchaseOrderCommentsToDB(purchaseOrderDetails.idpurchaseorder, comments);
-            savedComments += comments.length;
-          }
-        } catch (purchaseOrderError) {
-          console.error(
-            `Error saving purchase order ${purchaseOrder.idpurchaseorder}:`,
-            purchaseOrderError.message
-          );
-          // Continue with next purchase order
-        }
+      // Count total products processed
+      const totalProducts = purchaseOrders.reduce((sum, po) => {
+        return sum + (po.products ? po.products.length : 0);
+      }, 0);
+      
+      // Update last sync date
+      const pool = await sql.connect(this.sqlConfig);
+      await pool.request().query(`
+        UPDATE SyncStatus 
+        SET last_sync_date = GETDATE(), 
+            last_sync_count = ${purchaseOrders.length},
+            total_count = (SELECT COUNT(*) FROM PurchaseOrders)
+        WHERE entity_type = 'purchaseorders'
+      `);
+      
+      // Mark sync as completed
+      if (syncProgress && syncProgress.id) {
+        await this.updateSyncProgress(syncProgress.id, 0, 'completed');
       }
       
-      // Get total count of purchase orders in database
-      const pool = await sql.connect(this.sqlConfig);
-      const countResult = await pool
-        .request()
-        .query("SELECT COUNT(*) as count FROM PurchaseOrders");
-      const totalCount = countResult.recordset[0].count;
+      console.log("✅ Purchase order sync completed successfully");
       
-      // Update sync status
-      await this.updatePurchaseOrdersSyncStatus(
-        new Date().toISOString(),
-        totalCount,
-        savedPurchaseOrders
-      );
-      
-      console.log(
-        `✅ Purchase order sync completed: ${savedPurchaseOrders} purchase orders, ${savedProducts} products, and ${savedComments} comments saved`
-      );
       return {
         success: true,
-        savedPurchaseOrders,
-        savedProducts,
-        savedComments
+        message: "Purchase orders sync completed",
+        details: {
+          purchaseOrdersProcessed: purchaseOrders.length,
+          productsProcessed: totalProducts,
+          commentsProcessed: 0, // We don't fetch comments anymore for performance
+          syncType: full ? 'full' : (days ? `${days} days` : 'incremental'),
+          lastSyncDate: updatedSince ? updatedSince.toISOString() : null,
+          optimized: true // Indicates this is the optimized version
+        }
       };
     } catch (error) {
-      console.error("Error in purchase order sync:", error.message);
-      return {
-        success: false,
-        error: error.message,
-      };
+      console.error("❌ Error during purchase order sync:", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all purchase orders from database
+   * @returns {Promise<Array>} - Array of purchase orders
+   */
+  async getAllPurchaseOrdersFromDatabase() {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      const result = await pool.request().query(`
+        SELECT 
+          po.*,
+          (SELECT COUNT(*) FROM PurchaseOrderProducts pop WHERE pop.idpurchaseorder = po.idpurchaseorder) as product_count,
+          (SELECT COUNT(*) FROM PurchaseOrderComments poc WHERE poc.idpurchaseorder = po.idpurchaseorder) as comment_count
+        FROM PurchaseOrders po
+        ORDER BY po.updated DESC
+      `);
+      
+      return result.recordset;
+    } catch (error) {
+      console.error("Error getting purchase orders from database:", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get purchase order by ID from database with products and comments
+   * @param {number} idpurchaseorder - Purchase order ID
+   * @returns {Promise<Object|null>} - Purchase order with products and comments
+   */
+  async getPurchaseOrderByIdFromDatabase(idpurchaseorder) {
+    try {
+      const pool = await sql.connect(this.sqlConfig);
+      
+      // Get purchase order
+      const purchaseOrderResult = await pool.request()
+        .input('idpurchaseorder', sql.Int, idpurchaseorder)
+        .query(`
+          SELECT * FROM PurchaseOrders 
+          WHERE idpurchaseorder = @idpurchaseorder
+        `);
+      
+      if (purchaseOrderResult.recordset.length === 0) {
+        return null;
+      }
+      
+      const purchaseOrder = purchaseOrderResult.recordset[0];
+      
+      // Get products
+      const productsResult = await pool.request()
+        .input('idpurchaseorder', sql.Int, idpurchaseorder)
+        .query(`
+          SELECT * FROM PurchaseOrderProducts 
+          WHERE idpurchaseorder = @idpurchaseorder
+          ORDER BY idproduct
+        `);
+      
+      // Get comments
+      const commentsResult = await pool.request()
+        .input('idpurchaseorder', sql.Int, idpurchaseorder)
+        .query(`
+          SELECT * FROM PurchaseOrderComments 
+          WHERE idpurchaseorder = @idpurchaseorder
+          ORDER BY created DESC
+        `);
+      
+      // Combine data
+      purchaseOrder.products = productsResult.recordset;
+      purchaseOrder.comments = commentsResult.recordset;
+      
+      return purchaseOrder;
+    } catch (error) {
+      console.error(`Error getting purchase order ${idpurchaseorder} from database:`, error.message);
+      throw error;
     }
   }
 }
 
 module.exports = PurchaseOrderService;
+
