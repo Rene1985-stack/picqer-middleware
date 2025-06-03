@@ -61,9 +61,9 @@ const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
 const purchaseOrderService = new PurchaseOrderService(apiKey, baseUrl, dbConfig);
 
 // Import API adapter AFTER services are initialized to avoid circular dependency
-const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
+const { router: apiAdapter, initializeServices, setSqlConfig } = require('./data_sync_api_adapter');
 
-// Initialize API adapter with service instances
+// Initialize API adapter with service instances and SQL config
 initializeServices({
   ProductService: picqerService,
   PicklistService: picklistService,
@@ -72,6 +72,9 @@ initializeServices({
   SupplierService: supplierService,
   PurchaseOrderService: purchaseOrderService
 });
+
+// Set SQL configuration for the API adapter
+setSqlConfig(dbConfig);
 
 // API routes
 app.use('/api', apiAdapter);
