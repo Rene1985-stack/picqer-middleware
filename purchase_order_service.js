@@ -5,7 +5,6 @@
  */
 const axios = require("axios");
 const sql = require("mssql");
-const purchaseOrdersSchema = require("./purchase_orders_schema");
 
 class PurchaseOrderService {
   constructor(apiKey, baseUrl, sqlConfig) {
@@ -58,15 +57,6 @@ class PurchaseOrderService {
   }
 
   /**
-   * Initialize database schema for purchase orders
-   */
-  async initializeDatabase() {
-    console.log("Initializing database with purchase orders schema...");
-    await purchaseOrdersSchema.initializeSchema(this.sqlConfig);
-    console.log("✅ Purchase orders database schema initialized successfully");
-  }
-
-  /**
    * Sync purchase orders from Picqer API (CLEAN VERSION - API fields only)
    * @param {number} days - Number of days to sync (optional)
    * @param {boolean} full - Whether to do a full sync
@@ -76,9 +66,6 @@ class PurchaseOrderService {
     console.log("Received request to incrementally sync purchase orders");
     
     try {
-      // Initialize database schema
-      await this.initializeDatabase();
-      
       console.log("Starting incremental purchase order sync...");
       
       // Determine sync parameters
