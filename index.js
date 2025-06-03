@@ -11,29 +11,29 @@ const sql = require('mssql');
 // Load environment variables FIRST
 dotenv.config();
 
-// Validate required environment variables
-const requiredEnvVars = ['PICQER_API_KEY', 'PICQER_API_URL', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+// Validate required environment variables (using the correct Railway variable names)
+const requiredEnvVars = ['PICQER_API_KEY', 'PICQER_API_URL', 'SQL_USER', 'SQL_PASSWORD', 'SQL_DATABASE'];
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingEnvVars.length > 0) {
   console.error('Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your .env file and ensure all required variables are set.');
+  console.error('Please check your Railway environment variables and ensure all required variables are set.');
   process.exit(1);
 }
 
 // Validate database server configuration
-if (!process.env.DB_HOST && !process.env.DB_SERVER) {
-  console.error('Missing database server configuration. Please set either DB_HOST or DB_SERVER.');
+if (!process.env.SQL_SERVER) {
+  console.error('Missing database server configuration. Please set SQL_SERVER.');
   process.exit(1);
 }
 
-// Configure SQL connection
+// Configure SQL connection using Railway's environment variable names
 const sqlConfig = {
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  server: process.env.DB_HOST || process.env.DB_SERVER,
-  port: process.env.DB_PORT || 1433,
+  user: process.env.SQL_USER,
+  password: process.env.SQL_PASSWORD,
+  database: process.env.SQL_DATABASE,
+  server: process.env.SQL_SERVER,
+  port: process.env.SQL_PORT || 1433,
   pool: {
     max: 10,
     min: 0,
@@ -69,6 +69,10 @@ let pool;
 async function initializeDatabase() {
   try {
     console.log("Connecting to database...");
+    console.log(`Server: ${sqlConfig.server}`);
+    console.log(`Database: ${sqlConfig.database}`);
+    console.log(`User: ${sqlConfig.user}`);
+    
     pool = await sql.connect(sqlConfig);
     console.log("Database connected successfully");
     
@@ -90,7 +94,8 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    database: pool ? 'connected' : 'disconnected'
   });
 });
 
@@ -168,6 +173,14 @@ process.on('SIGINT', async () => {
 // Start server
 async function startServer() {
   try {
+    console.log('Starting Picqer Middleware...');
+    console.log('Environment variables loaded:');
+    console.log(`- PICQER_API_URL: ${process.env.PICQER_API_URL}`);
+    console.log(`- SQL_SERVER: ${process.env.SQL_SERVER}`);
+    console.log(`- SQL_DATABASE: ${process.env.SQL_DATABASE}`);
+    console.log(`- SQL_USER: ${process.env.SQL_USER}`);
+    console.log(`- SQL_PORT: ${process.env.SQL_PORT || 1433}`);
+    
     // Initialize database connection
     const dbInitialized = await initializeDatabase();
     
