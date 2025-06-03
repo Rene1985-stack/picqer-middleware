@@ -735,6 +735,17 @@ class PurchaseOrderService {
       throw error;
     }
   }
+
+  /**
+   * Compatibility method - alias for syncPurchaseOrdersIncremental
+   * @param {number} days - Number of days to sync (optional)
+   * @param {boolean} full - Whether to do a full sync
+   * @returns {Promise<Object>} - Sync result
+   */
+  async syncPurchaseOrders(days = null, full = false) {
+    console.log("Using compatibility method syncPurchaseOrders -> syncPurchaseOrdersIncremental");
+    return await this.syncPurchaseOrdersIncremental(days, full);
+  }
 }
 
 module.exports = PurchaseOrderService;
