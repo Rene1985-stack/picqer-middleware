@@ -1,128 +1,137 @@
 /**
- * Picqer Middleware - Main Application Entry Point
- * This file initializes the Express server and all required services
+ * Final Index.js with Integrated Data Sync Implementation
+ * 
+ * This file integrates the actual data sync implementation with the API adapter,
+ * ensuring that when sync buttons are clicked in the dashboard, real data is
+ * synced from Picqer to the database.
  */
 
+// Import required modules
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const sql = require('mssql');
+require('dotenv').config();
 
-// Load environment variables FIRST
-dotenv.config();
+// Import service classes
+const PicqerService = require('./picqer-service');
+const PicklistService = require('./picklist-service');
+const WarehouseService = require('./warehouse_service');
+const UserService = require('./user_service');
+const SupplierService = require('./supplier_service');
+const PurchaseOrderService = require('./purchase_order_service');
 
-// Validate required environment variables (using the correct Railway variable names)
-const requiredEnvVars = ['PICQER_API_KEY', 'PICQER_API_URL', 'SQL_USER', 'SQL_PASSWORD', 'SQL_DATABASE'];
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+// Create Express app
+const app = express();
 
-if (missingEnvVars.length > 0) {
-  console.error('Missing required environment variables:', missingEnvVars.join(', '));
-  console.error('Please check your Railway environment variables and ensure all required variables are set.');
-  process.exit(1);
-}
+// Configure middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Validate database server configuration
-if (!process.env.SQL_SERVER) {
-  console.error('Missing database server configuration. Please set SQL_SERVER.');
-  process.exit(1);
-}
-
-// Configure SQL connection using Railway's environment variable names
-const sqlConfig = {
+// Database configuration
+const dbConfig = {
+  server: process.env.SQL_SERVER,
+  database: process.env.SQL_DATABASE,
   user: process.env.SQL_USER,
   password: process.env.SQL_PASSWORD,
-  database: process.env.SQL_DATABASE,
-  server: process.env.SQL_SERVER,
-  port: process.env.SQL_PORT || 1433,
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000
-  },
+  port: parseInt(process.env.SQL_PORT) || 1433,
   options: {
     encrypt: true,
     trustServerCertificate: false
   }
 };
 
-// Configure Picqer API connection
+// Picqer API configuration
 const apiKey = process.env.PICQER_API_KEY;
-const baseUrl = process.env.PICQER_API_URL;
+const baseUrl = process.env.PICQER_BASE_URL || process.env.PICQER_API_URL;
 
-// Import services AFTER environment variables are loaded
-const PurchaseOrderService = require('./purchase_order_service');
-
-// Initialize services with proper configuration
-const purchaseOrderService = new PurchaseOrderService(apiKey, baseUrl, sqlConfig);
-
-// Initialize Express app
-const app = express();
-const port = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Database connection
-let pool;
-
-async function initializeDatabase() {
-  try {
-    console.log("Connecting to database...");
-    console.log(`Server: ${sqlConfig.server}`);
-    console.log(`Database: ${sqlConfig.database}`);
-    console.log(`User: ${sqlConfig.user}`);
-    
-    pool = await sql.connect(sqlConfig);
-    console.log("Database connected successfully");
-    
-    // Initialize purchase orders database if needed
-    if (purchaseOrderService && typeof purchaseOrderService.initializePurchaseOrdersDatabase === 'function') {
-      await purchaseOrderService.initializePurchaseOrdersDatabase();
-      console.log("Purchase orders database initialized");
-    }
-    
-    return true;
-  } catch (error) {
-    console.error("Database connection failed:", error);
-    return false;
-  }
+// Validate required environment variables
+if (!apiKey || !baseUrl) {
+  console.error('Missing required environment variables: PICQER_API_KEY and PICQER_BASE_URL/PICQER_API_URL');
+  process.exit(1);
 }
+
+// Initialize services
+const picqerService = new PicqerService(apiKey, baseUrl, dbConfig);
+const picklistService = new PicklistService(apiKey, baseUrl, dbConfig);
+const warehouseService = new WarehouseService(apiKey, baseUrl, dbConfig);
+const userService = new UserService(apiKey, baseUrl, dbConfig);
+const supplierService = new SupplierService(apiKey, baseUrl, dbConfig);
+const purchaseOrderService = new PurchaseOrderService(apiKey, baseUrl, dbConfig);
+
+// Import API adapter AFTER services are initialized to avoid circular dependency
+const { router: apiAdapter, initializeServices } = require('./data_sync_api_adapter');
+
+// Initialize API adapter with service instances
+initializeServices({
+  ProductService: picqerService,
+  PicklistService: picklistService,
+  WarehouseService: warehouseService,
+  UserService: userService,
+  SupplierService: supplierService,
+  PurchaseOrderService: purchaseOrderService
+});
+
+// API routes
+app.use('/api', apiAdapter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    database: pool ? 'connected' : 'disconnected'
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
-// Purchase Orders API endpoints
+// Purchase Orders API endpoints (direct endpoints for immediate access)
 app.get('/api/sync/purchaseorders', async (req, res) => {
   try {
-    console.log('Starting purchase orders sync...');
-    const result = await purchaseOrderService.syncPurchaseOrders();
-    res.json(result);
+    const fullSync = req.query.full === 'true';
+    const days = req.query.days ? parseInt(req.query.days) : null;
+    
+    console.log(`Received request to ${fullSync ? 'fully' : 'incrementally'} sync purchase orders${days ? ` for the last ${days} days` : ''}`);
+    
+    const result = await purchaseOrderService.syncPurchaseOrders(fullSync, days);
+    
+    res.json({
+      success: true,
+      message: `Purchase orders sync ${result.success ? 'completed' : 'failed'}`,
+      details: result
+    });
   } catch (error) {
     console.error('Error syncing purchase orders:', error);
-    res.status(500).json({ 
-      error: 'Failed to sync purchase orders', 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Error syncing purchase orders',
+      error: error.message
     });
   }
 });
 
 app.get('/api/purchaseorders', async (req, res) => {
   try {
-    const result = await purchaseOrderService.getAllPurchaseOrders();
-    res.json(result);
+    const pool = await sql.connect(dbConfig);
+    const result = await pool.request().query(`
+      SELECT po.*, 
+        (SELECT COUNT(*) FROM PurchaseOrderProducts WHERE idpurchaseorder = po.idpurchaseorder) AS product_count,
+        (SELECT COUNT(*) FROM PurchaseOrderComments WHERE idpurchaseorder = po.idpurchaseorder) AS comment_count
+      FROM PurchaseOrders po
+      ORDER BY po.updated DESC
+    `);
+    
+    res.json({
+      success: true,
+      data: result.recordset,
+      count: result.recordset.length
+    });
   } catch (error) {
     console.error('Error getting purchase orders:', error);
-    res.status(500).json({ 
-      error: 'Failed to get purchase orders', 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Error getting purchase orders',
+      error: error.message
     });
   }
 });
@@ -130,84 +139,157 @@ app.get('/api/purchaseorders', async (req, res) => {
 app.get('/api/purchaseorders/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const result = await purchaseOrderService.getPurchaseOrderById(id);
+    const pool = await sql.connect(dbConfig);
     
-    if (result) {
-      res.json(result);
-    } else {
-      res.status(404).json({ error: 'Purchase order not found' });
+    // Get purchase order details
+    const poResult = await pool.request()
+      .input('id', sql.Int, id)
+      .query(`
+        SELECT * FROM PurchaseOrders 
+        WHERE idpurchaseorder = @id
+      `);
+    
+    if (poResult.recordset.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
     }
+    
+    const purchaseOrder = poResult.recordset[0];
+    
+    // Get purchase order products
+    const productsResult = await pool.request()
+      .input('id', sql.Int, id)
+      .query(`
+        SELECT * FROM PurchaseOrderProducts 
+        WHERE idpurchaseorder = @id
+      `);
+    
+    // Get purchase order comments
+    const commentsResult = await pool.request()
+      .input('id', sql.Int, id)
+      .query(`
+        SELECT * FROM PurchaseOrderComments 
+        WHERE idpurchaseorder = @id
+        ORDER BY created DESC
+      `);
+    
+    purchaseOrder.products = productsResult.recordset;
+    purchaseOrder.comments = commentsResult.recordset;
+    
+    res.json({
+      success: true,
+      data: purchaseOrder
+    });
   } catch (error) {
     console.error('Error getting purchase order:', error);
-    res.status(500).json({ 
-      error: 'Failed to get purchase order', 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Error getting purchase order',
+      error: error.message
     });
   }
 });
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
-  res.status(500).json({ 
-    error: 'Internal server error', 
-    message: error.message 
-  });
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard/dashboard.html'));
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
-});
+// Serve static files from dashboard directory
+app.use('/dashboard', express.static(path.join(__dirname, 'dashboard')));
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down gracefully...');
-  if (pool) {
-    await pool.close();
-    console.log('Database connection closed');
-  }
-  process.exit(0);
-});
-
-// Start server
-async function startServer() {
+// Initialize database
+async function initializeDatabase() {
   try {
-    console.log('Starting Picqer Middleware...');
-    console.log('Environment variables loaded:');
-    console.log(`- PICQER_API_URL: ${process.env.PICQER_API_URL}`);
-    console.log(`- SQL_SERVER: ${process.env.SQL_SERVER}`);
-    console.log(`- SQL_DATABASE: ${process.env.SQL_DATABASE}`);
-    console.log(`- SQL_USER: ${process.env.SQL_USER}`);
-    console.log(`- SQL_PORT: ${process.env.SQL_PORT || 1433}`);
+    console.log('Initializing database...');
     
-    // Initialize database connection
-    const dbInitialized = await initializeDatabase();
-    
-    if (!dbInitialized) {
-      console.error('Failed to initialize database. Server will not start.');
-      process.exit(1);
+    // Initialize product schema
+    if (picqerService && typeof picqerService.initializeDatabase === 'function') {
+      await picqerService.initializeDatabase();
     }
-
-    // Start Express server
-    app.listen(port, '0.0.0.0', () => {
-      console.log(`Picqer Middleware server running on port ${port}`);
-      console.log(`Health check: http://localhost:${port}/health`);
-      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
-
+    
+    // Initialize picklists schema
+    if (picklistService && typeof picklistService.initializePicklistsDatabase === 'function') {
+      await picklistService.initializePicklistsDatabase();
+    }
+    
+    // Initialize warehouses schema
+    if (warehouseService && typeof warehouseService.initializeWarehousesDatabase === 'function') {
+      await warehouseService.initializeWarehousesDatabase();
+    }
+    
+    // Initialize users schema
+    if (userService && typeof userService.initializeUsersDatabase === 'function') {
+      await userService.initializeUsersDatabase();
+    }
+    
+    // Initialize suppliers schema
+    if (supplierService && typeof supplierService.initializeSuppliersDatabase === 'function') {
+      await supplierService.initializeSuppliersDatabase();
+    }
+    
+    // Initialize purchase orders schema
+    if (purchaseOrderService && typeof purchaseOrderService.initializePurchaseOrdersDatabase === 'function') {
+      await purchaseOrderService.initializePurchaseOrdersDatabase();
+    }
+    
+    console.log('Database initialized successfully');
   } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
+    console.error('Error initializing database:', error.message);
   }
 }
 
-// Start the application
-startServer();
+// Start server
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+  console.log(`Picqer middleware server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Database: ${dbConfig.server}/${dbConfig.database}`);
+  console.log(`Picqer API: ${baseUrl}`);
+  
+  // Initialize database after server starts
+  await initializeDatabase();
+});
 
-// Export for testing
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  
+  // Close database connection
+  try {
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
+  }
+  
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  
+  // Close database connection
+  try {
+    await sql.close();
+    console.log('Database connection closed');
+  } catch (err) {
+    console.error('Error closing database connection:', err.message);
+  }
+  
+  process.exit(0);
+});
+
+// Export services for use by other modules (avoiding circular dependency)
 module.exports = {
   app,
-  purchaseOrderService
+  purchaseOrderService,
+  picqerService,
+  picklistService,
+  warehouseService,
+  userService,
+  supplierService
 };
 
