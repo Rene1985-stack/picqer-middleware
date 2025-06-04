@@ -59,11 +59,24 @@ const sqlConfig = {
   pool: {
     max: 10,
     min: 0,
-    idleTimeoutMillis: 30000
+    idleTimeoutMillis: 30000,
+    acquireTimeoutMillis: 60000,
+    createTimeoutMillis: 30000,
+    destroyTimeoutMillis: 5000,
+    reapIntervalMillis: 1000,
+    createRetryIntervalMillis: 200
   },
+  connectionTimeout: 60000, // 60 seconds
+  requestTimeout: 60000, // 60 seconds
   options: {
     encrypt: true,
-    trustServerCertificate: false
+    trustServerCertificate: false,
+    enableArithAbort: true,
+    connectTimeout: 60000,
+    requestTimeout: 60000,
+    cancelTimeout: 5000,
+    packetSize: 4096,
+    useUTC: false
   }
 };
 
@@ -98,48 +111,78 @@ let purchaseOrderService;
 let receiptService;
 let dataSyncAdapter;
 
-// Database connection
-async function connectToDatabase() {
-  try {
-    await sql.connect(sqlConfig);
-    console.log('Connected to SQL Server database');
-    
-    // Initialize services after database connection
-    picqerService = new PicqerService(apiKey, baseUrl);
-    picklistService = new PicklistService(sql, picqerService);
-    warehouseService = new WarehouseService(sql, picqerService);
-    userService = new UserService(sql, picqerService);
-    supplierService = new SupplierService(sql, picqerService);
-    batchService = new BatchService(sql, picqerService);
-    purchaseOrderService = new PurchaseOrderService(sql, picqerService);
-    receiptService = new ReceiptService(sql, picqerService);
-    
-    // Initialize data sync adapter
-    dataSyncAdapter = new DataSyncApiAdapter(sql, {
-      picqerService,
-      picklistService,
-      warehouseService,
-      userService,
-      supplierService,
-      batchService,
-      purchaseOrderService,
-      receiptService
-    });
-    
-    console.log('Data sync API adapter initialized with services:', Object.keys({
-      picqerService,
-      picklistService,
-      warehouseService,
-      userService,
-      supplierService,
-      batchService,
-      purchaseOrderService,
-      receiptService
-    }).filter(key => key.endsWith('Service')));
-    
-  } catch (error) {
-    console.error('Database connection failed:', error);
-    process.exit(1);
+// Database connection with retry logic
+async function connectToDatabase(retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Database connection attempt ${attempt}/${retries}...`);
+      await sql.connect(sqlConfig);
+      console.log('✅ Connected to SQL Server database successfully');
+      
+      // Test the connection
+      const request = new sql.Request();
+      await request.query('SELECT 1 as test');
+      console.log('✅ Database connection test successful');
+      
+      // Initialize services after database connection
+      picqerService = new PicqerService(apiKey, baseUrl);
+      picklistService = new PicklistService(sql, picqerService);
+      warehouseService = new WarehouseService(sql, picqerService);
+      userService = new UserService(sql, picqerService);
+      supplierService = new SupplierService(sql, picqerService);
+      batchService = new BatchService(sql, picqerService);
+      purchaseOrderService = new PurchaseOrderService(sql, picqerService);
+      receiptService = new ReceiptService(sql, picqerService);
+      
+      // Initialize data sync adapter
+      dataSyncAdapter = new DataSyncApiAdapter(sql, {
+        picqerService,
+        picklistService,
+        warehouseService,
+        userService,
+        supplierService,
+        batchService,
+        purchaseOrderService,
+        receiptService
+      });
+      
+      console.log('Data sync API adapter initialized with services:', Object.keys({
+        picqerService,
+        picklistService,
+        warehouseService,
+        userService,
+        supplierService,
+        batchService,
+        purchaseOrderService,
+        receiptService
+      }).filter(key => key.endsWith('Service')));
+      
+      return; // Success, exit the retry loop
+      
+    } catch (error) {
+      console.error(`❌ Database connection attempt ${attempt} failed:`, error.message);
+      
+      if (error.code === 'ETIMEOUT') {
+        console.error('🔥 Connection timeout - this usually indicates:');
+        console.error('   1. Azure SQL firewall is blocking Railway connections');
+        console.error('   2. Network connectivity issues');
+        console.error('   3. Incorrect server name or port');
+      }
+      
+      if (attempt === retries) {
+        console.error('💥 All database connection attempts failed');
+        console.error('🛠️  Troubleshooting steps:');
+        console.error('   1. Check Azure SQL firewall settings');
+        console.error('   2. Verify server name and credentials');
+        console.error('   3. Ensure "Allow Azure services" is enabled');
+        throw error;
+      }
+      
+      // Wait before retrying (exponential backoff)
+      const waitTime = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      console.log(`⏳ Waiting ${waitTime/1000}s before retry...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
   }
 }
 
