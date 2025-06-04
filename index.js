@@ -19,7 +19,6 @@ const UserService = require('./user_service');
 const SupplierService = require('./supplier_service');
 const BatchService = require('./batch_service');
 const PurchaseOrderService = require('./purchase_order_service');
-const ReceiptService = require('./receipt_service');
 
 // Import API adapters
 const DataSyncApiAdapter = require('./data_sync_api_adapter');
@@ -84,7 +83,6 @@ let userService;
 let supplierService;
 let batchService;
 let purchaseOrderService;
-let receiptService;
 let dataSyncAdapter;
 
 // Database connection
@@ -101,7 +99,6 @@ async function connectToDatabase() {
     supplierService = new SupplierService(sql, picqerService);
     batchService = new BatchService(sql, picqerService);
     purchaseOrderService = new PurchaseOrderService(sql, picqerService);
-    receiptService = new ReceiptService(sql, picqerService);
     
     // Initialize data sync adapter
     dataSyncAdapter = new DataSyncApiAdapter(sql, {
@@ -111,8 +108,7 @@ async function connectToDatabase() {
       userService,
       supplierService,
       batchService,
-      purchaseOrderService,
-      receiptService
+      purchaseOrderService
     });
     
   } catch (error) {
@@ -160,43 +156,6 @@ app.get('/api/purchaseorders/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching purchase order:', error);
     res.status(500).json({ error: 'Failed to fetch purchase order' });
-  }
-});
-
-// Receipt endpoints
-app.get('/api/sync/receipts', async (req, res) => {
-  try {
-    const days = req.query.days ? parseInt(req.query.days) : null;
-    const full = req.query.full === 'true';
-    const result = await receiptService.syncReceipts(days, full);
-    res.json(result);
-  } catch (error) {
-    console.error('Error syncing receipts:', error);
-    res.status(500).json({ error: 'Failed to sync receipts' });
-  }
-});
-
-app.get('/api/receipts', async (req, res) => {
-  try {
-    const receipts = await receiptService.getAllReceiptsFromDatabase();
-    res.json(receipts);
-  } catch (error) {
-    console.error('Error fetching receipts:', error);
-    res.status(500).json({ error: 'Failed to fetch receipts' });
-  }
-});
-
-app.get('/api/receipts/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const receipt = await receiptService.getReceiptByIdFromDatabase(id);
-    if (!receipt) {
-      return res.status(404).json({ error: 'Receipt not found' });
-    }
-    res.json(receipt);
-  } catch (error) {
-    console.error('Error fetching receipt:', error);
-    res.status(500).json({ error: 'Failed to fetch receipt' });
   }
 });
 
