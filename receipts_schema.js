@@ -1,3 +1,9 @@
+/**
+ * Receipts Schema for Picqer Middleware
+ * Creates tables for storing receipt data exactly as per Picqer API documentation
+ */
+
+const receiptsSchema = `
 -- Receipts Schema for Picqer Middleware - Safe Update Version
 -- Handles existing tables and constraints safely
 
@@ -88,4 +94,27 @@ BEGIN
 END
 
 PRINT 'API-compliant receipts schema setup completed successfully'
+`;
+
+/**
+ * Execute the receipts schema
+ * @param {Object} sql - SQL connection object
+ * @returns {Promise<boolean>} - Success status
+ */
+async function createReceiptsSchema(sql) {
+  try {
+    console.log('Executing receipts schema...');
+    await sql.query(receiptsSchema);
+    console.log('✅ Receipts schema executed successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Error executing receipts schema:', error.message);
+    return false;
+  }
+}
+
+module.exports = {
+  receiptsSchema,
+  createReceiptsSchema
+};
 
