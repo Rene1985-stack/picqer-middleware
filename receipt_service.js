@@ -5,8 +5,6 @@
  */
 
 const sql = require('mssql');
-const fs = require('fs');
-const path = require('path');
 
 class ReceiptService {
   constructor(sqlConnection, picqerService) {
@@ -37,21 +35,19 @@ class ReceiptService {
     try {
       console.log('Initializing receipt database schema...');
       
-      // Read schema SQL file
-      const schemaPath = path.join(__dirname, 'receipts_schema.sql');
+      // Import schema module
+      const { createReceiptsSchema } = require('./receipts_schema.js');
       
-      if (!fs.existsSync(schemaPath)) {
-        console.error('Receipt schema SQL file not found:', schemaPath);
+      // Execute schema
+      const success = await createReceiptsSchema(this.sql);
+      
+      if (success) {
+        console.log('✅ Receipt database schema initialized successfully');
+        return true;
+      } else {
+        console.error('❌ Failed to initialize receipt database schema');
         return false;
       }
-      
-      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-      
-      // Execute schema SQL
-      await this.sql.query(schemaSql);
-      
-      console.log('✅ Receipt database schema initialized successfully');
-      return true;
     } catch (error) {
       console.error('Error initializing receipt database schema:', error.message);
       return false;
