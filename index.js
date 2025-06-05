@@ -237,9 +237,7 @@ app.get('/api/purchaseorders/:id', async (req, res) => {
 // Receipt endpoints
 app.get('/api/sync/receipts', async (req, res) => {
   try {
-    const days = req.query.days ? parseInt(req.query.days) : null;
-    const full = req.query.full === 'true';
-    const result = await receiptService.syncReceipts(days, full);
+    const result = await receiptService.syncReceipts();
     res.json(result);
   } catch (error) {
     console.error('Error syncing receipts:', error);
@@ -249,7 +247,7 @@ app.get('/api/sync/receipts', async (req, res) => {
 
 app.get('/api/receipts', async (req, res) => {
   try {
-    const receipts = await receiptService.getAllReceiptsFromDatabase();
+    const receipts = await receiptService.getAllReceipts();
     res.json(receipts);
   } catch (error) {
     console.error('Error fetching receipts:', error);
@@ -260,7 +258,7 @@ app.get('/api/receipts', async (req, res) => {
 app.get('/api/receipts/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const receipt = await receiptService.getReceiptByIdFromDatabase(id);
+    const receipt = await receiptService.getReceiptById(id);
     if (!receipt) {
       return res.status(404).json({ error: 'Receipt not found' });
     }
